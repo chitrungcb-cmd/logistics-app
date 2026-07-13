@@ -31,7 +31,6 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
           shipmentCode: true,
           declarationNo: true,
           status: true,
-          totalAmount: true,
           createdAt: true,
         },
       },

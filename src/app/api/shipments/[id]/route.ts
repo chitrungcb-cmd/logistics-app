@@ -3,8 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 
+// totalAmount deliberately NOT here (audit 3.1) — the legacy per-shipment cost field is vestigial;
+// real costs live in ShipmentCost / the /costs page. The DB column is kept for historical reference
+// but nothing in the app reads or writes it anymore.
 const UPDATABLE_FIELDS = [
-  "totalAmount",
   "transport",
   "status",
   "note",
@@ -55,10 +57,6 @@ export async function PATCH(
 
     if (Object.keys(data).length === 0) {
       return apiError("Không có dữ liệu để cập nhật.", 400);
-    }
-
-    if ("totalAmount" in data) {
-      data.totalAmount = Number(data.totalAmount) || 0;
     }
 
     // customerId is the source of truth when linked — always re-derive customerName from the

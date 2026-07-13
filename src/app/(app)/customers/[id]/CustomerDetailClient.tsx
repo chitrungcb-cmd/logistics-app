@@ -11,7 +11,6 @@ type CustomerShipment = {
   shipmentCode: string;
   declarationNo: string | null;
   status: string;
-  totalAmount: number;
   createdAt: string;
 };
 
@@ -173,7 +172,6 @@ export default function CustomerDetailClient({
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Mã lô hàng</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Số tờ khai</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Trạng thái</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Chi phí</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -190,9 +188,6 @@ export default function CustomerDetailClient({
                         <td className="px-3 py-2 text-gray-600">{shipment.declarationNo || "—"}</td>
                         <td className="px-3 py-2">
                           <Badge label={shipment.status} className={statusBadgeClass(shipment.status)} />
-                        </td>
-                        <td className="px-3 py-2 text-gray-600">
-                          {shipment.totalAmount.toLocaleString("vi-VN")} đ
                         </td>
                       </tr>
                     ))}

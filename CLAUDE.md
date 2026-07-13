@@ -49,8 +49,10 @@ implemented so far).
   (account owner) for that company — see "Notifications" below for how it's used to route task-progress
   notifications.
 - **`ShipmentCost`/`Quote`** are the real cost/revenue ledger for a shipment — see "Profit reporting" below.
-  `Shipment.totalAmount` predates both and is now vestigial: kept (read-only, still shown as "Chi phí" on
-  the detail page) so old records aren't silently blanked, but no code computes profit from it anymore.
+  `Shipment.totalAmount` predates both and is now fully retired (audit 3.1): the DB column is kept only for
+  historical reference, but **nothing in the app reads or writes it** — it's out of `UPDATABLE_FIELDS`, off
+  every form and table (shipment detail, customer detail), and the one-off migration confirmed 0 shipments
+  ever had a non-zero value to preserve. Don't reintroduce it as a cost source; costs live in `ShipmentCost`.
 - **Prisma client generation is non-default**: this project uses Prisma 7's new `prisma-client` generator
   (not the classic `@prisma/client` generator), configured in `prisma/schema.prisma` to output into
   `src/generated/prisma` (gitignored, regenerated via `postinstall`/`db:generate`). The generated entry
@@ -85,9 +87,10 @@ convention — see `AGENTS.md`).
 - `GET/POST /api/shipments` — list (newest first) / create. `POST` only requires `customerName`, unless
   `customerId` is also sent, in which case `customerName` is overwritten from the looked-up `Customer`.
 - `GET/PATCH /api/shipments/[id]` — detail (404 if missing) / partial update. `PATCH` only accepts a
-  fixed allowlist (`UPDATABLE_FIELDS` in the route file: `totalAmount`, `transport`, `status`, `note`,
+  fixed allowlist (`UPDATABLE_FIELDS` in the route file: `transport`, `status`, `note`,
   `attachments`, `customerId`, `customerName`) — extend that list deliberately if a new editable field is
-  added, don't just spread the request body into `data`.
+  added, don't just spread the request body into `data`. (`totalAmount` was removed from this list in
+  audit 3.1 — see the `ShipmentCost` note above.)
 - `GET/POST /api/customers` — list (optionally `?search=` matching `companyName`/`taxCode`, used by both the
   `/customers` list page and `CustomerCombobox`'s autocomplete) / create. Both require login; `POST` is
   blocked for `FIELD_STAFF` (403).

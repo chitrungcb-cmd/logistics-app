@@ -31,7 +31,6 @@ export default function ShipmentDetailClient({
   const [linkedConversationId, setLinkedConversationId] = useState<string | null>(null);
 
   const [editForm, setEditForm] = useState({
-    totalAmount: "0",
     transport: "",
     status: STATUS_OPTIONS[0] as string,
     note: "",
@@ -56,7 +55,6 @@ export default function ShipmentDetailClient({
           const data: ShipmentDTO = json.data;
           setShipment(data);
           setEditForm({
-            totalAmount: String(data.totalAmount ?? 0),
             transport: data.transport || "",
             status: data.status,
             note: data.note || "",
@@ -114,7 +112,6 @@ export default function ShipmentDetailClient({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          totalAmount: Number(editForm.totalAmount) || 0,
           transport: editForm.transport,
           status: editForm.status,
           note: editForm.note,
@@ -228,10 +225,6 @@ export default function ShipmentDetailClient({
             <Info label="Tên hàng" value={shipment.goodsName} />
             <Info label="HQ tiếp nhận" value={shipment.customsOffice} />
             <Info label="Vận tải" value={shipment.transport} />
-            <Info
-              label="Chi phí"
-              value={shipment.totalAmount.toLocaleString("vi-VN") + " đ"}
-            />
             <Info label="Ghi chú" value={shipment.note} />
           </dl>
 
@@ -279,18 +272,6 @@ export default function ShipmentDetailClient({
                 onChange={({ customerName, customerId }) =>
                   setEditForm((prev) => ({ ...prev, customerName, customerId }))
                 }
-              />
-            </label>
-
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Chi phí</span>
-              <input
-                type="number"
-                name="totalAmount"
-                value={editForm.totalAmount}
-                onChange={handleEditChange}
-                className="input"
-                min={0}
               />
             </label>
 

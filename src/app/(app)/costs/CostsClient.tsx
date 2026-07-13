@@ -66,6 +66,22 @@ const emptyForm = {
   attachmentUrl: null as string | null,
 };
 
+// Cells that can be edited in place directly on the ledger table (B1). The three numeric ones drive
+// costPrice server-side (unitPrice * quantity), so they're parsed as numbers before the PATCH.
+type InlineField = "unitPrice" | "quantity" | "sellPrice" | "invoiceNumber" | "note";
+const INLINE_NUMERIC_FIELDS: InlineField[] = ["unitPrice", "quantity", "sellPrice"];
+
+const emptyQuickAdd = {
+  shipmentId: "",
+  shipmentLabel: "",
+  category: COST_CATEGORY_OPTIONS[COST_CATEGORY_OPTIONS.length - 1] as string,
+  unitPrice: "",
+  quantity: "1",
+  sellPrice: "",
+  invoiceNumber: "",
+  note: "",
+};
+
 function formatVnd(amount: number) {
   return amount.toLocaleString("vi-VN") + " đ";
 }
@@ -125,9 +141,17 @@ export default function CostsClient() {
   const [showSimilarModal, setShowSimilarModal] = useState(false);
   const costsListRef = useRef<HTMLDivElement>(null);
   const [viewingCost, setViewingCost] = useState<CostRow | null>(null);
-  const [noteEditingId, setNoteEditingId] = useState<string | null>(null);
-  const [noteDraft, setNoteDraft] = useState("");
   const [isFormOpen, setIsFormOpen] = useState(false);
+
+  // B: group-by-shipment toggle, inline cell editing, and the always-present quick-add row.
+  const [groupByShipment, setGroupByShipment] = useState(false);
+  const [inlineEdit, setInlineEdit] = useState<{ costId: string; field: InlineField; value: string } | null>(null);
+  // The "Chi phí" cell edits đơn giá × số lượng together (costPrice is derived, never edited directly).
+  const [costEdit, setCostEdit] = useState<{ costId: string; unitPrice: string; quantity: string } | null>(null);
+  const [quickAdd, setQuickAdd] = useState(emptyQuickAdd);
+  const [isQuickShipOpen, setIsQuickShipOpen] = useState(false);
+  const quickShipRef = useRef<HTMLDivElement>(null);
+  const [quickError, setQuickError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/shipments")
@@ -142,6 +166,9 @@ export default function CostsClient() {
     function handleClickOutside(event: MouseEvent) {
       if (shipmentFieldRef.current && !shipmentFieldRef.current.contains(event.target as Node)) {
         setIsShipmentDropdownOpen(false);
+      }
+      if (quickShipRef.current && !quickShipRef.current.contains(event.target as Node)) {
+        setIsQuickShipOpen(false);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
@@ -176,11 +203,37 @@ export default function CostsClient() {
     });
   }, [allCosts, filters]);
 
-  const pageCount = Math.max(1, Math.ceil(filteredCosts.length / pageSize));
+  // When grouping is on, reorder so every shipment's rows are contiguous (stable within a shipment,
+  // groups in first-seen order) — pagination then still works, and a group header is emitted whenever
+  // the shipmentId changes while rendering the page.
+  const displayCosts = useMemo(() => {
+    if (!groupByShipment) return filteredCosts;
+    const order = new Map<string, number>();
+    filteredCosts.forEach((c) => {
+      if (!order.has(c.shipmentId)) order.set(c.shipmentId, order.size);
+    });
+    return [...filteredCosts].sort((a, b) => order.get(a.shipmentId)! - order.get(b.shipmentId)!);
+  }, [filteredCosts, groupByShipment]);
+
+  // Per-shipment subtotals over the WHOLE filtered set (not just the visible page), so a group header
+  // shows the shipment's real totals even when its rows span multiple pages.
+  const shipmentSubtotals = useMemo(() => {
+    const map = new Map<string, { cost: number; sell: number; count: number }>();
+    for (const c of filteredCosts) {
+      const e = map.get(c.shipmentId) ?? { cost: 0, sell: 0, count: 0 };
+      e.cost += c.costPrice;
+      e.sell += c.sellPrice;
+      e.count += 1;
+      map.set(c.shipmentId, e);
+    }
+    return map;
+  }, [filteredCosts]);
+
+  const pageCount = Math.max(1, Math.ceil(displayCosts.length / pageSize));
   const safePage = Math.min(currentPage, pageCount);
   const paginatedCosts = useMemo(
-    () => filteredCosts.slice((safePage - 1) * pageSize, safePage * pageSize),
-    [filteredCosts, safePage, pageSize]
+    () => displayCosts.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [displayCosts, safePage, pageSize]
   );
 
   function updateFilters(patch: Partial<typeof filters>) {
@@ -302,21 +355,124 @@ export default function CostsClient() {
     });
   }
 
-  function openNoteEditor(cost: CostRow) {
-    setNoteEditingId(cost.id);
-    setNoteDraft(cost.note || "");
+  // --- B1: inline cell editing ---
+  function startInlineEdit(cost: CostRow, field: InlineField) {
+    const raw = cost[field];
+    setInlineEdit({ costId: cost.id, field, value: raw === null || raw === undefined ? "" : String(raw) });
   }
 
-  async function handleSaveNote(costId: string) {
+  async function commitInlineEdit() {
+    if (!inlineEdit) return;
+    const { costId, field, value } = inlineEdit;
+    const original = allCosts.find((c) => c.id === costId);
+    setInlineEdit(null);
+    if (!original) return;
+
+    const isNumeric = INLINE_NUMERIC_FIELDS.includes(field);
+    const nextVal: number | string | null = isNumeric
+      ? Number(value) || 0
+      : value.trim() === ""
+        ? null
+        : value.trim();
+
+    // Skip the round-trip if nothing actually changed.
+    if (String(original[field] ?? "") === String(nextVal ?? "")) return;
+
     const res = await fetch(`/api/costs/${costId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ note: noteDraft }),
+      body: JSON.stringify({ [field]: nextVal }),
     });
     const json = await res.json();
-    if (json.success) {
-      setAllCosts((prev) => prev.map((c) => (c.id === costId ? json.data : c)));
-      setNoteEditingId(null);
+    if (json.success) setAllCosts((prev) => prev.map((c) => (c.id === costId ? json.data : c)));
+  }
+
+  function handleInlineKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitInlineEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setInlineEdit(null);
+    }
+  }
+
+  function startCostEdit(cost: CostRow) {
+    setCostEdit({ costId: cost.id, unitPrice: String(cost.unitPrice), quantity: String(cost.quantity) });
+  }
+
+  async function commitCostEdit() {
+    if (!costEdit) return;
+    const { costId, unitPrice, quantity } = costEdit;
+    const original = allCosts.find((c) => c.id === costId);
+    setCostEdit(null);
+    if (!original) return;
+    const nextUnit = Number(unitPrice) || 0;
+    const nextQty = Number(quantity) || 0;
+    if (nextUnit === original.unitPrice && nextQty === original.quantity) return;
+
+    const res = await fetch(`/api/costs/${costId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unitPrice: nextUnit, quantity: nextQty }),
+    });
+    const json = await res.json();
+    if (json.success) setAllCosts((prev) => prev.map((c) => (c.id === costId ? json.data : c)));
+  }
+
+  function handleCostEditKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitCostEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setCostEdit(null);
+    }
+  }
+
+  // --- B2: quick-add row at the bottom of the ledger ---
+  const quickShipSuggestions = useMemo(() => {
+    const query = quickAdd.shipmentLabel.trim().toLowerCase();
+    if (!query) return shipments.slice(0, 20);
+    return shipments
+      .filter(
+        (s) =>
+          s.customerName.toLowerCase().includes(query) ||
+          (s.goodsName || "").toLowerCase().includes(query) ||
+          (s.declarationNo || "").toLowerCase().includes(query)
+      )
+      .slice(0, 20);
+  }, [shipments, quickAdd.shipmentLabel]);
+
+  async function handleQuickAdd() {
+    setQuickError(null);
+    if (!quickAdd.shipmentId) {
+      setQuickError("Chọn lô hàng trước khi thêm.");
+      return;
+    }
+    try {
+      const res = await fetch("/api/costs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shipmentId: quickAdd.shipmentId,
+          category: quickAdd.category,
+          unitPrice: quickAdd.unitPrice,
+          quantity: quickAdd.quantity,
+          sellPrice: quickAdd.sellPrice,
+          isAdditional: false,
+          invoiceNumber: quickAdd.invoiceNumber,
+          note: quickAdd.note,
+          attachmentUrl: null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Không thể thêm chi phí.");
+      setAllCosts((prev) => [json.data, ...prev]);
+      // Keep the same shipment selected so the next line for that shipment is fast to enter.
+      setQuickAdd((prev) => ({ ...emptyQuickAdd, shipmentId: prev.shipmentId, shipmentLabel: prev.shipmentLabel }));
+    } catch (err) {
+      setQuickError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
     }
   }
 
@@ -609,6 +765,12 @@ export default function CostsClient() {
 
           {formError && <p className="text-sm text-red-600">{formError}</p>}
 
+          {!form.id && (
+            <p className="text-xs text-gray-400">
+              Sau khi thêm, biểu mẫu giữ nguyên lô hàng để bạn nhập tiếp khoản kế. Bấm “Xong” khi hoàn tất.
+            </p>
+          )}
+
           <div className="flex gap-3">
             <button
               type="submit"
@@ -624,7 +786,7 @@ export default function CostsClient() {
               }}
               className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
-              Hủy
+              {form.id ? "Hủy" : "Xong"}
             </button>
           </div>
         </form>
@@ -635,7 +797,7 @@ export default function CostsClient() {
       <section ref={costsListRef} className="rounded-xl border border-gray-200 bg-white p-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-gray-900">Danh sách chi phí</h2>
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {filters.shipmentId && (
               <button
                 type="button"
@@ -645,6 +807,17 @@ export default function CostsClient() {
                 So sánh với lô hàng tương tự
               </button>
             )}
+            <label className="inline-flex items-center gap-1.5 text-sm text-gray-600">
+              <input
+                type="checkbox"
+                checked={groupByShipment}
+                onChange={(e) => {
+                  setGroupByShipment(e.target.checked);
+                  setCurrentPage(1);
+                }}
+              />
+              Gom theo lô hàng
+            </label>
             <button
               type="button"
               onClick={handleExportExcel}
@@ -777,122 +950,330 @@ export default function CostsClient() {
               )}
               {!isLoading &&
                 !error &&
-                paginatedCosts.map((cost, index) => (
-                  <Fragment key={cost.id}>
-                    <tr
-                      className={`hover:bg-blue-50 ${viewingCost?.id === cost.id ? "bg-blue-50" : ""}`}
-                    >
-                      <td className="px-3 py-2 text-gray-500">{(safePage - 1) * pageSize + index + 1}</td>
-                      <td className="px-3 py-2">
-                        <Link
-                          href={`/shipments/${cost.shipment.id}`}
-                          className="font-medium text-gray-900 hover:underline"
-                          title={`TK: ${cost.shipment.declarationNo || "—"} · INV: ${cost.shipment.invoiceNo || "—"}`}
-                        >
-                          {cost.shipment.customerName}
-                        </Link>
-                      </td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-                            COST_CATEGORY_BADGE_CLASS[cost.category] ?? "bg-gray-100 text-gray-600"
-                          }`}
-                        >
-                          {COST_CATEGORY_ICON[cost.category]} {COST_CATEGORY_LABELS[cost.category] ?? cost.category}
-                        </span>
-                        <span className="ml-2 text-sm text-gray-700">{cost.note || "—"}</span>
-                        {cost.isAdditional && (
-                          <span className="ml-1 inline-block rounded-full bg-orange-100 px-1.5 py-0.5 text-[10px] text-orange-700">
-                            Phát sinh
+                paginatedCosts.map((cost, index) => {
+                  const showGroupHeader =
+                    groupByShipment &&
+                    (index === 0 || paginatedCosts[index - 1].shipmentId !== cost.shipmentId);
+                  const sub = shipmentSubtotals.get(cost.shipmentId);
+                  const editingNote = inlineEdit?.costId === cost.id && inlineEdit.field === "note";
+                  const editingSell = inlineEdit?.costId === cost.id && inlineEdit.field === "sellPrice";
+                  const editingInvoice = inlineEdit?.costId === cost.id && inlineEdit.field === "invoiceNumber";
+                  const editingCost = costEdit?.costId === cost.id;
+                  return (
+                    <Fragment key={cost.id}>
+                      {showGroupHeader && (
+                        <tr className="bg-gray-100">
+                          <td colSpan={9} className="px-3 py-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-sm font-semibold text-gray-800">
+                                📦 {cost.shipment.goodsName || "—"} · TK {cost.shipment.declarationNo || "—"}
+                              </span>
+                              {sub && (
+                                <span className="text-xs text-gray-500">
+                                  {sub.count} khoản · Chi phí{" "}
+                                  <span className="font-medium text-gray-700">{formatVnd(sub.cost)}</span> · Báo giá{" "}
+                                  <span className="font-medium text-gray-700">{formatVnd(sub.sell)}</span>
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      <tr className={`hover:bg-blue-50 ${viewingCost?.id === cost.id ? "bg-blue-50" : ""}`}>
+                        <td className="px-3 py-2 text-gray-500">{(safePage - 1) * pageSize + index + 1}</td>
+                        <td className="px-3 py-2">
+                          <Link
+                            href={`/shipments/${cost.shipment.id}`}
+                            className="font-medium text-gray-900 hover:underline"
+                            title={`TK: ${cost.shipment.declarationNo || "—"} · INV: ${cost.shipment.invoiceNo || "—"}`}
+                          >
+                            {cost.shipment.customerName}
+                          </Link>
+                        </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                              COST_CATEGORY_BADGE_CLASS[cost.category] ?? "bg-gray-100 text-gray-600"
+                            }`}
+                          >
+                            {COST_CATEGORY_ICON[cost.category]} {COST_CATEGORY_LABELS[cost.category] ?? cost.category}
                           </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-gray-600">{formatVnd(cost.costPrice)}</td>
-                      <td className="px-3 py-2 text-gray-600">{formatVnd(cost.sellPrice)}</td>
-                      <td className="px-3 py-2 text-gray-600">{cost.invoiceNumber || "—"}</td>
-                      <td className="px-3 py-2 text-gray-600">
-                        {new Date(cost.createdAt).toLocaleDateString("vi-VN")}
-                      </td>
-                      <td className="px-3 py-2">
-                        {cost.attachmentUrl ? (
-                          <a
-                            href={cost.attachmentUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-blue-600 hover:underline"
-                          >
-                            📎 1
-                          </a>
-                        ) : (
-                          <span className="text-gray-400">📎 0</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap gap-3">
-                          <button
-                            type="button"
-                            onClick={() => setViewingCost(cost)}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
-                          >
-                            👁 Xem
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              startEdit(cost);
-                              setIsFormOpen(true);
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
-                          >
-                            ✏️ Sửa
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openNoteEditor(cost)}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
-                          >
-                            📝 Ghi chú
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(cost.id)}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:underline"
-                          >
-                            🗑 Xóa
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {noteEditingId === cost.id && (
-                      <tr className="bg-gray-50">
-                        <td colSpan={9} className="px-3 py-3">
-                          <div className="flex flex-wrap items-center gap-2">
+                          {editingNote ? (
                             <input
-                              value={noteDraft}
-                              onChange={(e) => setNoteDraft(e.target.value)}
-                              className="input flex-1"
+                              autoFocus
+                              value={inlineEdit!.value}
+                              onChange={(e) => setInlineEdit({ ...inlineEdit!, value: e.target.value })}
+                              onBlur={commitInlineEdit}
+                              onKeyDown={handleInlineKeyDown}
+                              className="input mt-1 w-full"
                               placeholder="Ghi chú..."
                             />
+                          ) : (
                             <button
                               type="button"
-                              onClick={() => handleSaveNote(cost.id)}
-                              className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                              onClick={() => startInlineEdit(cost, "note")}
+                              className="ml-2 text-left text-sm text-gray-700 hover:text-blue-600"
+                              title="Bấm để sửa ghi chú"
                             >
-                              Lưu
+                              {cost.note || "—"}
+                            </button>
+                          )}
+                          {cost.isAdditional && (
+                            <span className="ml-1 inline-block rounded-full bg-orange-100 px-1.5 py-0.5 text-[10px] text-orange-700">
+                              Phát sinh
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {editingCost ? (
+                            <span
+                              className="flex items-center gap-1"
+                              onBlur={(e) => {
+                                if (!e.currentTarget.contains(e.relatedTarget as Node)) commitCostEdit();
+                              }}
+                            >
+                              <input
+                                autoFocus
+                                type="number"
+                                value={costEdit!.unitPrice}
+                                onChange={(e) => setCostEdit({ ...costEdit!, unitPrice: e.target.value })}
+                                onKeyDown={handleCostEditKeyDown}
+                                className="input w-24"
+                                title="Đơn giá"
+                              />
+                              <span className="text-gray-400">×</span>
+                              <input
+                                type="number"
+                                value={costEdit!.quantity}
+                                onChange={(e) => setCostEdit({ ...costEdit!, quantity: e.target.value })}
+                                onKeyDown={handleCostEditKeyDown}
+                                className="input w-16"
+                                title="Số lượng"
+                              />
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => startCostEdit(cost)}
+                              className="text-left hover:text-blue-600"
+                              title="Bấm để sửa đơn giá × số lượng"
+                            >
+                              {formatVnd(cost.costPrice)}
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {editingSell ? (
+                            <input
+                              autoFocus
+                              type="number"
+                              value={inlineEdit!.value}
+                              onChange={(e) => setInlineEdit({ ...inlineEdit!, value: e.target.value })}
+                              onBlur={commitInlineEdit}
+                              onKeyDown={handleInlineKeyDown}
+                              className="input w-28"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => startInlineEdit(cost, "sellPrice")}
+                              className="text-left hover:text-blue-600"
+                              title="Bấm để sửa báo giá"
+                            >
+                              {formatVnd(cost.sellPrice)}
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {editingInvoice ? (
+                            <input
+                              autoFocus
+                              value={inlineEdit!.value}
+                              onChange={(e) => setInlineEdit({ ...inlineEdit!, value: e.target.value })}
+                              onBlur={commitInlineEdit}
+                              onKeyDown={handleInlineKeyDown}
+                              className="input w-28"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => startInlineEdit(cost, "invoiceNumber")}
+                              className="text-left hover:text-blue-600"
+                              title="Bấm để sửa số hóa đơn"
+                            >
+                              {cost.invoiceNumber || "—"}
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {new Date(cost.createdAt).toLocaleDateString("vi-VN")}
+                        </td>
+                        <td className="px-3 py-2">
+                          {cost.attachmentUrl ? (
+                            <a
+                              href={cost.attachmentUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-600 hover:underline"
+                            >
+                              📎 1
+                            </a>
+                          ) : (
+                            <span className="text-gray-400">📎 0</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setViewingCost(cost)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                            >
+                              👁 Xem
                             </button>
                             <button
                               type="button"
-                              onClick={() => setNoteEditingId(null)}
-                              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                              onClick={() => {
+                                startEdit(cost);
+                                setIsFormOpen(true);
+                              }}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                              title="Mở form đầy đủ (đổi danh mục, đính kèm chứng từ...)"
                             >
-                              Hủy
+                              ✏️ Sửa
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(cost.id)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:underline"
+                            >
+                              🗑 Xóa
                             </button>
                           </div>
                         </td>
                       </tr>
-                    )}
-                  </Fragment>
-                ))}
+                    </Fragment>
+                  );
+                })}
+              {!isLoading && !error && (
+                <tr className="bg-blue-50/40">
+                  <td className="px-3 py-2 text-center text-gray-400">+</td>
+                  <td className="px-3 py-2">
+                    <div className="relative" ref={quickShipRef}>
+                      <input
+                        value={quickAdd.shipmentLabel}
+                        onChange={(e) => {
+                          setQuickAdd((prev) => ({ ...prev, shipmentLabel: e.target.value, shipmentId: "" }));
+                          setIsQuickShipOpen(true);
+                        }}
+                        onFocus={() => setIsQuickShipOpen(true)}
+                        className="input w-full"
+                        placeholder="Chọn lô hàng để nhập nhanh..."
+                        autoComplete="off"
+                      />
+                      {isQuickShipOpen && quickShipSuggestions.length > 0 && (
+                        <ul className="absolute z-10 mt-1 max-h-56 w-72 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                          {quickShipSuggestions.map((s) => (
+                            <li key={s.id}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setQuickAdd((prev) => ({ ...prev, shipmentId: s.id, shipmentLabel: shipmentLabelFor(s) }));
+                                  setIsQuickShipOpen(false);
+                                }}
+                                className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                              >
+                                <span className="font-medium text-gray-900">{s.goodsName || "Chưa có tên hàng"}</span>
+                                <span className="ml-2 text-xs text-gray-400">
+                                  TK: {s.declarationNo || "—"} · {s.customerName}
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <select
+                      value={quickAdd.category}
+                      onChange={(e) => setQuickAdd((prev) => ({ ...prev, category: e.target.value }))}
+                      className="input w-full"
+                    >
+                      {COST_CATEGORY_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {COST_CATEGORY_LABELS[option]}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        value={quickAdd.unitPrice}
+                        onChange={(e) => setQuickAdd((prev) => ({ ...prev, unitPrice: e.target.value }))}
+                        onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
+                        className="input w-24"
+                        placeholder="Đơn giá"
+                      />
+                      <span className="text-gray-400">×</span>
+                      <input
+                        type="number"
+                        value={quickAdd.quantity}
+                        onChange={(e) => setQuickAdd((prev) => ({ ...prev, quantity: e.target.value }))}
+                        onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
+                        className="input w-14"
+                        placeholder="SL"
+                      />
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="number"
+                      value={quickAdd.sellPrice}
+                      onChange={(e) => setQuickAdd((prev) => ({ ...prev, sellPrice: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
+                      className="input w-28"
+                      placeholder="Báo giá"
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      value={quickAdd.invoiceNumber}
+                      onChange={(e) => setQuickAdd((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
+                      className="input w-28"
+                      placeholder="Số HĐ"
+                    />
+                  </td>
+                  <td className="px-3 py-2" colSpan={2}>
+                    <input
+                      value={quickAdd.note}
+                      onChange={(e) => setQuickAdd((prev) => ({ ...prev, note: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
+                      className="input w-full"
+                      placeholder="Ghi chú (Enter để thêm)"
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={handleQuickAdd}
+                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                    >
+                      + Thêm
+                    </button>
+                  </td>
+                </tr>
+              )}
+              {quickError && (
+                <tr>
+                  <td colSpan={9} className="px-3 pb-2 text-xs text-red-600">
+                    {quickError}
+                  </td>
+                </tr>
+              )}
             </tbody>
             {!isLoading && !error && filteredCosts.length > 0 && (
               <tfoot className="bg-gray-50">

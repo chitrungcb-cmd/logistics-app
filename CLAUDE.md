@@ -101,13 +101,20 @@ convention — see `AGENTS.md`).
   read; there's no `POST /api/notifications` — see "Notifications" below for how they're created.
 - `POST /api/upload` — accepts multipart `FormData` with a `file` field, writes it via
   `saveUploadedFile()` (`src/lib/save-upload.ts`) to `public/uploads/<timestamp>-<random>-<sanitized-name>`
-  (created if missing), returns `{ name, url }`. This is local-disk storage, not S3/Supabase Storage — fine
-  for local dev, but files won't survive a serverless deploy or persist across instances. The list page
-  (`AttachmentsCell`) calls this, then `PATCH`es the returned `{ name, url }` onto the shipment's
-  `attachments` array — there is no separate "create attachment" endpoint. `/api/gmail/sync` uses the same
-  `saveUploadedFile()` helper for email attachments.
-- `GET /api/gmail/auth`, `GET /api/gmail/callback`, `GET /api/gmail/status`, `POST /api/gmail/sync` — see
-  "Gmail declaration sync" below.
+  (created if missing), returns `{ name, url }`. **The extension whitelist (pdf/xls/xlsx/doc/docx/png/jpg/
+  jpeg) and 20MB cap live in the route, deliberately NOT in `saveUploadedFile()`** — files land in
+  `public/` and are served as-is, so browser-executable types (.html/.svg/.js) must never get through
+  (stored XSS), but `/api/gmail/sync` reuses the same helper for attachments from the trusted company
+  mailbox and must not fail on an unusual extension. This is local-disk storage, not S3/Supabase Storage —
+  fine for local dev, but files won't survive a serverless deploy or persist across instances. The list
+  page (`AttachmentsCell`) calls this, then `PATCH`es the returned `{ name, url }` onto the shipment's
+  `attachments` array — there is no separate "create attachment" endpoint.
+- `GET /api/gmail/auth`, `GET /api/gmail/callback`, `GET /api/gmail/status`, `POST /api/gmail/sync` — all
+  four are **ADMIN-only** (connecting/replacing the company mailbox and triggering sync are admin acts;
+  `callback` redirects instead of returning JSON since it's a browser navigation from Google's consent
+  screen — without its check, anyone could complete an OAuth flow with their own Gmail and hijack the
+  single `GmailAuth` row). `GmailSyncPanel` handles the 403 by never rendering for non-admins — no
+  role prop needed. See "Gmail declaration sync" below.
 
 ### Frontend structure (`src/app`)
 
@@ -371,8 +378,11 @@ rather than the email subject/body.
 - **This is Next.js 16: the file is `src/proxy.ts`, not `middleware.ts`** — Next 16 renamed Middleware to
   Proxy (same mechanics). `src/proxy.ts` does an *optimistic* check only (verifies the session JWT's
   signature, no DB call) and redirects to `/login` if missing/invalid; its `matcher` excludes `/api` on
-  purpose (matches Next's own recommended default) so it never blocks server-to-server calls like the
-  Gmail sync trigger. Real (secure) authorization happens per-request in `getCurrentUser()`
+  purpose (matches Next's own recommended default). Because of that exclusion, **every single Route
+  Handler must call `getCurrentUser()` itself** — as of the 2026-07 security audit, all of them do
+  (`/api/auth/*` being the deliberate public exceptions). If a future cron/webhook needs to hit an API
+  without a browser session, give it its own secret-token check — do not remove the auth check.
+  Real (secure) authorization happens per-request in `getCurrentUser()`
   (`src/lib/auth.ts`), which re-fetches the user's role fresh from the DB — call it at the top of every
   Server Component page and Route Handler that needs auth, don't rely on Proxy alone.
 - **Session** = a `jose`-signed JWT (`{ userId }`, 7-day expiry, `AUTH_SECRET` in `.env`) in an HttpOnly

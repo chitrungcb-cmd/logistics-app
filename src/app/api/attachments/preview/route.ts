@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { readFile } from "fs/promises";
 import path from "path";
 import * as XLSX from "xlsx";
+import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 
 /**
@@ -13,6 +14,9 @@ import { apiError, apiSuccess } from "@/lib/api-response";
  */
 export async function GET(request: NextRequest) {
   try {
+    const user = await getCurrentUser();
+    if (!user) return apiError("Chưa đăng nhập.", 401);
+
     const url = request.nextUrl.searchParams.get("url");
     if (!url || !url.startsWith("/uploads/") || url.includes("..")) {
       return apiError("Đường dẫn tệp không hợp lệ.", 400);

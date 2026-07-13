@@ -1,4 +1,5 @@
 import type { gmail_v1 } from "googleapis";
+import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { getAuthorizedGmailClient } from "@/lib/google";
 import { parseTokhaiExcel, type ParsedDeclaration } from "@/lib/tokhai-parser";
@@ -182,6 +183,10 @@ async function findOrCreateCustomer(parsed: ParsedDeclaration): Promise<string |
 
 export async function POST() {
   try {
+    const user = await getCurrentUser();
+    if (!user) return apiError("Chưa đăng nhập.", 401);
+    if (user.role !== "ADMIN") return apiError("Chỉ Admin mới được đồng bộ Gmail.", 403);
+
     const gmail = await getAuthorizedGmailClient();
     if (!gmail) {
       return apiError("Chưa kết nối Gmail. Hãy bấm \"Kết nối Gmail\" trước.", 400);

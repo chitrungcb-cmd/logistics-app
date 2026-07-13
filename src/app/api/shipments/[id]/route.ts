@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 
 const UPDATABLE_FIELDS = [
@@ -17,6 +18,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = await getCurrentUser();
+    if (!user) return apiError("Chưa đăng nhập.", 401);
+
     const { id } = await params;
     const shipment = await prisma.shipment.findUnique({ where: { id } });
 
@@ -36,6 +40,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = await getCurrentUser();
+    if (!user) return apiError("Chưa đăng nhập.", 401);
+
     const { id } = await params;
     const body = await request.json();
 

@@ -50,7 +50,13 @@ Thứ tự nên sửa: **Mục 2.1 → 2.2 → 2.3** (khoảng 1 buổi làm vi�
 
 ## 2. LỖI BẢO MẬT
 
-### 2.1 🔴 5 nhóm API không kiểm tra đăng nhập (nghiêm trọng nhất)
+> **CẬP NHẬT 13/07/2026**: Mục 2.1 và 2.2 **ĐÃ VÁ** (commit "Fix: vá lỗ hổng auth và upload").
+> Mục 2.3 đánh giá lại sau khi vá: **chấp nhận giữ nguyên** — file URL không còn lộ qua API không
+> auth, tên file có tiền tố ngẫu nhiên không đoán được, file thực thi được (.html/.svg/.js) đã bị
+> chặn upload. Nếu sau này cần bảo mật tài liệu ở mức cao hơn (VD: deploy ra internet công cộng),
+> mới cần chuyển sang serve file qua route handler có check session.
+
+### 2.1 🔴 ĐÃ VÁ — 5 nhóm API không kiểm tra đăng nhập (nghiêm trọng nhất)
 
 `src/proxy.ts:37` — matcher `/((?!api|...).*)` **loại trừ toàn bộ /api**, và các route sau **không tự gọi `getCurrentUser()`**, nên mở hoàn toàn cho người lạ (đã xác minh bằng grep từng file):
 
@@ -67,13 +73,13 @@ Thứ tự nên sửa: **Mục 2.1 → 2.2 → 2.3** (khoảng 1 buổi làm vi�
 - **Đề xuất sửa (ngắn gọn)**: Thêm 2 dòng `getCurrentUser()` + 401 vào đầu mỗi handler như mọi route khác đang làm. Gmail nên chặn thêm `role !== "ADMIN"`. Route `attachments/preview` chỉ cần check đăng nhập.
 - **Rủi ro khi sửa**: **Có một chỗ cần chú ý** — comment trong `proxy.ts:33` nói việc mở `/api` là để "Gmail sync trigger" server-to-server không cần cookie. Hiện tại nút "Đồng bộ ngay" gọi từ trình duyệt (có cookie) nên thêm auth **không hỏng gì**, nhưng nếu sau này bạn định chạy sync bằng cron bên ngoài thì cần cấp một secret/token riêng cho cron. Các route shipments thêm auth xong cần test lại trang /shipments (các trang đều fetch bằng cookie trình duyệt nên sẽ vẫn chạy bình thường).
 
-### 2.2 🔴 Upload không kiểm tra loại file, không giới hạn dung lượng
+### 2.2 🔴 ĐÃ VÁ — Upload không kiểm tra loại file, không giới hạn dung lượng
 - **File**: `src/lib/save-upload.ts:8-18`, `src/app/api/upload/route.ts`
 - **Vấn đề**: Nhận mọi đuôi file và lưu thẳng vào `public/uploads` (được serve tĩnh, không qua auth — `proxy.ts:37` cũng loại trừ `/uploads`). Upload file `.html` → có URL công khai chạy JavaScript trên chính domain app (**stored XSS**, đủ để đánh cắp session cookie nếu HttpOnly bị bypass qua các API mở ở 2.1 thì thậm chí không cần). Không giới hạn size → có thể ghi đầy ổ đĩa server.
 - **Đề xuất**: Whitelist đuôi file (pdf, xls, xlsx, png, jpg, doc, docx...), chặn còn lại; giới hạn ~20MB; cân nhắc thêm header `Content-Disposition` khi serve.
 - **Rủi ro khi sửa**: Thấp — cần rà đúng danh sách đuôi file thực tế nhân viên hay đính kèm (tờ khai .xls/.xlsx, quyết định thông quan .pdf) để không chặn nhầm.
 
-### 2.3 🟡 File trong `/uploads` công khai với ai có URL
+### 2.3 🟡 CHẤP NHẬN RỦI RO (sau khi vá 2.1) — File trong `/uploads` công khai với ai có URL
 - **File**: `src/proxy.ts:37` (loại trừ `/uploads` khỏi check đăng nhập — comment dòng 34 giải thích là để iframe preview không bị redirect).
 - **Vấn đề**: Tờ khai hải quan, hóa đơn, biên lai thanh toán... ai đoán/có được URL là tải được không cần đăng nhập. Tên file có timestamp + 8 hex ngẫu nhiên nên khó đoán mò, nhưng URL lộ qua `GET /api/shipments` không auth (2.1) thì thành lộ trọn bộ.
 - **Đề xuất**: Sau khi vá 2.1 thì mức độ giảm hẳn. Về lâu dài: serve file qua một route handler có check session thay vì thư mục `public/`.

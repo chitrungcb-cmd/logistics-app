@@ -1,10 +1,14 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { generateShipmentCode } from "@/lib/shipment-constants";
 
 export async function GET() {
   try {
+    const user = await getCurrentUser();
+    if (!user) return apiError("Chưa đăng nhập.", 401);
+
     // Only the columns the /shipments list table actually renders — trims payload size
     // meaningfully now that the mailbox sync has populated hundreds of rows. The detail page
     // fetches the full record separately via GET /api/shipments/[id].
@@ -38,6 +42,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await getCurrentUser();
+    if (!user) return apiError("Chưa đăng nhập.", 401);
+
     const body = await request.json();
 
     let customerName = body.customerName;

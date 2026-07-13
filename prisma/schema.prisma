@@ -1,0 +1,363 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Customer {
+  id               String     @id @default(cuid())
+  companyName      String
+  taxCode          String     @unique
+  address          String?
+  legalRepName     String?
+  legalRepIdNumber String?
+  phone            String?
+  email            String?
+  notes            String?
+  assignedUser     User?      @relation("CustomerAssignments", fields: [assignedUserId], references: [id])
+  assignedUserId   String?
+  shipments        Shipment[]
+  debts            Debt[]
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+}
+
+model Shipment {
+  id              String   @id @default(cuid())
+  shipmentCode    String   @unique
+  customerName    String
+  customer        Customer? @relation(fields: [customerId], references: [id])
+  customerId      String?
+  taxCode         String?
+  declarationNo   String?
+  declarationDate DateTime?
+  invoiceNo       String?
+  customsType     String?
+  port            String?
+  goodsName       String?
+  channel         String?
+  status          String   @default("Đang làm thủ tục")
+  customsOffice   String?
+  transport       String?
+  totalAmount     Float    @default(0)
+  attachments     Json?
+  note            String?
+  consultationDate DateTime?
+  declarationBranches Json?
+  tasks           Task[]
+  notifications   Notification[]
+  costs           ShipmentCost[]
+  quotes          Quote[]
+  conversations   Conversation[]
+  debts           Debt[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+enum CostCategory {
+  HAI_QUAN
+  BIEN_PHONG
+  KIEM_DICH
+  HA_TANG
+  BEN_BAI
+  SANG_TAI
+  VAN_TAI
+  HOA_HONG
+  KHAC
+}
+
+// Detailed cost-line ledger for a shipment. costPrice (what NQ Logistics actually pays out) always
+// counts toward Tổng chi phí; sellPrice only counts toward Tổng thu when isAdditional is true — costs
+// already covered by the quote don't get counted twice. ADMIN-only data (see CLAUDE.md "Profit
+// visibility"): ACCOUNTANT must never see costPrice or anything profit-derived from it.
+model ShipmentCost {
+  id            String       @id @default(cuid())
+  shipment      Shipment     @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  shipmentId    String
+  category      CostCategory
+  unitPrice     Float        @default(0)
+  quantity      Float        @default(1)
+  // Always server-computed as unitPrice * quantity (see /api/costs) — never accept this directly
+  // from a client write.
+  costPrice     Float        @default(0)
+  sellPrice     Float        @default(0)
+  isAdditional  Boolean      @default(false)
+  invoiceNumber String?
+  attachmentUrl String?
+  note          String?
+  auditLogs     CostAuditLog[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+enum CostAuditAction {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+// One row per create/update/delete on a ShipmentCost — "ai sửa hay thao tác sẽ có lịch sử thao tác".
+// shipmentCostId is nullable + onDelete: SetNull specifically so a DELETE action's log entry survives
+// the row itself being deleted (that's the whole point of logging a delete). shipmentId is stored
+// directly (not just derived through shipmentCost) for the same reason — still queryable by shipment
+// after the cost row is gone.
+model CostAuditLog {
+  id             String          @id @default(cuid())
+  shipmentCost   ShipmentCost?   @relation(fields: [shipmentCostId], references: [id], onDelete: SetNull)
+  shipmentCostId String?
+  shipmentId     String
+  user           User            @relation(fields: [userId], references: [id])
+  userId         String
+  action         CostAuditAction
+  detail         String
+  createdAt      DateTime        @default(now())
+}
+
+// A shipment can accumulate several quote revisions over time; only the most recent (by createdAt)
+// counts as the active quoteAmount for profit calculations — see mergeDeclarationBranch-style "latest
+// wins" precedent elsewhere in this codebase. Visible to ADMIN and ACCOUNTANT (customer-facing
+// quoting), unlike ShipmentCost.
+model Quote {
+  id            String    @id @default(cuid())
+  shipment      Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  shipmentId    String
+  quoteAmount   Float
+  quoteDate     DateTime?
+  attachmentUrl String?
+  note          String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+// Đối tác NQ Logistics trả tiền cho (hãng vận tải/kho bãi/đại lý hải quan/khác) — free-text `type`
+// rather than an enum since this list isn't as fixed as CostCategory.
+model Vendor {
+  id        String   @id @default(cuid())
+  name      String
+  type      String?
+  phone     String?
+  address   String?
+  taxCode   String?
+  note      String?
+  debts     Debt[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum DebtType {
+  RECEIVABLE
+  PAYABLE
+}
+
+// Only UNPAID/PARTIAL/PAID are ever stored — always server-recomputed from paidAmount (see
+// computeDebtStatus() in src/lib/debt-constants.ts), never accepted directly from a client write.
+// "Quá hạn" (overdue) is deliberately NOT a 4th stored value: it's a display-only flag derived from
+// dueDate + status at read time (see isOverdue()), because a debt can be simultaneously "quá hạn" and
+// "PARTIAL" — collapsing that into one enum would lose whichever fact isn't picked as the stored value.
+enum DebtStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+// type=RECEIVABLE uses customerId (tiền khách hàng nợ NQ Logistics); type=PAYABLE uses vendorId (tiền
+// NQ Logistics nợ nhà cung cấp/đối tác) — the two id fields are mutually exclusive by convention of
+// `type`, not enforced at the DB level (see validation in POST /api/debts).
+model Debt {
+  id          String     @id @default(cuid())
+  type        DebtType
+  customer    Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerId  String?
+  vendor      Vendor?    @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorId    String?
+  shipment    Shipment?  @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  shipmentId  String?
+  totalAmount Float
+  dueDate     DateTime?
+  status      DebtStatus @default(UNPAID)
+  note        String?
+  payments    Payment[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model Payment {
+  id            String   @id @default(cuid())
+  debt          Debt     @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  debtId        String
+  amount        Float
+  paymentDate   DateTime
+  method        String?
+  attachmentUrl String?
+  note          String?
+  createdAt     DateTime @default(now())
+}
+
+enum UserRole {
+  ADMIN
+  ACCOUNTANT
+  FIELD_STAFF
+}
+
+model User {
+  id                String         @id @default(cuid())
+  email             String         @unique
+  passwordHash      String
+  name              String
+  role              UserRole       @default(FIELD_STAFF)
+  tasksAssigned     Task[]         @relation("AssignedTasks")
+  tasksCreated      Task[]         @relation("CreatedTasks")
+  customersAssigned Customer[]     @relation("CustomerAssignments")
+  notifications     Notification[]
+  costAuditLogs     CostAuditLog[]
+  conversationsCreated Conversation[]      @relation("CreatedConversations")
+  conversationMemberships ConversationMember[]
+  sentMessages      Message[]           @relation("SentMessages")
+  mentions          MessageMention[]    @relation("MentionedInMessages")
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+model Task {
+  id                 String         @id @default(cuid())
+  title              String
+  description        String?
+  assignedTo         User           @relation("AssignedTasks", fields: [assignedToUserId], references: [id])
+  assignedToUserId   String
+  status             TaskStatus     @default(TODO)
+  dueDate            DateTime?
+  relatedShipment    Shipment?      @relation(fields: [relatedShipmentId], references: [id])
+  relatedShipmentId  String?
+  attachmentUrl      String?
+  createdBy          User           @relation("CreatedTasks", fields: [createdByUserId], references: [id])
+  createdByUserId    String
+  notifications      Notification[]
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_PROGRESS_UPDATE
+  NEW_MESSAGE
+  MENTIONED
+}
+
+model Notification {
+  id                    String           @id @default(cuid())
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                String
+  type                  NotificationType
+  message               String
+  relatedTask           Task?            @relation(fields: [relatedTaskId], references: [id], onDelete: SetNull)
+  relatedTaskId         String?
+  relatedShipment       Shipment?        @relation(fields: [relatedShipmentId], references: [id], onDelete: SetNull)
+  relatedShipmentId     String?
+  relatedConversation   Conversation?    @relation(fields: [relatedConversationId], references: [id], onDelete: SetNull)
+  relatedConversationId String?
+  isRead                Boolean          @default(false)
+  createdAt             DateTime         @default(now())
+}
+
+enum ConversationType {
+  DIRECT
+  GROUP
+  COMPANY
+}
+
+// COMPANY: exactly one row exists app-wide, containing every user (see ensureCompanyConversation() in
+// src/lib/chat.ts) — auto-created lazily on first access rather than at "app startup" (there's no such
+// hook in this serverless-style Next.js deployment) and every new user is auto-added when created (see
+// POST /api/users). DIRECT: found-or-created per unique pair of users, never duplicated (see
+// findOrCreateDirectConversation()). GROUP: created ad hoc by any role via POST /api/conversations,
+// optionally tied to relatedShipmentId so the shipment detail page can link back to it.
+model Conversation {
+  id                String               @id @default(cuid())
+  type              ConversationType
+  name              String?
+  relatedShipment   Shipment?            @relation(fields: [relatedShipmentId], references: [id], onDelete: SetNull)
+  relatedShipmentId String?
+  createdBy         User                 @relation("CreatedConversations", fields: [createdByUserId], references: [id])
+  createdByUserId   String
+  members           ConversationMember[]
+  messages          Message[]
+  notifications     Notification[]
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+}
+
+// lastReadAt drives the unread-count badge on /messages — null means "never read", so every message
+// counts as unread until the member opens the conversation at least once.
+model ConversationMember {
+  id             String       @id @default(cuid())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String
+  joinedAt       DateTime     @default(now())
+  lastReadAt     DateTime?
+
+  @@unique([conversationId, userId])
+}
+
+model Message {
+  id             String              @id @default(cuid())
+  conversation   Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId String
+  sender         User                @relation("SentMessages", fields: [senderId], references: [id])
+  senderId       String
+  content        String?
+  editedAt       DateTime?
+  attachments    MessageAttachment[]
+  mentions       MessageMention[]
+  createdAt      DateTime            @default(now())
+}
+
+model MessageAttachment {
+  id        String  @id @default(cuid())
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId String
+  fileUrl   String
+  fileName  String
+  fileType  String
+  fileSize  Int
+}
+
+model MessageMention {
+  id              String  @id @default(cuid())
+  message         Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId       String
+  mentionedUser   User    @relation("MentionedInMessages", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  mentionedUserId String
+}
+
+// Single-row table: holds the refresh token for the one Gmail mailbox this app syncs from.
+model GmailAuth {
+  id           String   @id @default(cuid())
+  email        String
+  refreshToken String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Tracks which Gmail messages have already been synced, so re-running sync is idempotent.
+model ProcessedEmail {
+  id             String   @id @default(cuid())
+  gmailMessageId String   @unique
+  shipmentId     String?
+  status         String
+  detail         String?
+  processedAt    DateTime @default(now())
+}

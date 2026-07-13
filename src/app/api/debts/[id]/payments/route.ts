@@ -1,0 +1,46 @@
+import { NextRequest } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/auth";
+import { apiError, apiSuccess } from "@/lib/api-response";
+import { computeDebtStatus, sumPayments } from "@/lib/debt-constants";
+
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return apiError("Chưa đăng nhập.", 401);
+    if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền ghi nhận thanh toán.", 403);
+
+    const { id } = await params;
+    const body = await request.json();
+    const { amount, paymentDate, method, attachmentUrl, note } = body;
+
+    if (!amount || Number(amount) <= 0) return apiError("Vui lòng nhập số tiền hợp lệ.", 400);
+    if (!paymentDate) return apiError("Vui lòng chọn ngày thanh toán.", 400);
+
+    const debt = await prisma.debt.findUnique({ where: { id }, include: { payments: { select: { amount: true } } } });
+    if (!debt) return apiError("Không tìm thấy công nợ.", 404);
+
+    const payment = await prisma.payment.create({
+      data: {
+        debtId: id,
+        amount: Number(amount),
+        paymentDate: new Date(paymentDate),
+        method: method || null,
+        attachmentUrl: attachmentUrl || null,
+        note: note || null,
+      },
+    });
+
+    const paidAmount = sumPayments(debt.payments) + payment.amount;
+    const status = computeDebtStatus(debt.totalAmount, paidAmount);
+    await prisma.debt.update({ where: { id }, data: { status } });
+
+    return apiSuccess(
+      { payment, paidAmount, remainingAmount: debt.totalAmount - paidAmount, status },
+      201
+    );
+  } catch (error) {
+    console.error("POST /api/debts/[id]/payments failed:", error);
+    return apiError("Không thể ghi nhận thanh toán.", 500);
+  }
+}

@@ -211,6 +211,10 @@ model User {
   passwordHash      String
   name              String
   role              UserRole       @default(FIELD_STAFF)
+  // Soft lock instead of delete (audit 3.3): a departed employee is locked, not deleted, so their
+  // task/message history stays intact and no FK constraints break. A locked user can't log in and
+  // getCurrentUser() treats them as unauthenticated, so any live session stops working immediately.
+  isActive          Boolean        @default(true)
   tasksAssigned     Task[]         @relation("AssignedTasks")
   tasksCreated      Task[]         @relation("CreatedTasks")
   customersAssigned Customer[]     @relation("CustomerAssignments")
@@ -220,8 +224,21 @@ model User {
   conversationMemberships ConversationMember[]
   sentMessages      Message[]           @relation("SentMessages")
   mentions          MessageMention[]    @relation("MentionedInMessages")
+  passwordResetsReceived PasswordResetLog[] @relation("ResetTarget")
+  passwordResetsPerformed PasswordResetLog[] @relation("ResetBy")
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
+}
+
+// Audit trail for BƯỚC 3 — who reset whose password, when. The password itself is never stored
+// anywhere (hashed on write, shown once in the browser); this only records that a reset happened.
+model PasswordResetLog {
+  id            String   @id @default(cuid())
+  targetUser    User     @relation("ResetTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+  targetUserId  String
+  resetBy       User     @relation("ResetBy", fields: [resetByUserId], references: [id])
+  resetByUserId String
+  createdAt     DateTime @default(now())
 }
 
 enum TaskStatus {

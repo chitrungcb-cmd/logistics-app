@@ -14,6 +14,9 @@ export async function POST(request: NextRequest) {
     if (!user || !(await verifyPassword(password, user.passwordHash))) {
       return apiError("Email hoặc mật khẩu không đúng.", 401);
     }
+    if (!user.isActive) {
+      return apiError("Tài khoản đã bị khóa. Liên hệ quản trị viên.", 403);
+    }
 
     await setSessionCookie(user.id);
     return apiSuccess({ id: user.id, email: user.email, name: user.name, role: user.role });

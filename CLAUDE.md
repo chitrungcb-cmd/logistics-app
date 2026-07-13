@@ -390,7 +390,18 @@ rather than the email subject/body.
   Server Component page and Route Handler that needs auth, don't rely on Proxy alone.
 - **Session** = a `jose`-signed JWT (`{ userId }`, 7-day expiry, `AUTH_SECRET` in `.env`) in an HttpOnly
   cookie (`SESSION_COOKIE` = `"session"`). `bcryptjs` hashes passwords. No session table — logout just
-  clears the cookie; there's no server-side revocation.
+  clears the cookie; there's no server-side revocation *except* the `User.isActive` lock: a locked user
+  is rejected at login (403) AND `getCurrentUser()` returns `null` for them even with a valid JWT, so
+  locking someone cuts off their live session on the next request without needing a session table.
+- **User management (`/users`, ADMIN-only page)**: admin provisions accounts with a password shown
+  **exactly once** in the browser — the plaintext is generated client-side (`generateReadablePassword()`
+  in `src/lib/password.ts`, 10–12 readable chars, no 0/O/1/l/I) or typed, POSTed once, bcrypt-hashed on
+  write, and never stored or returned. `POST /api/users/[id]/reset-password` does the same for a forgotten
+  password and writes a `PasswordResetLog` row (who reset whom, when). Departed staff are **locked
+  (`isActive=false`), not deleted** (audit 3.3) — keeps their Task/Message history and dodges FK breakage;
+  `PATCH /api/users/[id]` toggles `isActive` (an admin can't lock/delete themselves). All user *writes*
+  (create/reset/lock/edit) are ADMIN-only; `GET /api/users` stays readable by ACCOUNTANT too because the
+  task-assignment dropdowns need it — the `/users` page itself is still ADMIN-only via its server wrapper.
 - **Roles**: `ADMIN`, `ACCOUNTANT`, `FIELD_STAFF` (`UserRole` enum). `ADMIN`/`ACCOUNTANT` are treated as
   "managers" almost everywhere (full CRUD on `Task`, can list all `User`s to assign work); `FIELD_STAFF` is
   restricted to their own assigned `Task`s. When adding a new permission check, prefer `role !==

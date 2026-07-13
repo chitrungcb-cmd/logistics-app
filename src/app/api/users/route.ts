@@ -11,7 +11,7 @@ export async function GET() {
   if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền xem danh sách người dùng.", 403);
 
   const users = await prisma.user.findMany({
-    select: { id: true, email: true, name: true, role: true, createdAt: true },
+    select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
     orderBy: { createdAt: "asc" },
   });
   return apiSuccess(users);
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
         role,
         passwordHash: await hashPassword(password),
       },
-      select: { id: true, email: true, name: true, role: true, createdAt: true },
+      select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
     });
 
     await addUserToCompanyConversation(created.id);

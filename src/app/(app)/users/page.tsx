@@ -7,5 +7,5 @@ export default async function UsersPage() {
   if (!user) redirect("/login");
   if (user.role !== "ADMIN") redirect("/");
 
-  return <UsersClient />;
+  return <UsersClient currentUserId={user.id} />;
 }

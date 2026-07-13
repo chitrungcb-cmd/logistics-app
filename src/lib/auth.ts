@@ -56,6 +56,9 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   const user = await prisma.user.findUnique({ where: { id: session.userId } });
   if (!user) return null;
+  // A locked account is treated as unauthenticated even if its session JWT is still valid, so
+  // locking someone (see /api/users) cuts off any live session on their next request.
+  if (!user.isActive) return null;
 
   return { id: user.id, email: user.email, name: user.name, role: user.role };
 }

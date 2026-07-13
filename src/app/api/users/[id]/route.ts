@@ -24,6 +24,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (body.password.length < 8) return apiError("Mật khẩu cần ít nhất 8 ký tự.", 400);
       data.passwordHash = await hashPassword(body.password);
     }
+    if (typeof body.isActive === "boolean") {
+      // Guard against an admin locking themselves out (mirrors the self-delete guard below).
+      if (body.isActive === false && id === currentUser.id) {
+        return apiError("Không thể tự khóa tài khoản của chính mình.", 400);
+      }
+      data.isActive = body.isActive;
+    }
 
     if (Object.keys(data).length === 0) {
       return apiError("Không có dữ liệu để cập nhật.", 400);
@@ -32,7 +39,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const updated = await prisma.user.update({
       where: { id },
       data,
-      select: { id: true, email: true, name: true, role: true, createdAt: true },
+      select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
     });
     return apiSuccess(updated);
   } catch (error) {

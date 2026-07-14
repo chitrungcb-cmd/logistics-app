@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
-import { computeDebtStatus, sumPayments } from "@/lib/debt-constants";
+import { sumPayments } from "@/lib/debt-constants";
+import { recomputeDebtStatus } from "@/lib/debt";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -20,6 +21,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const debt = await prisma.debt.findUnique({ where: { id }, include: { payments: { select: { amount: true } } } });
     if (!debt) return apiError("Không tìm thấy công nợ.", 404);
 
+    // Block over-payment (audit 3.4) so "Còn lại" can never go negative.
+    const remaining = debt.totalAmount - sumPayments(debt.payments);
+    if (Number(amount) > remaining) {
+      return apiError(`Số tiền vượt quá số còn lại (${remaining.toLocaleString("vi-VN")} đ).`, 400);
+    }
+
     const payment = await prisma.payment.create({
       data: {
         debtId: id,
@@ -31,14 +38,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       },
     });
 
-    const paidAmount = sumPayments(debt.payments) + payment.amount;
-    const status = computeDebtStatus(debt.totalAmount, paidAmount);
-    await prisma.debt.update({ where: { id }, data: { status } });
-
-    return apiSuccess(
-      { payment, paidAmount, remainingAmount: debt.totalAmount - paidAmount, status },
-      201
-    );
+    const stats = await recomputeDebtStatus(id);
+    return apiSuccess({ payment, ...stats }, 201);
   } catch (error) {
     console.error("POST /api/debts/[id]/payments failed:", error);
     return apiError("Không thể ghi nhận thanh toán.", 500);

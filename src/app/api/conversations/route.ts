@@ -17,7 +17,6 @@ export async function GET() {
     where: { userId: user.id },
     select: { conversationId: true, lastReadAt: true },
   });
-  const lastReadByConversation = new Map(memberships.map((m) => [m.conversationId, m.lastReadAt]));
 
   const conversations = await prisma.conversation.findMany({
     where: { id: { in: memberships.map((m) => m.conversationId) } },
@@ -29,19 +28,28 @@ export async function GET() {
     orderBy: { updatedAt: "desc" },
   });
 
-  const withUnreadCounts = await Promise.all(
-    conversations.map(async (c) => {
-      const lastReadAt = lastReadByConversation.get(c.id) ?? null;
-      const unreadCount = await prisma.message.count({
+  // One grouped query for every conversation's unread count instead of a per-conversation count()
+  // in a loop (was N+1, and this endpoint is polled every 10s per open client). Each conversation
+  // brings its own lastReadAt cutoff via the OR, so a single round trip still gives exact counts.
+  const unreadGroups = memberships.length
+    ? await prisma.message.groupBy({
+        by: ["conversationId"],
         where: {
-          conversationId: c.id,
           senderId: { not: user.id },
-          ...(lastReadAt ? { createdAt: { gt: lastReadAt } } : {}),
+          OR: memberships.map((m) => ({
+            conversationId: m.conversationId,
+            ...(m.lastReadAt ? { createdAt: { gt: m.lastReadAt } } : {}),
+          })),
         },
-      });
-      return { ...c, unreadCount };
-    })
-  );
+        _count: { _all: true },
+      })
+    : [];
+  const unreadByConversation = new Map(unreadGroups.map((g) => [g.conversationId, g._count._all]));
+
+  const withUnreadCounts = conversations.map((c) => ({
+    ...c,
+    unreadCount: unreadByConversation.get(c.id) ?? 0,
+  }));
 
   return apiSuccess(withUnreadCounts);
 }

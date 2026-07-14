@@ -2,10 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   DEBT_TYPE_LABELS,
   debtStatusBadge,
 } from "@/lib/debt-constants";
+
+type DebtStats = { paidAmount: number; remainingAmount: number; status: string };
 
 type Payment = {
   id: string;
@@ -53,6 +56,7 @@ const emptyPaymentForm = {
 };
 
 export default function DebtDetailClient({ debtId }: { debtId: string }) {
+  const router = useRouter();
   const [debt, setDebt] = useState<DebtDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +66,16 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({ totalAmount: "", dueDate: "", note: "" });
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Fold the {paidAmount, remainingAmount, status} an API returns back into debt state — shared by
+  // add-payment, delete-payment and edit-debt so the recompute isn't spelled out three times.
+  function applyStats(stats: DebtStats) {
+    setDebt((prev) => (prev ? { ...prev, ...stats } : prev));
+  }
 
   useEffect(() => {
     fetch(`/api/debts/${debtId}`)
@@ -118,21 +132,73 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "Không thể ghi nhận thanh toán.");
 
-      setDebt((prev) =>
-        prev
-          ? {
-              ...prev,
-              payments: [json.data.payment, ...prev.payments],
-              paidAmount: json.data.paidAmount,
-              remainingAmount: json.data.remainingAmount,
-              status: json.data.status,
-            }
-          : prev
-      );
+      setDebt((prev) => (prev ? { ...prev, payments: [json.data.payment, ...prev.payments] } : prev));
+      applyStats(json.data);
       setForm(emptyPaymentForm);
       setIsFormOpen(false);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
+    }
+  }
+
+  async function handleDeletePayment(paymentId: string) {
+    if (!confirm("Xóa khoản thanh toán này? Trạng thái công nợ sẽ được tính lại.")) return;
+    const res = await fetch(`/api/debts/${debtId}/payments/${paymentId}`, { method: "DELETE" });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      alert(json.error || "Không thể xóa thanh toán.");
+      return;
+    }
+    setDebt((prev) => (prev ? { ...prev, payments: prev.payments.filter((p) => p.id !== paymentId) } : prev));
+    applyStats(json.data);
+  }
+
+  async function handleDeleteDebt() {
+    if (!confirm("Xóa công nợ này? Toàn bộ lịch sử thanh toán của nó cũng bị xóa. Không thể hoàn tác.")) return;
+    const res = await fetch(`/api/debts/${debtId}`, { method: "DELETE" });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      alert(json.error || "Không thể xóa công nợ.");
+      return;
+    }
+    router.push("/debts");
+  }
+
+  function openEdit() {
+    if (!debt) return;
+    setEditForm({
+      totalAmount: String(debt.totalAmount),
+      dueDate: debt.dueDate ? debt.dueDate.slice(0, 10) : "",
+      note: debt.note || "",
+    });
+    setEditError(null);
+    setIsEditOpen(true);
+  }
+
+  async function handleEditSave(event: React.FormEvent) {
+    event.preventDefault();
+    setEditError(null);
+    if (!editForm.totalAmount || Number(editForm.totalAmount) <= 0) {
+      setEditError("Tổng tiền phải lớn hơn 0.");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/debts/${debtId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          totalAmount: editForm.totalAmount,
+          dueDate: editForm.dueDate || null,
+          note: editForm.note,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Không thể cập nhật công nợ.");
+      // PATCH returns the full debt (with recomputed status + remaining) — merge it in.
+      setDebt((prev) => (prev ? { ...prev, ...json.data } : prev));
+      setIsEditOpen(false);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
     }
   }
 
@@ -158,11 +224,29 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
         <Link href="/debts" className="text-sm text-blue-600 hover:underline">
           ← Quay lại danh sách công nợ
         </Link>
-        <div className="mt-2 flex items-center gap-3">
-          <h1 className="text-2xl font-semibold text-gray-900">{partnerName}</h1>
-          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>
-            {badge.label}
-          </span>
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold text-gray-900">{partnerName}</h1>
+            <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>
+              {badge.label}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={openEdit}
+              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Sửa
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteDebt}
+              className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50"
+            >
+              Xóa nợ
+            </button>
+          </div>
         </div>
         <p className="mt-1 text-sm text-gray-500">{DEBT_TYPE_LABELS[debt.type]}</p>
       </div>
@@ -217,6 +301,7 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Phương thức</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Ghi chú</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Biên lai</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -241,6 +326,15 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
                           ) : (
                             "—"
                           )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePayment(p.id)}
+                            className="text-xs font-medium text-red-600 hover:underline"
+                          >
+                            🗑 Xóa
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -347,6 +441,65 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
                     setForm(emptyPaymentForm);
                     setIsFormOpen(false);
                   }}
+                  className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Hủy
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isEditOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setIsEditOpen(false)}
+        >
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="mb-4 text-base font-semibold text-gray-900">Sửa công nợ</h2>
+            <form onSubmit={handleEditSave} className="space-y-4">
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">Tổng tiền</span>
+                <input
+                  type="number"
+                  value={editForm.totalAmount}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, totalAmount: e.target.value }))}
+                  className="input"
+                  min={0}
+                />
+                <span className="mt-1 block text-xs text-gray-400">
+                  Đã thanh toán {formatVnd(debt.paidAmount)} — sửa tổng tiền sẽ tính lại trạng thái.
+                </span>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">Hạn thanh toán</span>
+                <input
+                  type="date"
+                  value={editForm.dueDate}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, dueDate: e.target.value }))}
+                  className="input"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">Ghi chú</span>
+                <textarea
+                  value={editForm.note}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, note: e.target.value }))}
+                  rows={2}
+                  className="input"
+                />
+              </label>
+
+              {editError && <p className="text-sm text-red-600">{editError}</p>}
+
+              <div className="flex gap-3">
+                <button type="submit" className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                  Lưu
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditOpen(false)}
                   className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
                   Hủy

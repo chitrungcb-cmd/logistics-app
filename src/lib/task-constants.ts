@@ -30,3 +30,17 @@ export const SHIPMENT_TASK_STEPS = [
   "Gửi hồ sơ thanh toán",
   "Lưu trữ đủ bộ hồ sơ",
 ] as const;
+
+/**
+ * The Task table stores both fixed shipment workflow steps and ad-hoc assignments. Until those are
+ * split into separate tables, a task linked to a shipment and carrying one of the six fixed titles
+ * is treated as workflow. This also covers historical rows created before descriptions were added.
+ */
+export function adHocTaskWhere() {
+  return {
+    NOT: {
+      relatedShipmentId: { not: null },
+      title: { in: [...SHIPMENT_TASK_STEPS] },
+    },
+  };
+}

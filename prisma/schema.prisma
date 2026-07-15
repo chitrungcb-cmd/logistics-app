@@ -45,6 +45,8 @@ model Shipment {
   status          String   @default("Đang làm thủ tục")
   customsOffice   String?
   transport       String?
+  transportRoute  String?
+  vehiclePlate    String?
   totalAmount     Float    @default(0)
   attachments     Json?
   note            String?
@@ -54,6 +56,7 @@ model Shipment {
   notifications   Notification[]
   costs           ShipmentCost[]
   quotes          Quote[]
+  quoteLines      ShipmentQuoteLine[]
   conversations   Conversation[]
   debts           Debt[]
   createdAt       DateTime @default(now())
@@ -88,12 +91,43 @@ model ShipmentCost {
   costPrice     Float        @default(0)
   sellPrice     Float        @default(0)
   isAdditional  Boolean      @default(false)
+  // Preset-generated rows remain estimates until a user edits or explicitly confirms them.
+  isActual      Boolean      @default(true)
   invoiceNumber String?
   attachmentUrl String?
   note          String?
+  vendor        Vendor?      @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorId      String?
+  preset        CostPreset?  @relation(fields: [presetId], references: [id], onDelete: SetNull)
+  presetId      String?
   auditLogs     CostAuditLog[]
+  vendorInvoices VendorInvoice[]
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+
+  @@unique([shipmentId, presetId])
+  @@index([vendorId])
+}
+
+// Bảng giá chi phí được thiết lập trước theo nhóm tên hàng. Khi lô có số tờ khai, các dòng đang
+// hoạt động được sao chép sang ShipmentCost và liên kết bằng presetId để không tạo trùng.
+model CostPreset {
+  id            String         @id @default(cuid())
+  goodsName     String
+  goodsKeyword  String
+  category      CostCategory
+  unitPrice     Float
+  quantity      Float          @default(1)
+  note          String?
+  vendor        Vendor?        @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorId      String?
+  isActive      Boolean        @default(true)
+  shipmentCosts ShipmentCost[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@unique([goodsKeyword, category])
+  @@index([vendorId])
 }
 
 enum CostAuditAction {
@@ -135,6 +169,31 @@ model Quote {
   updatedAt     DateTime  @updatedAt
 }
 
+enum QuoteLineCategory {
+  THU_TUC_HAI_QUAN
+  VAN_TAI
+  DANG_KIEM
+  PHAT_SINH
+}
+
+// Bảng báo giá hiện hành theo bốn hạng mục cố định. Tách khỏi ShipmentCost để chi phí nội bộ và
+// báo giá khách hàng có thể sửa độc lập trong cùng màn hình.
+model ShipmentQuoteLine {
+  id         String            @id @default(cuid())
+  shipment   Shipment          @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  shipmentId String
+  category   QuoteLineCategory?
+  description String
+  quantity   Float             @default(1)
+  unit       String?
+  unitPrice  Float             @default(0)
+  amount     Float             @default(0)
+  hasInvoice Boolean           @default(false)
+  note       String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+}
+
 // Đối tác NQ Logistics trả tiền cho (hãng vận tải/kho bãi/đại lý hải quan/khác) — free-text `type`
 // rather than an enum since this list isn't as fixed as CostCategory.
 model Vendor {
@@ -146,8 +205,60 @@ model Vendor {
   taxCode   String?
   note      String?
   debts     Debt[]
+  shipmentCosts ShipmentCost[]
+  costPresets   CostPreset[]
+  invoices      VendorInvoice[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum InvoiceReconciliationStatus {
+  MATCHED
+  UNMATCHED
+  NEEDS_REVIEW
+}
+
+// Hóa đơn đầu vào được đọc từ email gửi cho NQ Logistics. sourceKey là khóa Gmail + attachment
+// giúp đồng bộ lặp lại an toàn; shipmentCostId được tự động ghép theo số hóa đơn và nhà cung cấp.
+model VendorInvoice {
+  id              String                      @id @default(cuid())
+  sourceKey       String                      @unique
+  gmailMessageId  String
+  gmailThreadId   String?
+  emailSubject    String?
+  emailFrom       String?
+  vendor          Vendor?                     @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorId        String?
+  shipmentCost    ShipmentCost?               @relation(fields: [shipmentCostId], references: [id], onDelete: SetNull)
+  shipmentCostId  String?
+  sellerName      String?
+  sellerTaxCode   String?
+  buyerName       String?
+  buyerTaxCode    String?
+  isIssuedToNq    Boolean?
+  invoiceNumber   String?
+  invoiceSymbol   String?
+  invoiceDate     DateTime?
+  subtotal        Float?
+  taxAmount       Float?
+  totalAmount     Float?
+  currency        String                      @default("VND")
+  attachmentName  String
+  attachmentUrl   String
+  xmlUrl          String?
+  pdfUrl          String?
+  status          InvoiceReconciliationStatus @default(NEEDS_REVIEW)
+  note            String?
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+
+  @@index([gmailMessageId])
+  @@index([vendorId])
+  @@index([shipmentCostId])
+  @@index([status])
+  @@index([invoiceDate])
+  @@index([sellerTaxCode])
+  @@index([invoiceNumber])
 }
 
 enum DebtType {
@@ -220,6 +331,7 @@ model User {
   customersAssigned Customer[]     @relation("CustomerAssignments")
   notifications     Notification[]
   costAuditLogs     CostAuditLog[]
+  taskStatusLogs    TaskStatusLog[]
   conversationsCreated Conversation[]      @relation("CreatedConversations")
   conversationMemberships ConversationMember[]
   sentMessages      Message[]           @relation("SentMessages")
@@ -261,8 +373,21 @@ model Task {
   createdBy          User           @relation("CreatedTasks", fields: [createdByUserId], references: [id])
   createdByUserId    String
   notifications      Notification[]
+  statusLogs         TaskStatusLog[]
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
+}
+
+// Lưu lịch sử tích/chuyển trạng thái tiến trình để biết ai thao tác và thời điểm nào.
+model TaskStatusLog {
+  id        String     @id @default(cuid())
+  task      Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId    String
+  actor     User       @relation(fields: [actorUserId], references: [id])
+  actorUserId String
+  fromStatus TaskStatus
+  toStatus   TaskStatus
+  createdAt DateTime   @default(now())
 }
 
 enum NotificationType {
@@ -270,6 +395,7 @@ enum NotificationType {
   TASK_PROGRESS_UPDATE
   NEW_MESSAGE
   MENTIONED
+  COST_MISSING
 }
 
 model Notification {
@@ -285,6 +411,8 @@ model Notification {
   relatedConversation   Conversation?    @relation(fields: [relatedConversationId], references: [id], onDelete: SetNull)
   relatedConversationId String?
   isRead                Boolean          @default(false)
+  // Optional idempotency key for recurring system alerts; null for ordinary task/chat notifications.
+  dedupeKey             String?          @unique
   createdAt             DateTime         @default(now())
 }
 

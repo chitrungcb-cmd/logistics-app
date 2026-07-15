@@ -10,6 +10,13 @@ export const COST_CATEGORY_OPTIONS = [
   "KHAC",
 ] as const;
 
+// Theo nghiệp vụ, chỉ các nhóm này phát sinh chi phí có hóa đơn.
+export const INVOICE_COST_CATEGORIES = ["KIEM_DICH", "HA_TANG", "SANG_TAI", "BEN_BAI", "VAN_TAI"] as const;
+
+export function isInvoiceCostCategory(category: string) {
+  return INVOICE_COST_CATEGORIES.some((item) => item === category);
+}
+
 export const COST_CATEGORY_LABELS: Record<string, string> = {
   HAI_QUAN: "Hải quan",
   BIEN_PHONG: "Biên phòng",

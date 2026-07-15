@@ -46,7 +46,9 @@ export default function TasksClient({ canManage }: { canManage: boolean }) {
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Nhiệm vụ</h1>
           <p className="mt-1 text-sm text-gray-500">
-            {canManage ? "Toàn bộ nhiệm vụ đã giao." : "Nhiệm vụ được giao cho bạn."}
+            {canManage
+              ? "Các công việc được giao ngoài tiến trình xử lý lô hàng."
+              : "Các công việc ngoài tiến trình được giao cho bạn."}
           </p>
         </div>
         {canManage && (
@@ -84,7 +86,7 @@ export default function TasksClient({ canManage }: { canManage: boolean }) {
             )}
             {!isLoading && !error && tasks.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-gray-400">Chưa có nhiệm vụ nào.</td>
+                <td colSpan={6} className="px-4 py-6 text-center text-gray-400">Chưa có công việc nào ngoài tiến trình lô hàng.</td>
               </tr>
             )}
             {!isLoading &&

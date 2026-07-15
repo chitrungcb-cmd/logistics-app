@@ -85,7 +85,7 @@ export default function AttachmentsCell({
         type="button"
         onClick={() => fileInputRef.current?.click()}
         disabled={isUploading}
-        className="w-fit rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+        className="w-fit whitespace-nowrap rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
       >
         {isUploading ? "Đang tải..." : "+ Đính kèm"}
       </button>

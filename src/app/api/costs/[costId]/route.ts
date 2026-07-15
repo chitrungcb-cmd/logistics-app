@@ -2,7 +2,11 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
-import { COST_CATEGORY_LABELS, COST_CATEGORY_OPTIONS } from "@/lib/shipment-cost-constants";
+import {
+  COST_CATEGORY_LABELS,
+  COST_CATEGORY_OPTIONS,
+  isInvoiceCostCategory,
+} from "@/lib/shipment-cost-constants";
 import { buildUpdateDetail, logCostAudit } from "@/lib/cost-audit-log";
 
 const UPDATABLE_FIELDS = [
@@ -14,6 +18,8 @@ const UPDATABLE_FIELDS = [
   "invoiceNumber",
   "attachmentUrl",
   "note",
+  "vendorId",
+  "isActual",
 ] as const;
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ costId: string }> }) {
@@ -23,7 +29,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (user.role !== "ADMIN") return apiError("Bạn không có quyền sửa chi phí.", 403);
 
     const { costId } = await params;
-    const existing = await prisma.shipmentCost.findUnique({ where: { id: costId } });
+    const existing = await prisma.shipmentCost.findUnique({
+      where: { id: costId },
+      include: { vendor: { select: { id: true, name: true } } },
+    });
     if (!existing) return apiError("Không tìm thấy khoản chi phí.", 404);
 
     const body = await request.json();
@@ -34,6 +43,27 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const data: Record<string, unknown> = {};
     for (const field of UPDATABLE_FIELDS) {
       if (field in body) data[field] = body[field];
+    }
+
+    let nextVendorName = existing.vendor?.name ?? null;
+    if ("vendorId" in data) {
+      data.vendorId = typeof data.vendorId === "string" && data.vendorId ? data.vendorId : null;
+      if (data.vendorId) {
+        const vendor = await prisma.vendor.findUnique({
+          where: { id: data.vendorId as string },
+          select: { name: true },
+        });
+        if (!vendor) return apiError("Nhà cung cấp không hợp lệ.", 400);
+        nextVendorName = vendor.name;
+      } else {
+        nextVendorName = null;
+      }
+    }
+
+    // Chỉ Kiểm dịch, Hạ tầng, Sang tải, Bến bãi và Vận tải được phép mang số hóa đơn.
+    if ("category" in data || "invoiceNumber" in data) {
+      const nextCategory = typeof data.category === "string" ? data.category : existing.category;
+      if (!isInvoiceCostCategory(nextCategory)) data.invoiceNumber = null;
     }
 
     // costPrice is never accepted directly — always re-derived from unitPrice * quantity, using
@@ -47,24 +77,40 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
     if ("sellPrice" in data) data.sellPrice = Number(data.sellPrice) || 0;
 
+    // Any user-initiated edit confirms a preset estimate as an actual cost. The client may also
+    // explicitly send isActual=true when the configured amount already matches the real expense.
+    if (existing.presetId && !existing.isActual) data.isActual = true;
+
     if (Object.keys(data).length === 0) {
       return apiError("Không có dữ liệu để cập nhật.", 400);
     }
 
-    const detail = buildUpdateDetail(existing, data);
-
-    const cost = await prisma.shipmentCost.update({
-      where: { id: costId },
-      data,
-      include: { shipment: { select: { id: true, shipmentCode: true, customerName: true, goodsName: true, declarationNo: true, declarationDate: true, invoiceNo: true } } },
+    const detail = buildUpdateDetail(existing, data, {
+      previous: existing.vendor?.name ?? null,
+      next: nextVendorName,
     });
 
-    await logCostAudit({
-      userId: user.id,
-      shipmentId: cost.shipmentId,
-      shipmentCostId: cost.id,
-      action: "UPDATE",
-      detail,
+    // The edit and its audit entry must either both succeed or both roll back. This guarantees that
+    // every manual change to a confirmed cost always has an accountable history record.
+    const cost = await prisma.$transaction(async (tx) => {
+      const updated = await tx.shipmentCost.update({
+        where: { id: costId },
+        data,
+        include: {
+          shipment: { select: { id: true, shipmentCode: true, customerName: true, goodsName: true, declarationNo: true, declarationDate: true, invoiceNo: true } },
+          vendor: { select: { id: true, name: true, type: true } },
+        },
+      });
+      await tx.costAuditLog.create({
+        data: {
+          userId: user.id,
+          shipmentId: updated.shipmentId,
+          shipmentCostId: updated.id,
+          action: "UPDATE",
+          detail,
+        },
+      });
+      return updated;
     });
 
     return apiSuccess(cost);

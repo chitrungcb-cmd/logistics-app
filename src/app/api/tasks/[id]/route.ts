@@ -73,6 +73,17 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     const task = await prisma.task.update({ where: { id }, data, include: TASK_INCLUDE });
 
+    if (typeof data.status === "string" && data.status !== existing.status) {
+      await prisma.taskStatusLog.create({
+        data: {
+          taskId: task.id,
+          actorUserId: user.id,
+          fromStatus: existing.status,
+          toStatus: data.status as typeof existing.status,
+        },
+      });
+    }
+
     const shipmentId = existing.relatedShipment?.id ?? null;
     const shipmentCode = existing.relatedShipment?.shipmentCode ?? null;
 

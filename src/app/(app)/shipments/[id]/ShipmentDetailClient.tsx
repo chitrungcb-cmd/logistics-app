@@ -5,13 +5,14 @@ import Link from "next/link";
 import Badge from "@/components/shipments/Badge";
 import AttachmentPreviewModal from "@/components/shipments/AttachmentPreviewModal";
 import CustomerCombobox from "@/components/customers/CustomerCombobox";
-import ShipmentFinancials from "@/components/shipments/ShipmentFinancials";
+import ShipmentDetailsTable from "@/components/shipments/ShipmentDetailsTable";
 import TaskStepper from "@/components/shipments/TaskStepper";
 import {
   channelBadgeClass,
   statusBadgeClass,
-  getDeclarationBranches,
   isDateApproaching,
+  CHANNEL_OPTIONS,
+  CUSTOMS_TYPE_OPTIONS,
   STATUS_OPTIONS,
   type Attachment,
 } from "@/lib/shipment-constants";
@@ -32,10 +33,22 @@ export default function ShipmentDetailClient({
 
   const [editForm, setEditForm] = useState({
     transport: "",
+    transportRoute: "",
+    vehiclePlate: "",
     status: STATUS_OPTIONS[0] as string,
     note: "",
     customerName: "",
     customerId: null as string | null,
+    taxCode: "",
+    declarationNo: "",
+    declarationDate: "",
+    consultationDate: "",
+    invoiceNo: "",
+    customsType: "",
+    port: "",
+    goodsName: "",
+    channel: "",
+    customsOffice: "",
   });
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -56,10 +69,22 @@ export default function ShipmentDetailClient({
           setShipment(data);
           setEditForm({
             transport: data.transport || "",
+            transportRoute: data.transportRoute || "",
+            vehiclePlate: data.vehiclePlate || "",
             status: data.status,
             note: data.note || "",
             customerName: data.customerName,
             customerId: data.customerId,
+            taxCode: data.taxCode || "",
+            declarationNo: data.declarationNo || "",
+            declarationDate: data.declarationDate ? data.declarationDate.slice(0, 10) : "",
+            consultationDate: data.consultationDate ? data.consultationDate.slice(0, 10) : "",
+            invoiceNo: data.invoiceNo || "",
+            customsType: data.customsType || "",
+            port: data.port || "",
+            goodsName: data.goodsName || "",
+            channel: data.channel || "",
+            customsOffice: data.customsOffice || "",
           });
         }
       } catch (err) {
@@ -111,13 +136,7 @@ export default function ShipmentDetailClient({
       const res = await fetch(`/api/shipments/${shipmentId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transport: editForm.transport,
-          status: editForm.status,
-          note: editForm.note,
-          customerName: editForm.customerName,
-          customerId: editForm.customerId,
-        }),
+        body: JSON.stringify(editForm),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
@@ -153,8 +172,15 @@ export default function ShipmentDetailClient({
         <Link href="/shipments" className="text-sm text-blue-600 hover:underline">
           ← Quay lại danh sách
         </Link>
-        <div className="mt-2 flex items-center gap-3">
-          <h1 className="text-2xl font-semibold text-gray-900">{shipment.shipmentCode}</h1>
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">
+              TK {shipment.declarationNo || "Chưa có số tờ khai"}
+            </h1>
+            <p className="mt-0.5 text-sm text-gray-500">
+              Ngày tờ khai: {shipment.declarationDate ? new Date(shipment.declarationDate).toLocaleDateString("vi-VN") : "—"}
+            </p>
+          </div>
           <Badge label={shipment.status} className={statusBadgeClass(shipment.status)} />
           {shipment.channel && (
             <Badge label={shipment.channel} className={channelBadgeClass(shipment.channel)} />
@@ -168,70 +194,19 @@ export default function ShipmentDetailClient({
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <section className="rounded-lg border border-gray-200 bg-white p-6 lg:col-span-2">
+        <section className="rounded-lg border border-gray-200 bg-white p-6 lg:col-span-3">
           <h2 className="mb-4 text-base font-semibold text-gray-900">Thông tin lô hàng</h2>
-          <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-gray-400">Khách hàng</dt>
-              <dd className="mt-0.5 text-sm text-gray-900">
-                {shipment.customerId ? (
-                  <Link href={`/customers/${shipment.customerId}`} className="text-blue-600 hover:underline">
-                    {shipment.customerName}
-                  </Link>
-                ) : (
-                  shipment.customerName || "—"
-                )}
-              </dd>
-            </div>
-            <Info label="Mã số thuế" value={shipment.taxCode} />
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-gray-400">Số tờ khai</dt>
-              <dd className="mt-0.5 text-sm text-gray-900">
-                {(() => {
-                  const branches = getDeclarationBranches(shipment.declarationBranches);
-                  if (!branches) return shipment.declarationNo || "—";
-                  return (
-                    <div className="space-y-0.5">
-                      {branches.map((b) => (
-                        <div key={b.number}>
-                          <span className="text-gray-400">{b.label}:</span> {b.number}
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </dd>
-            </div>
-            <Info
-              label="Ngày tờ khai"
-              value={
-                shipment.declarationDate
-                  ? new Date(shipment.declarationDate).toLocaleDateString("vi-VN")
-                  : null
-              }
-            />
-            <Info
-              label="Ngày tham vấn"
-              value={
-                shipment.consultationDate
-                  ? new Date(shipment.consultationDate).toLocaleDateString("vi-VN")
-                  : null
-              }
-              warn={isDateApproaching(shipment.consultationDate)}
-            />
-            <Info label="Loại hình" value={shipment.customsType} />
-            <Info label="Số invoice" value={shipment.invoiceNo} />
-            <Info label="Cửa khẩu/Cảng" value={shipment.port} />
-            <Info label="Tên hàng" value={shipment.goodsName} />
-            <Info label="HQ tiếp nhận" value={shipment.customsOffice} />
-            <Info label="Vận tải" value={shipment.transport} />
-            <Info label="Ghi chú" value={shipment.note} />
-          </dl>
+          <ShipmentDetailsTable
+            shipment={shipment}
+            linkCustomer
+            warnConsultationDate={isDateApproaching(shipment.consultationDate)}
+          />
 
-          <div className="mt-6">
-            <h3 className="mb-2 text-sm font-semibold text-gray-900">Chứng từ đính kèm</h3>
-            {shipment.attachments && shipment.attachments.length > 0 ? (
-              <ul className="space-y-1">
+          <div className="mt-4 grid overflow-hidden rounded-lg border border-gray-200 sm:grid-cols-[10rem_minmax(0,1fr)]">
+            <h3 className="bg-gray-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Chứng từ đính kèm</h3>
+            <div className="px-4 py-3">
+              {shipment.attachments && shipment.attachments.length > 0 ? (
+                <ul className="flex flex-wrap gap-x-4 gap-y-2">
                 {shipment.attachments.map((file, index) => (
                   <li key={`${file.url}-${index}`}>
                     <button
@@ -243,10 +218,11 @@ export default function ShipmentDetailClient({
                     </button>
                   </li>
                 ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-gray-400">Chưa có chứng từ đính kèm.</p>
-            )}
+                </ul>
+              ) : (
+                <p className="text-sm text-gray-400">Chưa có chứng từ đính kèm.</p>
+              )}
+            </div>
           </div>
 
           {linkedConversationId && (
@@ -261,10 +237,11 @@ export default function ShipmentDetailClient({
           )}
         </section>
 
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
+        <section className="rounded-lg border border-gray-200 bg-white p-6 lg:col-span-3">
           <h2 className="mb-4 text-base font-semibold text-gray-900">Cập nhật lô hàng</h2>
-          <form onSubmit={handleSave} className="space-y-4">
-            <label className="block">
+          <form onSubmit={handleSave}>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <label className="block md:col-span-2 xl:col-span-1">
               <span className="mb-1 block text-sm font-medium text-gray-700">Khách hàng</span>
               <CustomerCombobox
                 customerName={editForm.customerName}
@@ -276,6 +253,62 @@ export default function ShipmentDetailClient({
             </label>
 
             <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Mã số thuế</span>
+              <input name="taxCode" value={editForm.taxCode} onChange={handleEditChange} className="input" />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Số tờ khai</span>
+              <input name="declarationNo" value={editForm.declarationNo} onChange={handleEditChange} className="input" />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Ngày tờ khai</span>
+              <input type="date" name="declarationDate" value={editForm.declarationDate} onChange={handleEditChange} className="input" />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Ngày tham vấn</span>
+              <input type="date" name="consultationDate" value={editForm.consultationDate} onChange={handleEditChange} className="input" />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Số invoice</span>
+              <input name="invoiceNo" value={editForm.invoiceNo} onChange={handleEditChange} className="input" />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Loại hình</span>
+              <select name="customsType" value={editForm.customsType} onChange={handleEditChange} className="input">
+                <option value="">-- Chọn loại hình --</option>
+                {CUSTOMS_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Cửa khẩu/Cảng</span>
+              <input name="port" value={editForm.port} onChange={handleEditChange} className="input" />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Tên hàng</span>
+              <input name="goodsName" value={editForm.goodsName} onChange={handleEditChange} className="input" />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Phân luồng</span>
+              <select name="channel" value={editForm.channel} onChange={handleEditChange} className="input">
+                <option value="">-- Chọn phân luồng --</option>
+                {CHANNEL_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">HQ tiếp nhận</span>
+              <input name="customsOffice" value={editForm.customsOffice} onChange={handleEditChange} className="input" />
+            </label>
+
+            <label className="block">
               <span className="mb-1 block text-sm font-medium text-gray-700">Vận tải</span>
               <input
                 name="transport"
@@ -284,6 +317,16 @@ export default function ShipmentDetailClient({
                 className="input"
                 placeholder="VD: Đường biển - Hãng tàu ABC"
               />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">Cung đường vận chuyển</span>
+              <input name="transportRoute" value={editForm.transportRoute} onChange={handleEditChange} className="input" placeholder="VD: Hữu Nghị → Hà Nội" />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-700">BKS xe vận chuyển</span>
+              <input name="vehiclePlate" value={editForm.vehiclePlate} onChange={handleEditChange} className="input" placeholder="VD: 29C-123.45" />
             </label>
 
             <label className="block">
@@ -302,7 +345,7 @@ export default function ShipmentDetailClient({
               </select>
             </label>
 
-            <label className="block">
+            <label className="block md:col-span-2 xl:col-span-3">
               <span className="mb-1 block text-sm font-medium text-gray-700">Ghi chú</span>
               <textarea
                 name="note"
@@ -312,14 +355,15 @@ export default function ShipmentDetailClient({
                 className="input"
               />
             </label>
+            </div>
 
-            {saveError && <p className="text-sm text-red-600">{saveError}</p>}
-            {successMessage && <p className="text-sm text-green-600">{successMessage}</p>}
+            {saveError && <p className="mt-4 text-sm text-red-600">{saveError}</p>}
+            {successMessage && <p className="mt-4 text-sm text-green-600">{successMessage}</p>}
 
             <button
               type="submit"
               disabled={isSaving}
-              className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="mt-4 rounded-md bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               {isSaving ? "Đang lưu..." : "Lưu cập nhật"}
             </button>
@@ -327,33 +371,16 @@ export default function ShipmentDetailClient({
         </section>
       </div>
 
-      {role !== "FIELD_STAFF" && (
-        <div className="mt-6">
-          <ShipmentFinancials shipmentId={shipmentId} isAdmin={role === "ADMIN"} />
-        </div>
+      {role === "ADMIN" && (
+        <Link
+          href={`/costs?shipmentId=${shipmentId}`}
+          className="mt-6 inline-block text-sm text-blue-600 hover:underline"
+        >
+          Xem chi phí tại trang Chi phí →
+        </Link>
       )}
 
       <AttachmentPreviewModal key={previewing?.url} attachment={previewing} onClose={() => setPreviewing(null)} />
-    </div>
-  );
-}
-
-function Info({
-  label,
-  value,
-  warn,
-}: {
-  label: string;
-  value: string | null | undefined;
-  warn?: boolean;
-}) {
-  return (
-    <div>
-      <dt className="text-xs font-medium uppercase tracking-wide text-gray-400">{label}</dt>
-      <dd className={`mt-0.5 text-sm ${warn ? "font-medium text-red-600" : "text-gray-900"}`}>
-        {warn ? "⚠ " : ""}
-        {value || "—"}
-      </dd>
     </div>
   );
 }

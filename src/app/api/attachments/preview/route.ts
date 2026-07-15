@@ -1,16 +1,127 @@
 import { NextRequest } from "next/server";
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import path from "path";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 
+const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
+const MAX_PREVIEW_SHEETS = 20;
+const MAX_PREVIEW_ROWS = 2_000;
+const MAX_PREVIEW_COLUMNS = 128;
+
+type MergeCell = { covered: boolean; rowSpan: number; colSpan: number };
+
+function cellText(cell: ExcelJS.Cell) {
+  if (cell.isMerged && cell.master !== cell) return "";
+  try {
+    return cell.text ?? "";
+  } catch {
+    const value = cell.value;
+    if (value == null) return "";
+    if (value instanceof Date) return value.toLocaleDateString("vi-VN");
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    if (typeof value === "object" && "result" in value && value.result != null) {
+      return String(value.result);
+    }
+    if (typeof value === "object" && "richText" in value && Array.isArray(value.richText)) {
+      return value.richText.map((part) => part.text).join("");
+    }
+    if (typeof value === "object" && "text" in value && typeof value.text === "string") {
+      return value.text;
+    }
+    return "";
+  }
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function columnNumber(letters: string) {
+  let value = 0;
+  for (const letter of letters) {
+    value = value * 26 + letter.charCodeAt(0) - 64;
+  }
+  return value;
+}
+
+function parseAddress(address: string) {
+  const match = address.replaceAll("$", "").toUpperCase().match(/^([A-Z]+)(\d+)$/);
+  if (!match) return null;
+  return { column: columnNumber(match[1]), row: Number(match[2]) };
+}
+
+function buildMergeMap(sheet: ExcelJS.Worksheet) {
+  const map = new Map<string, MergeCell>();
+  for (const range of sheet.model.merges ?? []) {
+    const [startRaw, endRaw] = range.split(":");
+    const start = parseAddress(startRaw);
+    const end = parseAddress(endRaw ?? startRaw);
+    if (!start || !end) continue;
+
+    const rowSpan = end.row - start.row + 1;
+    const colSpan = end.column - start.column + 1;
+    if (rowSpan <= 0 || colSpan <= 0) continue;
+
+    for (let row = start.row; row <= end.row; row++) {
+      for (let column = start.column; column <= end.column; column++) {
+        const isMaster = row === start.row && column === start.column;
+        map.set(`${row}:${column}`, {
+          covered: !isMaster,
+          rowSpan: isMaster ? rowSpan : 1,
+          colSpan: isMaster ? colSpan : 1,
+        });
+      }
+    }
+  }
+  return map;
+}
+
+function worksheetToSafeHtml(sheet: ExcelJS.Worksheet) {
+  if (sheet.rowCount > MAX_PREVIEW_ROWS || sheet.columnCount > MAX_PREVIEW_COLUMNS) {
+    throw new Error("Bảng tính vượt quá giới hạn xem trước an toàn.");
+  }
+
+  const rowCount = Math.max(sheet.rowCount, 1);
+  const columnCount = Math.max(sheet.columnCount, 1);
+  const mergeMap = buildMergeMap(sheet);
+  const columns = Array.from({ length: columnCount }, (_, index) => {
+    const width = sheet.getColumn(index + 1).width ?? 7;
+    const pixelWidth = Math.max(36, Math.min(280, Math.round(width * 7)));
+    return `<col style="width:${pixelWidth}px">`;
+  }).join("");
+
+  const rows: string[] = [];
+  for (let rowNumber = 1; rowNumber <= rowCount; rowNumber++) {
+    const cells: string[] = [];
+    for (let columnNumber = 1; columnNumber <= columnCount; columnNumber++) {
+      const merge = mergeMap.get(`${rowNumber}:${columnNumber}`);
+      if (merge?.covered) continue;
+
+      const attributes = [
+        merge && merge.rowSpan > 1 ? ` rowspan="${merge.rowSpan}"` : "",
+        merge && merge.colSpan > 1 ? ` colspan="${merge.colSpan}"` : "",
+      ].join("");
+      const value = escapeHtml(cellText(sheet.getCell(rowNumber, columnNumber)));
+      cells.push(`<td${attributes}>${value}</td>`);
+    }
+    rows.push(`<tr>${cells.join("")}</tr>`);
+  }
+
+  return `<table style="table-layout:fixed;border-collapse:collapse"><colgroup>${columns}</colgroup><tbody>${rows.join("")}</tbody></table>`;
+}
+
 /**
- * Reads an uploaded spreadsheet and returns each sheet as an HTML `<table>` via SheetJS's own
- * `sheet_to_html`, which respects the workbook's real merged-cell ranges (colspan/rowspan) — the
- * requirement is to look like the original file when opened, not a reflowed re-summary of its
- * content. `sheet_to_html` wraps its output in a full `<html><head>...` document; only the `<table>`
- * portion is kept since this gets embedded into an existing page via `dangerouslySetInnerHTML`.
+ * Returns a safe HTML preview of an authenticated local XLSX attachment. Cell values are escaped
+ * before insertion, so a workbook received through email cannot inject scripts into the app.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -18,47 +129,36 @@ export async function GET(request: NextRequest) {
     if (!user) return apiError("Chưa đăng nhập.", 401);
 
     const url = request.nextUrl.searchParams.get("url");
-    if (!url || !url.startsWith("/uploads/") || url.includes("..")) {
+    if (!url || !url.startsWith("/uploads/") || url.includes("..") || !url.toLowerCase().endsWith(".xlsx")) {
       return apiError("Đường dẫn tệp không hợp lệ.", 400);
     }
 
-    const filePath = path.join(process.cwd(), "public", url);
-    const buffer = await readFile(filePath);
-    const workbook = XLSX.read(buffer, { type: "buffer", cellText: true });
+    const uploadRoot = path.resolve(process.cwd(), "public", "uploads");
+    const filePath = path.resolve(process.cwd(), "public", `.${url}`);
+    if (!filePath.startsWith(`${uploadRoot}${path.sep}`)) {
+      return apiError("Đường dẫn tệp không hợp lệ.", 400);
+    }
 
-    const DEFAULT_COL_WIDTH_PX = 48; // ~Excel's default column width when the file sets none
+    const fileStat = await stat(filePath);
+    if (!fileStat.isFile() || fileStat.size <= 0 || fileStat.size > MAX_PREVIEW_BYTES) {
+      return apiError("Tệp trống hoặc vượt quá 10MB.", 400);
+    }
 
-    const sheets = workbook.SheetNames.map((sheetName) => {
-      const sheet = workbook.Sheets[sheetName];
-      const fullHtml = XLSX.utils.sheet_to_html(sheet, { editable: false });
-      const tableHtml = fullHtml.match(/<table[\s\S]*<\/table>/)?.[0] ?? "";
+    const workbook = new ExcelJS.Workbook();
+    // ExcelJS bundles Buffer typings from an older @types/node release; runtime accepts Node Buffer.
+    await workbook.xlsx.load((await readFile(filePath)) as never);
+    if (workbook.worksheets.length > MAX_PREVIEW_SHEETS) {
+      return apiError("Tệp có quá nhiều trang tính.", 400);
+    }
 
-      // This template defines no per-column widths (`!cols` is absent), so Excel itself falls back to
-      // a uniform default width for every column, including the empty ones used purely for merge/
-      // alignment spacing. An HTML table left to auto-size instead collapses empty <td>s toward zero
-      // width, bunching content together in a way that doesn't match the original layout at all — a
-      // fixed <colgroup> forces every column to reserve the same space Excel would.
-      const range = sheet["!ref"] ? XLSX.utils.decode_range(sheet["!ref"]) : null;
-      const columnCount = range ? range.e.c - range.s.c + 1 : 0;
-      const colgroup = columnCount
-        ? `<colgroup>${Array.from({ length: columnCount })
-            .map(
-              (_, i) =>
-                `<col style="width:${(sheet["!cols"]?.[i]?.wpx ?? DEFAULT_COL_WIDTH_PX)}px">`
-            )
-            .join("")}</colgroup>`
-        : "";
-
-      const html = tableHtml
-        .replace("<table", `<table style="table-layout:fixed;border-collapse:collapse"`)
-        .replace(/(<table[^>]*>)/, `$1${colgroup}`);
-
-      return { name: sheetName, html };
-    });
+    const sheets = workbook.worksheets.map((sheet) => ({
+      name: sheet.name,
+      html: worksheetToSafeHtml(sheet),
+    }));
 
     return apiSuccess({ sheets });
   } catch (error) {
     console.error("GET /api/attachments/preview failed:", error);
-    return apiError("Không thể đọc tệp để xem trước.", 500);
+    return apiError("Không thể đọc tệp để xem trước.", 400);
   }
 }

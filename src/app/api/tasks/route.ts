@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { notifyTaskAssigned } from "@/lib/notifications";
+import { adHocTaskWhere } from "@/lib/task-constants";
 
 const TASK_INCLUDE = {
   assignedTo: { select: { id: true, name: true, email: true } },
@@ -14,8 +15,11 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
 
-  // FIELD_STAFF only ever sees their own assigned tasks — never other people's.
-  const where = user.role === "FIELD_STAFF" ? { assignedToUserId: user.id } : {};
+  // Fixed steps belong to the shipment progress UI. This module is an inbox for work assigned
+  // outside that progress; FIELD_STAFF additionally only sees work assigned to themselves.
+  const where = user.role === "FIELD_STAFF"
+    ? { AND: [adHocTaskWhere(), { assignedToUserId: user.id }] }
+    : adHocTaskWhere();
 
   const tasks = await prisma.task.findMany({
     where,

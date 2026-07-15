@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getCurrentUser, hashPassword } from "@/lib/auth";
+import { getCurrentUser, hashPassword, validateNewPassword } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 
 // BƯỚC 3 — admin resets an employee's password. The new plaintext is generated/typed in the
@@ -14,9 +14,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const { id } = await params;
     const { password } = await request.json();
-    if (!password || typeof password !== "string" || password.length < 8) {
-      return apiError("Mật khẩu cần ít nhất 8 ký tự.", 400);
-    }
+    const passwordError = validateNewPassword(password);
+    if (passwordError) return apiError(passwordError, 400);
 
     const target = await prisma.user.findUnique({ where: { id }, select: { id: true } });
     if (!target) return apiError("Không tìm thấy người dùng.", 404);

@@ -1,20 +1,22 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import * as XLSX from "xlsx";
-import SimilarCostsModal from "@/components/shipments/SimilarCostsModal";
+import { useSearchParams } from "next/navigation";
+import { downloadExcel } from "@/lib/export-excel";
 import CostDetailPanel from "@/components/shipments/CostDetailPanel";
+import ShipmentFinanceEditorModal from "@/components/shipments/ShipmentFinanceEditorModal";
+import ShipmentInfoModal from "@/components/shipments/ShipmentInfoModal";
+import SimilarCostsModal from "@/components/shipments/SimilarCostsModal";
 import {
   COST_CATEGORY_BADGE_CLASS,
   COST_CATEGORY_ICON,
   COST_CATEGORY_LABELS,
-  COST_CATEGORY_OPTIONS,
 } from "@/lib/shipment-cost-constants";
+import { calculateCostOpportunities } from "@/lib/cost-optimization";
 
-const ANOMALY_THRESHOLD = 1.3; // warn once unitPrice exceeds the historical average by 30%
-const PAGE_SIZE_OPTIONS = [9, 18, 36, 90];
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
+const SPIKE_DIFFERENCE_PERCENT = 30;
 
 type ShipmentOption = {
   id: string;
@@ -26,1373 +28,413 @@ type ShipmentOption = {
   invoiceNo: string | null;
 };
 
-type ShipmentRef = {
-  id: string;
-  shipmentCode: string;
-  customerName: string;
-  goodsName: string | null;
-  declarationNo: string | null;
-  declarationDate: string | null;
-  invoiceNo: string | null;
-};
-
 type CostRow = {
   id: string;
   shipmentId: string;
-  shipment: ShipmentRef;
+  shipment: ShipmentOption;
   category: string;
   unitPrice: number;
   quantity: number;
   costPrice: number;
   sellPrice: number;
   isAdditional: boolean;
+  isActual: boolean;
   invoiceNumber: string | null;
   attachmentUrl: string | null;
   note: string | null;
   createdAt: string;
+  vendorId: string | null;
+  vendor: { id: string; name: string; type: string | null } | null;
 };
 
-const emptyForm = {
-  id: null as string | null,
-  shipmentId: "",
-  shipmentLabel: "",
-  category: COST_CATEGORY_OPTIONS[COST_CATEGORY_OPTIONS.length - 1] as string,
-  unitPrice: "0",
-  quantity: "1",
-  sellPrice: "0",
-  isAdditional: false,
-  invoiceNumber: "",
-  note: "",
-  attachmentUrl: null as string | null,
-};
+type ShipmentQuoteTotal = { shipmentId: string; quoteAmount: number };
 
-// Cells that can be edited in place directly on the ledger table (B1). The three numeric ones drive
-// costPrice server-side (unitPrice * quantity), so they're parsed as numbers before the PATCH.
-type InlineField = "unitPrice" | "quantity" | "sellPrice" | "invoiceNumber" | "note";
-const INLINE_NUMERIC_FIELDS: InlineField[] = ["unitPrice", "quantity", "sellPrice"];
-
-const emptyQuickAdd = {
-  shipmentId: "",
-  shipmentLabel: "",
-  category: COST_CATEGORY_OPTIONS[COST_CATEGORY_OPTIONS.length - 1] as string,
-  unitPrice: "",
-  quantity: "1",
-  sellPrice: "",
-  invoiceNumber: "",
-  note: "",
+type ShipmentSummary = ShipmentOption & {
+  costs: CostRow[];
+  totalCost: number;
+  totalRevenue: number;
+  profit: number;
+  documentCount: number;
+  opportunityCount: number;
+  spikeCount: number;
 };
 
 function formatVnd(amount: number) {
-  return amount.toLocaleString("vi-VN") + " đ";
+  return `${amount.toLocaleString("vi-VN")} đ`;
 }
 
-function shipmentLabelFor(s: {
-  goodsName: string | null;
-  declarationNo: string | null;
-  invoiceNo: string | null;
-  customerName: string;
-}) {
-  return `${s.goodsName || "Chưa có tên hàng"} - TK ${s.declarationNo || "—"} - INV ${s.invoiceNo || "—"} - ${s.customerName}`;
-}
-
-// Renders a sliding window of page numbers around `current`, with "…" markers instead of every page
-// when the range is long — keeps the footer usable even with a few dozen pages of cost rows.
-function getPageNumbers(current: number, total: number): (number | "...")[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const pages = new Set([1, total, current, current - 1, current + 1]);
-  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
-  const result: (number | "...")[] = [];
-  let prev = 0;
-  for (const p of sorted) {
-    if (prev && p - prev > 1) result.push("...");
-    result.push(p);
-    prev = p;
+async function readApiJson(response: Response) {
+  const text = await response.text();
+  if (!text) throw new Error(`Máy chủ không trả về dữ liệu (HTTP ${response.status}).`);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Phản hồi máy chủ không hợp lệ (HTTP ${response.status}).`);
   }
-  return result;
+}
+
+async function fetchApiCollection<T>(url: string, label: string): Promise<T[]> {
+  const json = await fetch(url, { cache: "no-store" }).then(readApiJson);
+  if (!json.success) throw new Error(json.error || `Không thể tải ${label}.`);
+  if (!Array.isArray(json.data)) throw new Error(`Dữ liệu ${label} không đúng định dạng.`);
+  return json.data as T[];
+}
+
+function getLoadError(result: PromiseSettledResult<unknown>, label: string) {
+  if (result.status === "fulfilled") return null;
+  const detail = result.reason instanceof Error ? result.reason.message : "Đã có lỗi xảy ra.";
+  return `${label}: ${detail}`;
 }
 
 export default function CostsClient() {
   const searchParams = useSearchParams();
   const initialShipmentId = searchParams.get("shipmentId") ?? "";
+  const openedInitialShipment = useRef(false);
 
   const [shipments, setShipments] = useState<ShipmentOption[]>([]);
   const [allCosts, setAllCosts] = useState<CostRow[]>([]);
+  const [quoteTotals, setQuoteTotals] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
+  const [reloadKey, setReloadKey] = useState(0);
   const [filters, setFilters] = useState({
     shipmentId: initialShipmentId,
-    customer: "",
+    query: "",
     dateFrom: "",
     dateTo: "",
     additionalOnly: false,
+    optimizationOnly: false,
   });
-  const [showFilters, setShowFilters] = useState(true);
+  const [expandedShipmentId, setExpandedShipmentId] = useState<string | null>(initialShipmentId || null);
+  const [editingShipment, setEditingShipment] = useState<ShipmentOption | null>(null);
+  const [viewingShipmentId, setViewingShipmentId] = useState<string | null>(null);
+  const [viewingCost, setViewingCost] = useState<CostRow | null>(null);
+  const [similarShipmentId, setSimilarShipmentId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
 
-  const [form, setForm] = useState(emptyForm);
-  const [isShipmentDropdownOpen, setIsShipmentDropdownOpen] = useState(false);
-  const shipmentFieldRef = useRef<HTMLDivElement>(null);
-  const [anomaly, setAnomaly] = useState<{ average: number | null; sampleCount: number } | null>(null);
-  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [showSimilarModal, setShowSimilarModal] = useState(false);
-  const costsListRef = useRef<HTMLDivElement>(null);
-  const [viewingCost, setViewingCost] = useState<CostRow | null>(null);
-  const [isFormOpen, setIsFormOpen] = useState(false);
-
-  // B: group-by-shipment toggle, inline cell editing, and the always-present quick-add row.
-  const [groupByShipment, setGroupByShipment] = useState(false);
-  const [inlineEdit, setInlineEdit] = useState<{ costId: string; field: InlineField; value: string } | null>(null);
-  // The "Chi phí" cell edits đơn giá × số lượng together (costPrice is derived, never edited directly).
-  const [costEdit, setCostEdit] = useState<{ costId: string; unitPrice: string; quantity: string } | null>(null);
-  const [quickAdd, setQuickAdd] = useState(emptyQuickAdd);
-  const [isQuickShipOpen, setIsQuickShipOpen] = useState(false);
-  const quickShipRef = useRef<HTMLDivElement>(null);
-  const [quickError, setQuickError] = useState<string | null>(null);
-
   useEffect(() => {
-    fetch("/api/shipments")
-      .then((res) => res.json())
-      .then((json) => {
-        if (json.success) setShipments(json.data);
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (shipmentFieldRef.current && !shipmentFieldRef.current.contains(event.target as Node)) {
-        setIsShipmentDropdownOpen(false);
-      }
-      if (quickShipRef.current && !quickShipRef.current.contains(event.target as Node)) {
-        setIsQuickShipOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  // Fetched once, unfiltered — the primary "all shipments" table always needs the complete picture
-  // (including shipments with zero costs), and the "Danh sách chi phí" ledger below filters this same
-  // dataset client-side instead of re-querying the server per filter change. isLoading already starts
-  // true (see useState above), so there's nothing to set synchronously here.
-  useEffect(() => {
-    fetch("/api/costs")
-      .then((res) => res.json())
-      .then((json) => {
-        if (!json.success) throw new Error(json.error || "Không thể tải danh sách chi phí.");
-        setAllCosts(json.data);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra."))
-      .finally(() => setIsLoading(false));
-  }, []);
-
-  const filteredCosts = useMemo(() => {
-    return allCosts.filter((c) => {
-      if (filters.shipmentId && c.shipmentId !== filters.shipmentId) return false;
-      if (filters.additionalOnly && !c.isAdditional) return false;
-      if (filters.customer && !c.shipment.customerName.toLowerCase().includes(filters.customer.toLowerCase())) {
-        return false;
-      }
-      if (filters.dateFrom && new Date(c.createdAt) < new Date(filters.dateFrom)) return false;
-      if (filters.dateTo && new Date(c.createdAt) > new Date(`${filters.dateTo}T23:59:59`)) return false;
-      return true;
-    });
-  }, [allCosts, filters]);
-
-  // When grouping is on, reorder so every shipment's rows are contiguous (stable within a shipment,
-  // groups in first-seen order) — pagination then still works, and a group header is emitted whenever
-  // the shipmentId changes while rendering the page.
-  const displayCosts = useMemo(() => {
-    if (!groupByShipment) return filteredCosts;
-    const order = new Map<string, number>();
-    filteredCosts.forEach((c) => {
-      if (!order.has(c.shipmentId)) order.set(c.shipmentId, order.size);
-    });
-    return [...filteredCosts].sort((a, b) => order.get(a.shipmentId)! - order.get(b.shipmentId)!);
-  }, [filteredCosts, groupByShipment]);
-
-  // Per-shipment subtotals over the WHOLE filtered set (not just the visible page), so a group header
-  // shows the shipment's real totals even when its rows span multiple pages.
-  const shipmentSubtotals = useMemo(() => {
-    const map = new Map<string, { cost: number; sell: number; count: number }>();
-    for (const c of filteredCosts) {
-      const e = map.get(c.shipmentId) ?? { cost: 0, sell: 0, count: 0 };
-      e.cost += c.costPrice;
-      e.sell += c.sellPrice;
-      e.count += 1;
-      map.set(c.shipmentId, e);
-    }
-    return map;
-  }, [filteredCosts]);
-
-  const pageCount = Math.max(1, Math.ceil(displayCosts.length / pageSize));
-  const safePage = Math.min(currentPage, pageCount);
-  const paginatedCosts = useMemo(
-    () => displayCosts.slice((safePage - 1) * pageSize, safePage * pageSize),
-    [displayCosts, safePage, pageSize]
-  );
-
-  function updateFilters(patch: Partial<typeof filters>) {
-    setFilters((prev) => ({ ...prev, ...patch }));
-    setCurrentPage(1);
-  }
-
-  // Historical average unitPrice for the selected category, among shipments with a similar goodsName
-  // (last 6 months) — powers the anomaly warning below. Applies in both create and edit mode.
-  useEffect(() => {
-    if (!form.shipmentId || !form.category) return;
     let cancelled = false;
-    fetch(`/api/costs/category-average?shipmentId=${form.shipmentId}&category=${form.category}`)
-      .then((res) => res.json())
-      .then((json) => {
-        if (!cancelled && json.success) setAnomaly(json.data);
-      })
-      .catch(() => {
-        if (!cancelled) setAnomaly(null);
-      });
+
+    Promise.allSettled([
+      fetchApiCollection<ShipmentOption>("/api/shipments", "lô hàng"),
+      fetchApiCollection<CostRow>("/api/costs", "chi phí"),
+      fetchApiCollection<ShipmentQuoteTotal>("/api/costs/shipment-quote-totals", "tổng thu"),
+    ]).then(([shipmentResult, costResult, quoteResult]) => {
+      if (cancelled) return;
+
+      if (shipmentResult.status === "fulfilled") {
+        const loadedShipments = shipmentResult.value;
+        setShipments(loadedShipments);
+        if (initialShipmentId && !openedInitialShipment.current) {
+          const shipment = loadedShipments.find((item) => item.id === initialShipmentId);
+          if (shipment) {
+            openedInitialShipment.current = true;
+            setEditingShipment(shipment);
+          }
+        }
+      }
+      if (costResult.status === "fulfilled") setAllCosts(costResult.value);
+      if (quoteResult.status === "fulfilled") {
+        setQuoteTotals(
+          Object.fromEntries(
+            quoteResult.value.map((row) => [row.shipmentId, Number(row.quoteAmount) || 0])
+          )
+        );
+      }
+
+      const failures = [
+        getLoadError(shipmentResult, "Danh sách lô hàng"),
+        getLoadError(costResult, "Chi phí"),
+        getLoadError(quoteResult, "Tổng thu"),
+      ].filter((message): message is string => Boolean(message));
+      setError(failures.length > 0 ? failures.join(" ") : null);
+      setIsLoading(false);
+    });
+
     return () => {
       cancelled = true;
     };
-  }, [form.shipmentId, form.category]);
+  }, [initialShipmentId, reloadKey]);
 
-  const shipmentSuggestions = useMemo(() => {
-    const query = form.shipmentLabel.trim().toLowerCase();
-    if (!query) return shipments.slice(0, 20);
-    return shipments
-      .filter(
-        (s) =>
-          s.shipmentCode.toLowerCase().includes(query) ||
-          s.customerName.toLowerCase().includes(query) ||
-          (s.declarationNo || "").toLowerCase().includes(query)
-      )
-      .slice(0, 20);
-  }, [shipments, form.shipmentLabel]);
-
-  // KPI cards and the "Danh sách chi phí" ledger reflect the currently-filtered view.
-  const totals = useMemo(() => {
-    return filteredCosts.reduce(
-      (acc, c) => ({ costPrice: acc.costPrice + c.costPrice, sellPrice: acc.sellPrice + c.sellPrice }),
-      { costPrice: 0, sellPrice: 0 }
-    );
-  }, [filteredCosts]);
-
-  const kpi = useMemo(() => {
-    const tongChiPhi = totals.costPrice;
-    const tongBaoGia = totals.sellPrice;
-    const chiPhiCoHoaDon = filteredCosts
-      .filter((c) => c.invoiceNumber && c.invoiceNumber.trim())
-      .reduce((sum, c) => sum + c.costPrice, 0);
-    const caNhan = tongBaoGia - chiPhiCoHoaDon;
-    const soChungTu = filteredCosts.filter((c) => c.attachmentUrl).length;
-    const loiNhuan = tongBaoGia - tongChiPhi;
-    const tySuat = tongBaoGia > 0 ? (loiNhuan / tongBaoGia) * 100 : null;
-    return { tongChiPhi, caNhan, soChungTu, loiNhuan, tySuat };
-  }, [filteredCosts, totals]);
-
-  function handleExportExcel() {
-    const rows = filteredCosts.map((c, i) => ({
-      "Số TT": i + 1,
-      "Tên hàng": c.shipment.goodsName || "",
-      "Số tờ khai": c.shipment.declarationNo || "",
-      "Ngày tờ khai": c.shipment.declarationDate
-        ? new Date(c.shipment.declarationDate).toLocaleDateString("vi-VN")
-        : "",
-      "Số invoice lô hàng": c.shipment.invoiceNo || "",
-      "Khách hàng": c.shipment.customerName,
-      "Danh mục": COST_CATEGORY_LABELS[c.category] ?? c.category,
-      "Đơn giá": c.unitPrice,
-      "Số lượng": c.quantity,
-      "Giá vốn": c.costPrice,
-      "Giá bán": c.sellPrice,
-      "Số hóa đơn": c.invoiceNumber || "",
-      "Phát sinh ngoài báo giá": c.isAdditional ? "Có" : "Không",
-      "Ghi chú": c.note || "",
-      "Ngày tạo": new Date(c.createdAt).toLocaleDateString("vi-VN"),
-    }));
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Chi phí");
-    XLSX.writeFile(workbook, `chi-phi-${new Date().toISOString().slice(0, 10)}.xlsx`);
-  }
-
-  const thanhTien = (Number(form.unitPrice) || 0) * (Number(form.quantity) || 0);
-  const showAnomalyWarning =
-    anomaly?.average && anomaly.average > 0 && Number(form.unitPrice) > anomaly.average * ANOMALY_THRESHOLD;
-  const anomalyPercent = showAnomalyWarning
-    ? Math.round(((Number(form.unitPrice) - anomaly!.average!) / anomaly!.average!) * 100)
-    : 0;
-
-  function resetForm() {
-    setForm(emptyForm);
-    setAnomaly(null);
-  }
-
-  // After successfully adding a row, the modal stays open with the same shipment still selected —
-  // only the category/amount fields clear — so entering several cost lines for one shipment doesn't
-  // require re-searching it each time.
-  function resetCategoryFields() {
-    setForm((prev) => ({ ...emptyForm, shipmentId: prev.shipmentId, shipmentLabel: prev.shipmentLabel }));
-    setAnomaly(null);
-  }
-
-  function startEdit(cost: CostRow) {
-    setForm({
-      id: cost.id,
-      shipmentId: cost.shipmentId,
-      shipmentLabel: shipmentLabelFor(cost.shipment),
-      category: cost.category,
-      unitPrice: String(cost.unitPrice),
-      quantity: String(cost.quantity),
-      sellPrice: String(cost.sellPrice),
-      isAdditional: cost.isAdditional,
-      invoiceNumber: cost.invoiceNumber || "",
-      note: cost.note || "",
-      attachmentUrl: cost.attachmentUrl,
-    });
-  }
-
-  // --- B1: inline cell editing ---
-  function startInlineEdit(cost: CostRow, field: InlineField) {
-    const raw = cost[field];
-    setInlineEdit({ costId: cost.id, field, value: raw === null || raw === undefined ? "" : String(raw) });
-  }
-
-  async function commitInlineEdit() {
-    if (!inlineEdit) return;
-    const { costId, field, value } = inlineEdit;
-    const original = allCosts.find((c) => c.id === costId);
-    setInlineEdit(null);
-    if (!original) return;
-
-    const isNumeric = INLINE_NUMERIC_FIELDS.includes(field);
-    const nextVal: number | string | null = isNumeric
-      ? Number(value) || 0
-      : value.trim() === ""
-        ? null
-        : value.trim();
-
-    // Skip the round-trip if nothing actually changed.
-    if (String(original[field] ?? "") === String(nextVal ?? "")) return;
-
-    const res = await fetch(`/api/costs/${costId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [field]: nextVal }),
-    });
-    const json = await res.json();
-    if (json.success) setAllCosts((prev) => prev.map((c) => (c.id === costId ? json.data : c)));
-  }
-
-  function handleInlineKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      commitInlineEdit();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      setInlineEdit(null);
-    }
-  }
-
-  function startCostEdit(cost: CostRow) {
-    setCostEdit({ costId: cost.id, unitPrice: String(cost.unitPrice), quantity: String(cost.quantity) });
-  }
-
-  async function commitCostEdit() {
-    if (!costEdit) return;
-    const { costId, unitPrice, quantity } = costEdit;
-    const original = allCosts.find((c) => c.id === costId);
-    setCostEdit(null);
-    if (!original) return;
-    const nextUnit = Number(unitPrice) || 0;
-    const nextQty = Number(quantity) || 0;
-    if (nextUnit === original.unitPrice && nextQty === original.quantity) return;
-
-    const res = await fetch(`/api/costs/${costId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ unitPrice: nextUnit, quantity: nextQty }),
-    });
-    const json = await res.json();
-    if (json.success) setAllCosts((prev) => prev.map((c) => (c.id === costId ? json.data : c)));
-  }
-
-  function handleCostEditKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      commitCostEdit();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      setCostEdit(null);
-    }
-  }
-
-  // --- B2: quick-add row at the bottom of the ledger ---
-  const quickShipSuggestions = useMemo(() => {
-    const query = quickAdd.shipmentLabel.trim().toLowerCase();
-    if (!query) return shipments.slice(0, 20);
-    return shipments
-      .filter(
-        (s) =>
-          s.customerName.toLowerCase().includes(query) ||
-          (s.goodsName || "").toLowerCase().includes(query) ||
-          (s.declarationNo || "").toLowerCase().includes(query)
-      )
-      .slice(0, 20);
-  }, [shipments, quickAdd.shipmentLabel]);
-
-  async function handleQuickAdd() {
-    setQuickError(null);
-    if (!quickAdd.shipmentId) {
-      setQuickError("Chọn lô hàng trước khi thêm.");
-      return;
-    }
-    try {
-      const res = await fetch("/api/costs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shipmentId: quickAdd.shipmentId,
-          category: quickAdd.category,
-          unitPrice: quickAdd.unitPrice,
-          quantity: quickAdd.quantity,
-          sellPrice: quickAdd.sellPrice,
-          isAdditional: false,
-          invoiceNumber: quickAdd.invoiceNumber,
-          note: quickAdd.note,
-          attachmentUrl: null,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || "Không thể thêm chi phí.");
-      setAllCosts((prev) => [json.data, ...prev]);
-      // Keep the same shipment selected so the next line for that shipment is fast to enter.
-      setQuickAdd((prev) => ({ ...emptyQuickAdd, shipmentId: prev.shipmentId, shipmentLabel: prev.shipmentLabel }));
-    } catch (err) {
-      setQuickError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
-    }
-  }
-
-  async function handleAttachmentChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-
-    setIsUploadingAttachment(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || "Tải file thất bại.");
-      setForm((prev) => ({ ...prev, attachmentUrl: json.data.url }));
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
-    } finally {
-      setIsUploadingAttachment(false);
-    }
-  }
-
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    setFormError(null);
-
-    if (!form.shipmentId) {
-      setFormError("Vui lòng chọn lô hàng.");
-      return;
-    }
-
-    const payload = {
-      shipmentId: form.shipmentId,
-      category: form.category,
-      unitPrice: form.unitPrice,
-      quantity: form.quantity,
-      sellPrice: form.sellPrice,
-      isAdditional: form.isAdditional,
-      invoiceNumber: form.invoiceNumber,
-      note: form.note,
-      attachmentUrl: form.attachmentUrl,
-    };
-
-    try {
-      const res = await fetch(form.id ? `/api/costs/${form.id}` : "/api/costs", {
-        method: form.id ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || "Không thể lưu chi phí.");
-
-      if (form.id) {
-        setAllCosts((prev) => prev.map((c) => (c.id === form.id ? json.data : c)));
-        resetForm();
-        setIsFormOpen(false);
-      } else {
-        setAllCosts((prev) => [json.data, ...prev]);
-        resetCategoryFields();
-      }
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
-    }
-  }
-
-  async function handleDelete(costId: string) {
-    if (!confirm("Xóa khoản chi phí này?")) return;
-    const res = await fetch(`/api/costs/${costId}`, { method: "DELETE" });
-    const json = await res.json();
-    if (json.success) setAllCosts((prev) => prev.filter((c) => c.id !== costId));
-  }
-
-  const shipmentPickerField = (
-    <div className="relative" ref={shipmentFieldRef}>
-      <span className="mb-1 block text-sm font-medium text-gray-700">Lô hàng</span>
-      <input
-        value={form.shipmentLabel}
-        onChange={(e) => {
-          setForm((prev) => ({ ...prev, shipmentLabel: e.target.value, shipmentId: "" }));
-          setAnomaly(null);
-          setIsShipmentDropdownOpen(true);
-        }}
-        onFocus={() => setIsShipmentDropdownOpen(true)}
-        className="input"
-        placeholder="Tìm theo tên hàng, khách hàng hoặc số tờ khai..."
-        autoComplete="off"
-      />
-      {isShipmentDropdownOpen && shipmentSuggestions.length > 0 && (
-        <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
-          {shipmentSuggestions.map((s) => (
-            <li key={s.id}>
-              <button
-                type="button"
-                onClick={() => {
-                  setForm((prev) => ({
-                    ...prev,
-                    shipmentId: s.id,
-                    shipmentLabel: shipmentLabelFor(s),
-                  }));
-                  setIsShipmentDropdownOpen(false);
-                }}
-                className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-              >
-                <span className="font-medium text-gray-900">{s.goodsName || "Chưa có tên hàng"}</span>
-                <span className="ml-2 text-xs text-gray-400">
-                  TK: {s.declarationNo || "—"}
-                  {s.declarationDate ? ` (${new Date(s.declarationDate).toLocaleDateString("vi-VN")})` : ""} · INV:{" "}
-                  {s.invoiceNo || "—"} · {s.customerName}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+  const opportunities = useMemo(() => calculateCostOpportunities(allCosts), [allCosts]);
+  const opportunityByCostId = useMemo(
+    () => new Map(opportunities.map((item) => [item.costId, item])),
+    [opportunities]
   );
 
-  const resultStart = filteredCosts.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
-  const resultEnd = Math.min(safePage * pageSize, filteredCosts.length);
+  const shipmentRows = useMemo<ShipmentSummary[]>(() => {
+    const costsByShipment = new Map<string, CostRow[]>();
+    for (const cost of allCosts) {
+      const rows = costsByShipment.get(cost.shipmentId) ?? [];
+      rows.push(cost);
+      costsByShipment.set(cost.shipmentId, rows);
+    }
+
+    const query = filters.query.trim().toLowerCase();
+    return shipments
+      .map((shipment) => {
+        const costs = costsByShipment.get(shipment.id) ?? [];
+        const totalCost = costs.reduce((sum, cost) => sum + cost.costPrice, 0);
+        const additionalRevenue = costs
+          .filter((cost) => cost.isAdditional)
+          .reduce((sum, cost) => sum + cost.sellPrice, 0);
+        const totalRevenue = (quoteTotals[shipment.id] ?? 0) + additionalRevenue;
+        const shipmentOpportunities = costs
+          .map((cost) => opportunityByCostId.get(cost.id))
+          .filter((item) => item !== undefined);
+        return {
+          ...shipment,
+          costs,
+          totalCost,
+          totalRevenue,
+          profit: totalRevenue - totalCost,
+          documentCount: costs.filter((cost) => cost.attachmentUrl).length,
+          opportunityCount: shipmentOpportunities.length,
+          spikeCount: shipmentOpportunities.filter(
+            (item) => item.differencePercent >= SPIKE_DIFFERENCE_PERCENT
+          ).length,
+        };
+      })
+      .filter((shipment) => {
+        if (filters.shipmentId && shipment.id !== filters.shipmentId) return false;
+        if (
+          query &&
+          ![shipment.customerName, shipment.goodsName, shipment.declarationNo, shipment.invoiceNo]
+            .filter(Boolean)
+            .some((value) => value!.toLowerCase().includes(query))
+        ) return false;
+        if (filters.additionalOnly && !shipment.costs.some((cost) => cost.isAdditional)) return false;
+        if (filters.optimizationOnly && shipment.opportunityCount === 0) return false;
+        if (filters.dateFrom || filters.dateTo) {
+          if (!shipment.declarationDate) return false;
+          const declarationDate = new Date(shipment.declarationDate);
+          if (filters.dateFrom && declarationDate < new Date(filters.dateFrom)) return false;
+          if (filters.dateTo && declarationDate > new Date(`${filters.dateTo}T23:59:59`)) return false;
+        }
+        return true;
+      });
+  }, [allCosts, filters, opportunityByCostId, quoteTotals, shipments]);
+
+  const totals = useMemo(
+    () => shipmentRows.reduce(
+      (result, shipment) => ({
+        cost: result.cost + shipment.totalCost,
+        revenue: result.revenue + shipment.totalRevenue,
+        profit: result.profit + shipment.profit,
+        documents: result.documents + shipment.documentCount,
+      }),
+      { cost: 0, revenue: 0, profit: 0, documents: 0 }
+    ),
+    [shipmentRows]
+  );
+
+  const pageCount = Math.max(1, Math.ceil(shipmentRows.length / pageSize));
+  const safePage = Math.min(currentPage, pageCount);
+  const paginatedShipments = shipmentRows.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  function updateFilters(patch: Partial<typeof filters>) {
+    setFilters((current) => ({ ...current, ...patch }));
+    setCurrentPage(1);
+  }
+
+  async function refreshFinancialData() {
+    const [costResult, quoteResult] = await Promise.allSettled([
+      fetchApiCollection<CostRow>("/api/costs", "chi phí"),
+      fetchApiCollection<ShipmentQuoteTotal>("/api/costs/shipment-quote-totals", "tổng thu"),
+    ]);
+    if (costResult.status === "fulfilled") setAllCosts(costResult.value);
+    if (quoteResult.status === "fulfilled") {
+        setQuoteTotals(
+          Object.fromEntries(
+            quoteResult.value.map((row) => [row.shipmentId, Number(row.quoteAmount) || 0])
+          )
+        );
+    }
+    const failures = [
+      getLoadError(costResult, "Chi phí"),
+      getLoadError(quoteResult, "Tổng thu"),
+    ].filter((message): message is string => Boolean(message));
+    setError(failures.length > 0 ? failures.join(" ") : null);
+  }
+
+  async function exportExcel() {
+    const summary = shipmentRows.map((shipment, index) => ({
+      STT: index + 1,
+      "Tên công ty": shipment.customerName,
+      "Số tờ khai": shipment.declarationNo || "",
+      "Ngày tờ khai": shipment.declarationDate
+        ? new Date(shipment.declarationDate).toLocaleDateString("vi-VN")
+        : "",
+      "Tên hàng": shipment.goodsName || "",
+      "Số khoản": shipment.costs.length,
+      "Tổng chi": shipment.totalCost,
+      "Tổng thu": shipment.totalRevenue,
+      "Lãi/lỗ": shipment.profit,
+    }));
+    const details = shipmentRows.flatMap((shipment) => shipment.costs.map((cost) => ({
+      "Tên công ty": shipment.customerName,
+      "Số tờ khai": shipment.declarationNo || "",
+      "Tên hàng": shipment.goodsName || "",
+      "Hạng mục": COST_CATEGORY_LABELS[cost.category] ?? cost.category,
+      "Nhà cung cấp": cost.vendor?.name || "",
+      "Đơn giá": cost.unitPrice,
+      "Số lượng": cost.quantity,
+      "Tổng chi": cost.costPrice,
+      "Số hóa đơn": cost.invoiceNumber || "",
+      "Ghi chú": cost.note || "",
+    })));
+    await downloadExcel(`chi-phi-theo-lo-${new Date().toISOString().slice(0, 10)}.xlsx`, [
+      { name: "Theo lô hàng", rows: summary },
+      { name: "Chi tiết chi phí", rows: details },
+    ]);
+  }
+
+  const resultStart = shipmentRows.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const resultEnd = Math.min(safePage * pageSize, shipmentRows.length);
 
   return (
-    <div className={`p-8 ${viewingCost ? "lg:pr-[27rem]" : ""}`}>
-      <div className="mb-6 flex items-start justify-between">
+    <div className="p-8">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Quản lý chi phí</h1>
-          <p className="mt-1 text-sm text-gray-500">Theo dõi chi phí, phát sinh và chứng từ theo từng lô hàng.</p>
+          <h1 className="text-2xl font-semibold text-gray-900">Chi phí</h1>
+          <p className="mt-1 text-sm text-gray-500">Mỗi lô hàng chỉ hiển thị một dòng tổng hợp; mở rộng khi cần xem từng khoản.</p>
         </div>
-        <div className="text-right">
-          <p className="inline-flex items-center gap-1 text-xs text-gray-400">
-            <span>🏠</span>
-            <Link href="/" className="hover:underline">
-              Trang chủ
-            </Link>
-            <span>/ Chi phí</span>
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              resetForm();
-              setIsFormOpen(true);
-            }}
-            className="mt-2 rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-800"
-          >
-            + Thêm chi phí
+        <Link href="/reports/vendor-payables" className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+          📊 Báo cáo phải trả
+        </Link>
+      </div>
+
+      {error && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700"><span>{error}</span><button type="button" onClick={() => { setIsLoading(true); setError(null); setReloadKey((key) => key + 1); }} className="rounded border border-red-300 bg-white px-3 py-1 font-medium hover:bg-red-100">Thử lại</button></div>}
+
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Kpi label="Tổng chi" value={formatVnd(totals.cost)} color="red" />
+        <Kpi label="Tổng thu" value={formatVnd(totals.revenue)} color="blue" />
+        <Kpi label="Lãi/lỗ" value={formatVnd(totals.profit)} color={totals.profit >= 0 ? "green" : "red"} />
+        <Kpi label="Chứng từ" value={String(totals.documents)} color="gray" />
+      </div>
+
+      {opportunities.length > 0 && (
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4">
+          <div>
+            <p className="font-semibold text-emerald-900">✨ Cơ hội tối ưu chi phí</p>
+            <p className="mt-0.5 text-xs text-emerald-700">
+              {opportunities.length} khoản cần rà soát · Có thể tiết kiệm {formatVnd(opportunities.reduce((sum, item) => sum + item.potentialSaving, 0))}
+            </p>
+          </div>
+          <button type="button" onClick={() => updateFilters({ optimizationOnly: !filters.optimizationOnly })} className="rounded-md border border-emerald-600 bg-white px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100">
+            {filters.optimizationOnly ? "Hiện tất cả lô" : "Chỉ hiện lô cần rà soát"}
           </button>
-        </div>
-      </div>
-
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard
-          icon="💰"
-          iconBg="bg-blue-100"
-          label="Tổng chi phí"
-          value={formatVnd(kpi.tongChiPhi)}
-          subtitle="Tổng chi phí phát sinh"
-        />
-        <KpiCard
-          icon="👤"
-          iconBg="bg-orange-100"
-          label="Cá nhân"
-          value={formatVnd(kpi.caNhan)}
-          subtitle="= Báo giá − Chi phí có hóa đơn"
-        />
-        <KpiCard icon="📄" iconBg="bg-green-100" label="Số chứng từ" value={String(kpi.soChungTu)} subtitle="Chứng từ" />
-        <KpiCard
-          icon="📈"
-          iconBg="bg-purple-100"
-          label="Lợi nhuận tạm tính"
-          value={formatVnd(kpi.loiNhuan)}
-          subtitle={kpi.tySuat !== null ? `Tỷ suất: ${kpi.tySuat.toFixed(1)}%` : "Chưa có báo giá"}
-          valueClassName={kpi.loiNhuan >= 0 ? "text-green-700" : "text-red-600"}
-        />
-      </div>
-
-      {isFormOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setIsFormOpen(false)}
-        >
-          <div
-            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-6 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-        <h2 className="mb-4 text-base font-semibold text-gray-900">
-          {form.id ? "Sửa khoản chi phí" : "Thêm khoản chi phí"}
-        </h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div className="sm:col-span-2">{shipmentPickerField}</div>
-
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Danh mục</span>
-              <select
-                value={form.category}
-                onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))}
-                className="input"
-              >
-                {COST_CATEGORY_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {COST_CATEGORY_LABELS[option]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Đơn giá</span>
-              <input
-                type="number"
-                value={form.unitPrice}
-                onChange={(e) => setForm((prev) => ({ ...prev, unitPrice: e.target.value }))}
-                className="input"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Số lượng</span>
-              <input
-                type="number"
-                value={form.quantity}
-                onChange={(e) => setForm((prev) => ({ ...prev, quantity: e.target.value }))}
-                className="input"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Giá bán</span>
-              <input
-                type="number"
-                value={form.sellPrice}
-                onChange={(e) => setForm((prev) => ({ ...prev, sellPrice: e.target.value }))}
-                className="input"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Số hóa đơn</span>
-              <input
-                value={form.invoiceNumber}
-                onChange={(e) => setForm((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
-                className="input"
-              />
-            </label>
-          </div>
-
-          <p className="text-sm text-gray-600">
-            Thành tiền: <span className="font-semibold text-gray-900">{formatVnd(thanhTien)}</span>
-          </p>
-
-          {showAnomalyWarning && (
-            <p className="rounded-md bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
-              ⚠ Đơn giá này cao hơn {anomalyPercent}% so với trung bình các lô hàng tương tự (trung bình:{" "}
-              {formatVnd(anomaly!.average!)})
-            </p>
-          )}
-
-          <div className="flex flex-wrap items-center gap-4">
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={form.isAdditional}
-                onChange={(e) => setForm((prev) => ({ ...prev, isAdditional: e.target.checked }))}
-              />
-              Phát sinh ngoài báo giá
-            </label>
-            <button
-              type="button"
-              onClick={() => attachmentInputRef.current?.click()}
-              disabled={isUploadingAttachment}
-              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
-            >
-              {isUploadingAttachment
-                ? "Đang tải..."
-                : form.attachmentUrl
-                  ? "Đã đính kèm chứng từ"
-                  : "+ Đính kèm chứng từ"}
-            </button>
-            <input ref={attachmentInputRef} type="file" className="hidden" onChange={handleAttachmentChange} />
-          </div>
-
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium text-gray-700">Ghi chú</span>
-            <input
-              value={form.note}
-              onChange={(e) => setForm((prev) => ({ ...prev, note: e.target.value }))}
-              className="input"
-              placeholder="VD: phí lưu kho phát sinh do khách chậm lấy hàng"
-            />
-          </label>
-
-          {formError && <p className="text-sm text-red-600">{formError}</p>}
-
-          {!form.id && (
-            <p className="text-xs text-gray-400">
-              Sau khi thêm, biểu mẫu giữ nguyên lô hàng để bạn nhập tiếp khoản kế. Bấm “Xong” khi hoàn tất.
-            </p>
-          )}
-
-          <div className="flex gap-3">
-            <button
-              type="submit"
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              {form.id ? "Lưu thay đổi" : "+ Thêm chi phí"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                resetForm();
-                setIsFormOpen(false);
-              }}
-              className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              {form.id ? "Hủy" : "Xong"}
-            </button>
-          </div>
-        </form>
-          </div>
         </div>
       )}
 
-      <section ref={costsListRef} className="rounded-xl border border-gray-200 bg-white p-6">
+      <section className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold text-gray-900">Danh sách chi phí</h2>
-          <div className="flex flex-wrap items-center gap-3">
-            {filters.shipmentId && (
-              <button
-                type="button"
-                onClick={() => setShowSimilarModal(true)}
-                className="text-sm text-blue-600 hover:underline"
-              >
-                So sánh với lô hàng tương tự
-              </button>
-            )}
-            <label className="inline-flex items-center gap-1.5 text-sm text-gray-600">
-              <input
-                type="checkbox"
-                checked={groupByShipment}
-                onChange={(e) => {
-                  setGroupByShipment(e.target.checked);
-                  setCurrentPage(1);
-                }}
-              />
-              Gom theo lô hàng
-            </label>
-            <button
-              type="button"
-              onClick={handleExportExcel}
-              className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
-            >
-              <span className="text-green-600">📊</span> Xuất Excel
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowFilters((prev) => !prev)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
-            >
-              <span>🔽</span> Bộ lọc
-            </button>
+          <div>
+            <h2 className="font-semibold text-gray-900">Chi phí theo lô hàng</h2>
+            <p className="text-xs text-gray-500">Một bảng duy nhất, bao gồm cả lô chưa phát sinh chi phí.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={exportExcel} className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">📊 Xuất Excel</button>
           </div>
         </div>
 
-        {showFilters && (
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            <select
-              value={filters.shipmentId}
-              onChange={(e) => updateFilters({ shipmentId: e.target.value })}
-              className="input w-auto max-w-xs"
-            >
-              <option value="">Tất cả số TT</option>
-              {shipments.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {shipmentLabelFor(s)}
-                </option>
-              ))}
-            </select>
-            <span className="relative">
-              <span className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-gray-400">
-                🔍
-              </span>
-              <input
-                type="text"
-                value={filters.customer}
-                onChange={(e) => updateFilters({ customer: e.target.value })}
-                placeholder="Tìm theo khách hàng..."
-                className="input w-auto max-w-xs pl-7"
-              />
-            </span>
-            <label className="flex items-center gap-1.5 text-sm text-gray-500">
-              📅 Từ ngày
-              <input
-                type="date"
-                value={filters.dateFrom}
-                onChange={(e) => updateFilters({ dateFrom: e.target.value })}
-                className="input w-auto"
-              />
-            </label>
-            <label className="flex items-center gap-1.5 text-sm text-gray-500">
-              📅 Đến ngày
-              <input
-                type="date"
-                value={filters.dateTo}
-                onChange={(e) => updateFilters({ dateTo: e.target.value })}
-                className="input w-auto"
-              />
-            </label>
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={filters.additionalOnly}
-                onChange={(e) => updateFilters({ additionalOnly: e.target.checked })}
-              />
-              Chỉ hiện phát sinh ngoài báo giá
-            </label>
-            {(filters.shipmentId ||
-              filters.customer ||
-              filters.dateFrom ||
-              filters.dateTo ||
-              filters.additionalOnly) && (
-              <button
-                type="button"
-                onClick={() =>
-                  updateFilters({
-                    shipmentId: "",
-                    customer: "",
-                    dateFrom: "",
-                    dateTo: "",
-                    additionalOnly: false,
-                  })
-                }
-                className="text-sm text-gray-500 hover:underline"
-              >
-                Xóa bộ lọc
-              </button>
-            )}
-          </div>
-        )}
+        <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <select value={filters.shipmentId} onChange={(event) => updateFilters({ shipmentId: event.target.value })} className="input xl:col-span-2">
+            <option value="">Tất cả số tờ khai</option>
+            {shipments.map((shipment) => <option key={shipment.id} value={shipment.id}>{shipment.declarationNo || "Chưa có TK"} · {shipment.goodsName || shipment.customerName}</option>)}
+          </select>
+          <input value={filters.query} onChange={(event) => updateFilters({ query: event.target.value })} className="input xl:col-span-2" placeholder="Tìm công ty, số TK, tên hàng..." />
+          <input type="date" value={filters.dateFrom} onChange={(event) => updateFilters({ dateFrom: event.target.value })} className="input" title="Từ ngày tờ khai" />
+          <input type="date" value={filters.dateTo} onChange={(event) => updateFilters({ dateTo: event.target.value })} className="input" title="Đến ngày tờ khai" />
+        </div>
+        <label className="mb-4 inline-flex items-center gap-2 text-sm text-gray-700">
+          <input type="checkbox" checked={filters.additionalOnly} onChange={(event) => updateFilters({ additionalOnly: event.target.checked })} />
+          Chỉ hiện lô có phát sinh ngoài báo giá
+        </label>
 
-        <div className="overflow-x-auto rounded-md border border-gray-200">
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Số TT</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Khách hàng</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Tên hàng</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Chi phí</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Báo giá</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Số hóa đơn</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Ngày tạo</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Chứng từ</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500"></th>
-              </tr>
-            </thead>
+        <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <table className="min-w-[1200px] divide-y divide-gray-200 text-sm">
+            <thead className="bg-gray-50"><tr>
+              <th className="w-14 px-3 py-3 text-center font-medium text-gray-500">STT</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Tên công ty</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Số TK / ngày TK</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Tên hàng</th>
+              <th className="px-3 py-3 text-right font-medium text-gray-500">Tổng chi</th>
+              <th className="px-3 py-3 text-right font-medium text-gray-500">Tổng thu</th>
+              <th className="px-3 py-3 text-right font-medium text-gray-500">Lãi/lỗ</th>
+              <th className="px-3 py-3 text-center font-medium text-gray-500">Chứng từ</th>
+              <th className="px-3 py-3"></th>
+            </tr></thead>
             <tbody className="divide-y divide-gray-100">
-              {isLoading && (
-                <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center text-gray-400">
-                    Đang tải dữ liệu...
-                  </td>
-                </tr>
-              )}
-              {!isLoading && error && (
-                <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center text-red-600">
-                    {error}
-                  </td>
-                </tr>
-              )}
-              {!isLoading && !error && paginatedCosts.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center text-gray-400">
-                    Không có khoản chi phí nào khớp bộ lọc.
-                  </td>
-                </tr>
-              )}
-              {!isLoading &&
-                !error &&
-                paginatedCosts.map((cost, index) => {
-                  const showGroupHeader =
-                    groupByShipment &&
-                    (index === 0 || paginatedCosts[index - 1].shipmentId !== cost.shipmentId);
-                  const sub = shipmentSubtotals.get(cost.shipmentId);
-                  const editingNote = inlineEdit?.costId === cost.id && inlineEdit.field === "note";
-                  const editingSell = inlineEdit?.costId === cost.id && inlineEdit.field === "sellPrice";
-                  const editingInvoice = inlineEdit?.costId === cost.id && inlineEdit.field === "invoiceNumber";
-                  const editingCost = costEdit?.costId === cost.id;
-                  return (
-                    <Fragment key={cost.id}>
-                      {showGroupHeader && (
-                        <tr className="bg-gray-100">
-                          <td colSpan={9} className="px-3 py-2">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <span className="text-sm font-semibold text-gray-800">
-                                📦 {cost.shipment.goodsName || "—"} · TK {cost.shipment.declarationNo || "—"}
-                              </span>
-                              {sub && (
-                                <span className="text-xs text-gray-500">
-                                  {sub.count} khoản · Chi phí{" "}
-                                  <span className="font-medium text-gray-700">{formatVnd(sub.cost)}</span> · Báo giá{" "}
-                                  <span className="font-medium text-gray-700">{formatVnd(sub.sell)}</span>
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                      <tr className={`hover:bg-blue-50 ${viewingCost?.id === cost.id ? "bg-blue-50" : ""}`}>
-                        <td className="px-3 py-2 text-gray-500">{(safePage - 1) * pageSize + index + 1}</td>
-                        <td className="px-3 py-2">
-                          <Link
-                            href={`/shipments/${cost.shipment.id}`}
-                            className="font-medium text-gray-900 hover:underline"
-                            title={`TK: ${cost.shipment.declarationNo || "—"} · INV: ${cost.shipment.invoiceNo || "—"}`}
-                          >
-                            {cost.shipment.customerName}
-                          </Link>
-                        </td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-                              COST_CATEGORY_BADGE_CLASS[cost.category] ?? "bg-gray-100 text-gray-600"
-                            }`}
-                          >
-                            {COST_CATEGORY_ICON[cost.category]} {COST_CATEGORY_LABELS[cost.category] ?? cost.category}
-                          </span>
-                          {editingNote ? (
-                            <input
-                              autoFocus
-                              value={inlineEdit!.value}
-                              onChange={(e) => setInlineEdit({ ...inlineEdit!, value: e.target.value })}
-                              onBlur={commitInlineEdit}
-                              onKeyDown={handleInlineKeyDown}
-                              className="input mt-1 w-full"
-                              placeholder="Ghi chú..."
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => startInlineEdit(cost, "note")}
-                              className="ml-2 text-left text-sm text-gray-700 hover:text-blue-600"
-                              title="Bấm để sửa ghi chú"
-                            >
-                              {cost.note || "—"}
-                            </button>
-                          )}
-                          {cost.isAdditional && (
-                            <span className="ml-1 inline-block rounded-full bg-orange-100 px-1.5 py-0.5 text-[10px] text-orange-700">
-                              Phát sinh
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-gray-600">
-                          {editingCost ? (
-                            <span
-                              className="flex items-center gap-1"
-                              onBlur={(e) => {
-                                if (!e.currentTarget.contains(e.relatedTarget as Node)) commitCostEdit();
-                              }}
-                            >
-                              <input
-                                autoFocus
-                                type="number"
-                                value={costEdit!.unitPrice}
-                                onChange={(e) => setCostEdit({ ...costEdit!, unitPrice: e.target.value })}
-                                onKeyDown={handleCostEditKeyDown}
-                                className="input w-24"
-                                title="Đơn giá"
-                              />
-                              <span className="text-gray-400">×</span>
-                              <input
-                                type="number"
-                                value={costEdit!.quantity}
-                                onChange={(e) => setCostEdit({ ...costEdit!, quantity: e.target.value })}
-                                onKeyDown={handleCostEditKeyDown}
-                                className="input w-16"
-                                title="Số lượng"
-                              />
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => startCostEdit(cost)}
-                              className="text-left hover:text-blue-600"
-                              title="Bấm để sửa đơn giá × số lượng"
-                            >
-                              {formatVnd(cost.costPrice)}
-                            </button>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-gray-600">
-                          {editingSell ? (
-                            <input
-                              autoFocus
-                              type="number"
-                              value={inlineEdit!.value}
-                              onChange={(e) => setInlineEdit({ ...inlineEdit!, value: e.target.value })}
-                              onBlur={commitInlineEdit}
-                              onKeyDown={handleInlineKeyDown}
-                              className="input w-28"
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => startInlineEdit(cost, "sellPrice")}
-                              className="text-left hover:text-blue-600"
-                              title="Bấm để sửa báo giá"
-                            >
-                              {formatVnd(cost.sellPrice)}
-                            </button>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-gray-600">
-                          {editingInvoice ? (
-                            <input
-                              autoFocus
-                              value={inlineEdit!.value}
-                              onChange={(e) => setInlineEdit({ ...inlineEdit!, value: e.target.value })}
-                              onBlur={commitInlineEdit}
-                              onKeyDown={handleInlineKeyDown}
-                              className="input w-28"
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => startInlineEdit(cost, "invoiceNumber")}
-                              className="text-left hover:text-blue-600"
-                              title="Bấm để sửa số hóa đơn"
-                            >
-                              {cost.invoiceNumber || "—"}
-                            </button>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-gray-600">
-                          {new Date(cost.createdAt).toLocaleDateString("vi-VN")}
-                        </td>
-                        <td className="px-3 py-2">
-                          {cost.attachmentUrl ? (
-                            <a
-                              href={cost.attachmentUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-blue-600 hover:underline"
-                            >
-                              📎 1
-                            </a>
-                          ) : (
-                            <span className="text-gray-400">📎 0</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="flex flex-wrap gap-3">
-                            <button
-                              type="button"
-                              onClick={() => setViewingCost(cost)}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
-                            >
-                              👁 Xem
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                startEdit(cost);
-                                setIsFormOpen(true);
-                              }}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
-                              title="Mở form đầy đủ (đổi danh mục, đính kèm chứng từ...)"
-                            >
-                              ✏️ Sửa
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDelete(cost.id)}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:underline"
-                            >
-                              🗑 Xóa
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    </Fragment>
-                  );
-                })}
-              {!isLoading && !error && (
-                <tr className="bg-blue-50/40">
-                  <td className="px-3 py-2 text-center text-gray-400">+</td>
-                  <td className="px-3 py-2">
-                    <div className="relative" ref={quickShipRef}>
-                      <input
-                        value={quickAdd.shipmentLabel}
-                        onChange={(e) => {
-                          setQuickAdd((prev) => ({ ...prev, shipmentLabel: e.target.value, shipmentId: "" }));
-                          setIsQuickShipOpen(true);
-                        }}
-                        onFocus={() => setIsQuickShipOpen(true)}
-                        className="input w-full"
-                        placeholder="Chọn lô hàng để nhập nhanh..."
-                        autoComplete="off"
-                      />
-                      {isQuickShipOpen && quickShipSuggestions.length > 0 && (
-                        <ul className="absolute z-10 mt-1 max-h-56 w-72 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
-                          {quickShipSuggestions.map((s) => (
-                            <li key={s.id}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setQuickAdd((prev) => ({ ...prev, shipmentId: s.id, shipmentLabel: shipmentLabelFor(s) }));
-                                  setIsQuickShipOpen(false);
-                                }}
-                                className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                              >
-                                <span className="font-medium text-gray-900">{s.goodsName || "Chưa có tên hàng"}</span>
-                                <span className="ml-2 text-xs text-gray-400">
-                                  TK: {s.declarationNo || "—"} · {s.customerName}
-                                </span>
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2">
-                    <select
-                      value={quickAdd.category}
-                      onChange={(e) => setQuickAdd((prev) => ({ ...prev, category: e.target.value }))}
-                      className="input w-full"
-                    >
-                      {COST_CATEGORY_OPTIONS.map((option) => (
-                        <option key={option} value={option}>
-                          {COST_CATEGORY_LABELS[option]}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        value={quickAdd.unitPrice}
-                        onChange={(e) => setQuickAdd((prev) => ({ ...prev, unitPrice: e.target.value }))}
-                        onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
-                        className="input w-24"
-                        placeholder="Đơn giá"
-                      />
-                      <span className="text-gray-400">×</span>
-                      <input
-                        type="number"
-                        value={quickAdd.quantity}
-                        onChange={(e) => setQuickAdd((prev) => ({ ...prev, quantity: e.target.value }))}
-                        onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
-                        className="input w-14"
-                        placeholder="SL"
-                      />
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <input
-                      type="number"
-                      value={quickAdd.sellPrice}
-                      onChange={(e) => setQuickAdd((prev) => ({ ...prev, sellPrice: e.target.value }))}
-                      onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
-                      className="input w-28"
-                      placeholder="Báo giá"
-                    />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input
-                      value={quickAdd.invoiceNumber}
-                      onChange={(e) => setQuickAdd((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
-                      onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
-                      className="input w-28"
-                      placeholder="Số HĐ"
-                    />
-                  </td>
-                  <td className="px-3 py-2" colSpan={2}>
-                    <input
-                      value={quickAdd.note}
-                      onChange={(e) => setQuickAdd((prev) => ({ ...prev, note: e.target.value }))}
-                      onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
-                      className="input w-full"
-                      placeholder="Ghi chú (Enter để thêm)"
-                    />
-                  </td>
-                  <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={handleQuickAdd}
-                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
-                    >
-                      + Thêm
-                    </button>
-                  </td>
-                </tr>
-              )}
-              {quickError && (
-                <tr>
-                  <td colSpan={9} className="px-3 pb-2 text-xs text-red-600">
-                    {quickError}
-                  </td>
-                </tr>
-              )}
+              {isLoading && <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400">Đang tải dữ liệu...</td></tr>}
+              {!isLoading && shipmentRows.length === 0 && <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400">Không có lô hàng phù hợp.</td></tr>}
+              {!isLoading && paginatedShipments.map((shipment, index) => {
+                const expanded = expandedShipmentId === shipment.id;
+                return <Fragment key={shipment.id}>
+                  <tr className={shipment.spikeCount > 0 ? "bg-red-50/50" : "hover:bg-gray-50"}>
+                    <td className="px-3 py-3 text-center text-gray-500">{(safePage - 1) * pageSize + index + 1}</td>
+                    <td className="max-w-xs px-3 py-3 font-medium text-gray-900">{shipment.customerName}</td>
+                    <td className="whitespace-nowrap px-3 py-3"><button type="button" onClick={() => setViewingShipmentId(shipment.id)} className="font-medium text-blue-600 hover:underline" title="Xem nhanh thông tin lô hàng">{shipment.declarationNo || "Chưa có TK"}</button><span className="block text-xs text-gray-400">{shipment.declarationDate ? new Date(shipment.declarationDate).toLocaleDateString("vi-VN") : "—"}</span></td>
+                    <td className="max-w-sm px-3 py-3 text-gray-700">{shipment.goodsName || "Chưa có tên hàng"}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-gray-900">{formatVnd(shipment.totalCost)}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-blue-700">{formatVnd(shipment.totalRevenue)}</td>
+                    <td className={`whitespace-nowrap px-3 py-3 text-right font-semibold ${shipment.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>{formatVnd(shipment.profit)}</td>
+                    <td className="px-3 py-3 text-center text-gray-500">📎 {shipment.documentCount}</td>
+                    <td className="px-3 py-3"><div className="flex min-w-44 justify-end gap-3"><button type="button" onClick={() => setExpandedShipmentId(expanded ? null : shipment.id)} className="text-blue-600 hover:underline">{expanded ? "Thu gọn" : `Chi tiết (${shipment.costs.length})`}</button><button type="button" onClick={() => setEditingShipment(shipment)} className="font-medium text-blue-600 hover:underline">Mở chi phí</button></div></td>
+                  </tr>
+                  {expanded && <tr><td colSpan={9} className="bg-slate-50 px-6 py-4"><ShipmentCostDetails shipment={shipment} opportunityByCostId={opportunityByCostId} onHistory={setViewingCost} onCompare={() => setSimilarShipmentId(shipment.id)} /></td></tr>}
+                </Fragment>;
+              })}
             </tbody>
-            {!isLoading && !error && filteredCosts.length > 0 && (
-              <tfoot className="bg-gray-50">
-                <tr>
-                  <td colSpan={3} className="px-3 py-2 text-right font-medium text-gray-700">
-                    Tổng ({filteredCosts.length} khoản)
-                  </td>
-                  <td className="px-3 py-2 font-semibold text-gray-900">{formatVnd(totals.costPrice)}</td>
-                  <td className="px-3 py-2 font-semibold text-gray-900">{formatVnd(totals.sellPrice)}</td>
-                  <td colSpan={4}></td>
-                </tr>
-              </tfoot>
-            )}
+            {!isLoading && shipmentRows.length > 0 && <tfoot className="bg-gray-50"><tr><td colSpan={4} className="px-3 py-3 text-right font-medium text-gray-700">Tổng ({shipmentRows.length} lô)</td><td className="px-3 py-3 text-right font-bold text-gray-900">{formatVnd(totals.cost)}</td><td className="px-3 py-3 text-right font-bold text-blue-700">{formatVnd(totals.revenue)}</td><td className={`px-3 py-3 text-right font-bold ${totals.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>{formatVnd(totals.profit)}</td><td colSpan={2}></td></tr></tfoot>}
           </table>
         </div>
 
-        {!isLoading && !error && filteredCosts.length > 0 && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-500">
-            <p>
-              Hiển thị {resultStart} – {resultEnd} trong {filteredCosts.length} kết quả
-            </p>
-            <div className="flex items-center gap-3">
-              <select
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value));
-                  setCurrentPage(1);
-                }}
-                className="input w-auto"
-              >
-                {PAGE_SIZE_OPTIONS.map((size) => (
-                  <option key={size} value={size}>
-                    {size} / trang
-                  </option>
-                ))}
-              </select>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={safePage === 1}
-                  className="rounded-md border border-gray-300 px-2 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-                >
-                  ‹
-                </button>
-                {getPageNumbers(safePage, pageCount).map((p, i) =>
-                  p === "..." ? (
-                    <span key={`ellipsis-${i}`} className="px-2 text-gray-400">
-                      …
-                    </span>
-                  ) : (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setCurrentPage(p)}
-                      className={`rounded-md px-3 py-1 ${
-                        p === safePage
-                          ? "bg-blue-600 text-white"
-                          : "border border-gray-300 text-gray-600 hover:bg-gray-50"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  )
-                )}
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((p) => Math.min(pageCount, p + 1))}
-                  disabled={safePage === pageCount}
-                  className="rounded-md border border-gray-300 px-2 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-                >
-                  ›
-                </button>
-              </div>
-            </div>
+        {!isLoading && shipmentRows.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-500">
+          <span>Hiển thị {resultStart}–{resultEnd} trong {shipmentRows.length} lô hàng</span>
+          <div className="flex items-center gap-2">
+            <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }} className="input w-auto">{PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size} / trang</option>)}</select>
+            <button type="button" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safePage === 1} className="rounded border border-gray-300 px-3 py-1.5 disabled:opacity-40">‹</button>
+            <span className="rounded bg-blue-600 px-3 py-1.5 text-white">{safePage}/{pageCount}</span>
+            <button type="button" onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))} disabled={safePage === pageCount} className="rounded border border-gray-300 px-3 py-1.5 disabled:opacity-40">›</button>
           </div>
-        )}
+        </div>}
       </section>
 
-      {showSimilarModal && filters.shipmentId && (
-        <SimilarCostsModal shipmentId={filters.shipmentId} onClose={() => setShowSimilarModal(false)} />
-      )}
-
-      {viewingCost && (
-        <CostDetailPanel
-          shipmentId={viewingCost.shipmentId}
-          invoiceNumber={viewingCost.invoiceNumber}
-          onClose={() => setViewingCost(null)}
-        />
-      )}
+      {viewingCost && <CostDetailPanel shipmentId={viewingCost.shipmentId} invoiceNumber={viewingCost.invoiceNumber} onClose={() => setViewingCost(null)} onCostsChanged={refreshFinancialData} />}
+      {similarShipmentId && <SimilarCostsModal shipmentId={similarShipmentId} onClose={() => setSimilarShipmentId(null)} />}
+      {editingShipment && <ShipmentFinanceEditorModal shipment={editingShipment} onClose={() => setEditingShipment(null)} onCostsChanged={refreshFinancialData} />}
+      {viewingShipmentId && <ShipmentInfoModal shipmentId={viewingShipmentId} onClose={() => setViewingShipmentId(null)} />}
     </div>
   );
 }
 
-function KpiCard({
-  icon,
-  iconBg,
-  label,
-  value,
-  subtitle,
-  valueClassName,
-}: {
-  icon: string;
-  iconBg: string;
-  label: string;
-  value: string;
-  subtitle: string;
-  valueClassName?: string;
+function ShipmentCostDetails({ shipment, opportunityByCostId, onHistory, onCompare }: {
+  shipment: ShipmentSummary;
+  opportunityByCostId: Map<string, ReturnType<typeof calculateCostOpportunities>[number]>;
+  onHistory: (cost: CostRow) => void;
+  onCompare: () => void;
 }) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4">
-      <div className="flex items-center gap-3">
-        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-lg ${iconBg}`}>
-          {icon}
-        </span>
-        <span className="text-sm font-medium text-gray-500">{label}</span>
-      </div>
-      <p className={`mt-3 text-2xl font-bold text-gray-900 ${valueClassName ?? ""}`}>{value}</p>
-      <p className="mt-1 text-xs text-gray-400">{subtitle}</p>
-    </div>
-  );
+  if (shipment.costs.length === 0) return <div className="flex items-center justify-between"><p className="text-sm text-gray-500">Lô hàng này chưa có chi phí.</p><button type="button" onClick={onCompare} className="text-sm text-blue-600 hover:underline">So sánh lô tương tự</button></div>;
+  return <div>
+    <div className="mb-3 flex items-center justify-between"><p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Chi tiết của một lô hàng</p><button type="button" onClick={onCompare} className="text-xs text-blue-600 hover:underline">So sánh lô tương tự</button></div>
+    <div className="space-y-2">{shipment.costs.map((cost) => {
+      const opportunity = opportunityByCostId.get(cost.id);
+      const spike = !!opportunity && opportunity.differencePercent >= SPIKE_DIFFERENCE_PERCENT;
+      return <div key={cost.id} className={`grid items-center gap-3 rounded-lg border px-4 py-3 md:grid-cols-[1.2fr_1.5fr_1fr_1fr_1.5fr_auto] ${spike ? "border-red-200 bg-red-50" : "border-gray-200 bg-white"}`}>
+        <div><span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${COST_CATEGORY_BADGE_CLASS[cost.category] || "bg-gray-100 text-gray-600"}`}>{COST_CATEGORY_ICON[cost.category]} {COST_CATEGORY_LABELS[cost.category] || cost.category}</span>{cost.isAdditional && <span className="ml-1 text-[10px] text-orange-600">Phát sinh</span>}<span className={`ml-1 text-[10px] font-medium ${cost.isActual ? "text-emerald-700" : "text-amber-700"}`}>{cost.isActual ? "Thực tế" : "Dự kiến"}</span></div>
+        <div className={cost.vendor ? "text-sm text-gray-700" : "text-sm font-medium text-amber-600"}>{cost.vendor?.name || "Chưa gắn nhà cung cấp"}</div>
+        <div className="text-sm text-gray-600">{formatVnd(cost.unitPrice)} × {cost.quantity}</div>
+        <div className="text-sm font-semibold text-gray-900">{formatVnd(cost.costPrice)}</div>
+        <div className="text-xs text-gray-500">HĐ: {cost.invoiceNumber || "—"}{cost.note && <span className="block">{cost.note}</span>}{spike && <span className="block font-medium text-red-700">⚠ Cao hơn {Math.round(opportunity.differencePercent)}% · Mức tham chiếu {formatVnd(opportunity.benchmarkUnitPrice)}</span>}</div>
+        <button type="button" onClick={() => onHistory(cost)} className="text-xs font-medium text-blue-600 hover:underline">Lịch sử</button>
+      </div>;
+    })}</div>
+  </div>;
+}
+
+function Kpi({ label, value, color }: { label: string; value: string; color: "red" | "blue" | "green" | "gray" }) {
+  const styles = { red: "border-red-100 bg-red-50 text-red-800", blue: "border-blue-100 bg-blue-50 text-blue-800", green: "border-emerald-100 bg-emerald-50 text-emerald-800", gray: "border-gray-200 bg-white text-gray-900" };
+  return <div className={`rounded-xl border p-4 ${styles[color]}`}><p className="text-xs opacity-70">{label}</p><p className="mt-1 text-xl font-bold">{value}</p></div>;
 }

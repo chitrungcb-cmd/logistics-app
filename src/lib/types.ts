@@ -16,6 +16,8 @@ export type ShipmentDTO = {
   status: string;
   customsOffice: string | null;
   transport: string | null;
+  transportRoute: string | null;
+  vehiclePlate: string | null;
   totalAmount: number;
   attachments: Attachment[] | null;
   note: string | null;

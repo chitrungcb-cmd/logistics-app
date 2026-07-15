@@ -16,9 +16,9 @@ function pick(chars: string): string {
   return chars[randomInt(chars.length)];
 }
 
-/** Returns a 10–12 char password containing at least one lowercase, uppercase and digit. */
+/** Returns a 16-char password containing at least one lowercase, uppercase and digit. */
 export function generateReadablePassword(): string {
-  const length = 10 + randomInt(3); // 10, 11 or 12
+  const length = 16;
   const required = [pick(LOWER), pick(UPPER), pick(DIGITS)];
   const rest = Array.from({ length: length - required.length }, () => pick(ALL));
   const chars = [...required, ...rest];

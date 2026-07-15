@@ -2,6 +2,10 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import {
+  ensureShipmentWorkflowTasks,
+  reassignOpenShipmentWorkflowTasks,
+} from "@/lib/shipment-workflow";
 
 const UPDATABLE_FIELDS = [
   "companyName",
@@ -63,7 +67,23 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return apiError("Không có dữ liệu để cập nhật.", 400);
     }
 
-    const customer = await prisma.customer.update({ where: { id }, data });
+    const customer = await prisma.customer.update({
+      where: { id },
+      data,
+      include: { shipments: { select: { id: true } } },
+    });
+    if ("assignedUserId" in data && customer.assignedUserId) {
+      await Promise.all(
+        customer.shipments.map((shipment) =>
+          ensureShipmentWorkflowTasks({ shipmentId: shipment.id, createdByUserId: user.id })
+        )
+      );
+      await reassignOpenShipmentWorkflowTasks({
+        customerId: customer.id,
+        assignedToUserId: customer.assignedUserId,
+        actorUserId: user.id,
+      });
+    }
     return apiSuccess(customer);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error) {

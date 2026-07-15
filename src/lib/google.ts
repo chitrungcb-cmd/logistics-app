@@ -1,7 +1,11 @@
 import { google } from "googleapis";
 import { prisma } from "@/lib/prisma";
+import { decryptSecret } from "@/lib/secret-encryption";
 
 const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
+export const GOOGLE_OAUTH_STATE_COOKIE = process.env.NODE_ENV === "production"
+  ? "__Host-google-oauth-state"
+  : "google-oauth-state";
 
 export function createOAuth2Client() {
   return new google.auth.OAuth2(
@@ -11,12 +15,13 @@ export function createOAuth2Client() {
   );
 }
 
-export function getGoogleAuthUrl() {
+export function getGoogleAuthUrl(state: string) {
   const client = createOAuth2Client();
   return client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: GMAIL_SCOPES,
+    state,
   });
 }
 
@@ -31,6 +36,6 @@ export async function getAuthorizedGmailClient() {
   if (!auth) return null;
 
   const client = createOAuth2Client();
-  client.setCredentials({ refresh_token: auth.refreshToken });
+  client.setCredentials({ refresh_token: decryptSecret(auth.refreshToken) });
   return google.gmail({ version: "v1", auth: client });
 }

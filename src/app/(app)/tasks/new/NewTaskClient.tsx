@@ -84,7 +84,10 @@ export default function NewTaskClient() {
         <Link href="/tasks" className="text-sm text-blue-600 hover:underline">
           ← Quay lại danh sách
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold text-gray-900">Giao việc mới</h1>
+        <h1 className="mt-2 text-2xl font-semibold text-gray-900">Giao việc ngoài tiến trình</h1>
+        <p className="mt-1 text-sm text-gray-500">
+          Dùng cho công việc phát sinh; 6 bước xử lý chuẩn được quản lý trực tiếp trong từng lô hàng.
+        </p>
       </div>
 
       <form onSubmit={handleSubmit} className="max-w-2xl space-y-5 rounded-lg border border-gray-200 bg-white p-6">

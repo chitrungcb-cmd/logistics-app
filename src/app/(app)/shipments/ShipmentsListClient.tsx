@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "@/components/shipments/Badge";
 import AttachmentsCell from "@/components/shipments/AttachmentsCell";
 import GmailSyncPanel from "@/components/shipments/GmailSyncPanel";
@@ -17,51 +17,64 @@ import {
 import type { ShipmentDTO } from "@/lib/types";
 
 const ALL_FILTER = "__all__";
+const LIST_REFRESH_INTERVAL_MS = 60 * 1000;
 
 export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
   const [shipments, setShipments] = useState<ShipmentDTO[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [taskStepsSummary, setTaskStepsSummary] = useState<Record<string, (string | null)[]>>({});
+  const hasLoadedShipments = useRef(false);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(ALL_FILTER);
   const [channelFilter, setChannelFilter] = useState(ALL_FILTER);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadShipments() {
-      try {
-        const res = await fetch("/api/shipments");
-        const json = await res.json();
-        if (!res.ok || !json.success) {
-          throw new Error(json.error || "Không thể tải danh sách lô hàng.");
-        }
-        if (!cancelled) setShipments(json.data);
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
+  const loadShipments = useCallback(async () => {
+    try {
+      const res = await fetch("/api/shipments", { cache: "no-store" });
+      const text = await res.text();
+      const json = text ? JSON.parse(text) : null;
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || "Không thể tải danh sách lô hàng.");
       }
+      setShipments(json.data);
+      hasLoadedShipments.current = true;
+      setError(null);
+    } catch (err) {
+      if (!hasLoadedShipments.current) {
+        setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
+      }
+    } finally {
+      setIsLoading(false);
     }
-
-    loadShipments();
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  const loadTaskSteps = useCallback(async () => {
+    try {
+      const res = await fetch("/api/shipments/task-steps-summary", { cache: "no-store" });
+      const json = await res.json();
+      if (json.success) setTaskStepsSummary(json.data);
+    } catch {
+      // The shipment list can still be used if task progress is temporarily unavailable.
+    }
+  }, []);
+
+  const refreshList = useCallback(() => {
+    void Promise.all([loadShipments(), loadTaskSteps()]);
+  }, [loadShipments, loadTaskSteps]);
 
   useEffect(() => {
-    fetch("/api/shipments/task-steps-summary")
-      .then((res) => res.json())
-      .then((json) => {
-        if (json.success) setTaskStepsSummary(json.data);
-      })
-      .catch(() => {});
-  }, []);
+    const initialRefresh = window.setTimeout(refreshList, 0);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") refreshList();
+    }, LIST_REFRESH_INTERVAL_MS);
+    return () => {
+      window.clearTimeout(initialRefresh);
+      window.clearInterval(interval);
+    };
+  }, [refreshList]);
+
 
   function handleAttached(shipmentId: string, attachments: Attachment[]) {
     setShipments((prev) =>
@@ -98,9 +111,7 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
         </Link>
       </div>
 
-      <div className="mt-6">
-        <GmailSyncPanel />
-      </div>
+      {isAdmin && <div className="mt-6"><GmailSyncPanel onSynced={refreshList} /></div>}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
@@ -142,23 +153,39 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="min-w-full divide-y divide-gray-200 text-sm">
+        <table className="w-full min-w-[1810px] table-fixed divide-y divide-gray-200 text-sm">
+          <colgroup>
+            <col className="w-[48px]" />
+            <col className="w-[175px]" />
+            <col className="w-[150px]" />
+            <col className="w-[105px]" />
+            <col className="w-[100px]" />
+            <col className="w-[145px]" />
+            <col className="w-[120px]" />
+            <col className="w-[205px]" />
+            <col className="w-[90px]" />
+            <col className="w-[145px]" />
+            <col className="w-[170px]" />
+            <col className="w-[135px]" />
+            <col className="w-[130px]" />
+            <col className="w-[90px]" />
+          </colgroup>
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">STT</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Khách hàng</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Số tờ khai</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Ngày tờ khai</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Loại hình</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Số invoice</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Cửa khẩu/Cảng</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Tên hàng</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Phân luồng</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Trạng thái</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">HQ tiếp nhận</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Chứng từ đính kèm</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Tiến trình</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500"></th>
+              <th className="px-3 py-3 text-center font-medium text-gray-500">STT</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Khách hàng</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Số tờ khai</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Ngày tờ khai</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Loại hình</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Số invoice</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Cửa khẩu/Cảng</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Tên hàng</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Phân luồng</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Trạng thái</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">HQ tiếp nhận</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Chứng từ</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Tiến trình</th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -189,11 +216,11 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
                 const branches = getDeclarationBranches(shipment.declarationBranches);
                 return (
                   <tr key={shipment.id} className="align-top hover:bg-gray-50">
-                    <td className="px-4 py-3 text-gray-500">{index + 1}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">
+                    <td className="px-3 py-3 text-center text-gray-500">{index + 1}</td>
+                    <td className="break-words px-3 py-3 font-medium leading-5 text-gray-900">
                       {shipment.customerName}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">
+                    <td className="whitespace-nowrap px-3 py-3 text-gray-600">
                       {branches ? (
                         <div className="space-y-0.5">
                           {branches.map((b) => (
@@ -206,48 +233,48 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
                         shipment.declarationNo || "—"
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">
+                    <td className="whitespace-nowrap px-3 py-3 text-gray-600">
                       {shipment.declarationDate
                         ? new Date(shipment.declarationDate).toLocaleDateString("vi-VN")
                         : "—"}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{shipment.customsType || "—"}</td>
-                    <td className="px-4 py-3 text-gray-600">{shipment.invoiceNo || "—"}</td>
-                    <td className="px-4 py-3 text-gray-600">{shipment.port || "—"}</td>
-                    <td className="px-4 py-3 text-gray-600">{shipment.goodsName || "—"}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 leading-5 text-gray-600">{shipment.customsType || "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-gray-600">{shipment.invoiceNo || "—"}</td>
+                    <td className="break-words px-3 py-3 text-gray-600">{shipment.port || "—"}</td>
+                    <td className="break-words px-3 py-3 leading-5 text-gray-600">{shipment.goodsName || "—"}</td>
+                    <td className="px-3 py-3">
                       {shipment.channel ? (
                         <Badge label={shipment.channel} className={channelBadgeClass(shipment.channel)} />
                       ) : (
                         "—"
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       <Badge label={shipment.status} className={statusBadgeClass(shipment.status)} />
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{shipment.customsOffice || "—"}</td>
-                    <td className="px-4 py-3">
+                    <td className="break-words px-3 py-3 leading-5 text-gray-600">{shipment.customsOffice || "—"}</td>
+                    <td className="px-3 py-3">
                       <AttachmentsCell
                         shipmentId={shipment.id}
                         attachments={shipment.attachments || []}
                         onAttached={handleAttached}
                       />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       <TaskStepperCompact statuses={taskStepsSummary[shipment.id] ?? []} />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       <div className="flex flex-col gap-1">
                         <Link
                           href={`/shipments/${shipment.id}`}
-                          className="text-sm font-medium text-blue-600 hover:underline"
+                          className="whitespace-nowrap text-sm font-medium text-blue-600 hover:underline"
                         >
                           Xem chi tiết
                         </Link>
                         {isAdmin && (
                           <Link
                             href={`/costs?shipmentId=${shipment.id}`}
-                            className="text-sm text-blue-600 hover:underline"
+                            className="whitespace-nowrap text-sm text-blue-600 hover:underline"
                           >
                             Chi phí
                           </Link>

@@ -70,8 +70,8 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
   async function handleCreate(event: React.FormEvent) {
     event.preventDefault();
     setCreateError(null);
-    if (createForm.password.length < 8) {
-      setCreateError("Mật khẩu cần ít nhất 8 ký tự.");
+    if (createForm.password.length < 12) {
+      setCreateError("Mật khẩu cần ít nhất 12 ký tự.");
       return;
     }
     setIsSubmitting(true);
@@ -99,8 +99,8 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
     event.preventDefault();
     if (!resetTarget) return;
     setResetError(null);
-    if (resetPassword.length < 8) {
-      setResetError("Mật khẩu cần ít nhất 8 ký tự.");
+    if (resetPassword.length < 12) {
+      setResetError("Mật khẩu cần ít nhất 12 ký tự.");
       return;
     }
     try {
@@ -294,12 +294,13 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
                 <span className="mb-1 block text-sm font-medium text-gray-700">Mật khẩu</span>
                 <div className="flex gap-2">
                   <input
-                    type="text"
+                    type="password"
+                    autoComplete="new-password"
                     value={createForm.password}
                     onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
                     className="input flex-1"
-                    placeholder="Tối thiểu 8 ký tự"
-                    minLength={8}
+                    placeholder="Tối thiểu 12 ký tự"
+                    minLength={12}
                     required
                   />
                   <button
@@ -337,7 +338,7 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Mật khẩu mới</span>
                 <div className="flex gap-2">
-                  <input type="text" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} className="input flex-1" minLength={8} required />
+                  <input type="password" autoComplete="new-password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} className="input flex-1" minLength={12} required />
                   <button type="button" onClick={() => setResetPassword(generateReadablePassword())} className="whitespace-nowrap rounded-md border border-gray-300 px-3 text-sm font-medium text-gray-600 hover:bg-gray-50">
                     Tự sinh
                   </button>

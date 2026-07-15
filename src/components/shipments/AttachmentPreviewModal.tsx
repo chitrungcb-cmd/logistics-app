@@ -19,7 +19,7 @@ export default function AttachmentPreviewModal({
   const ext = attachment ? getExtension(attachment.name) : "";
   const isPdf = ext === "pdf";
   const isImage = ["jpg", "jpeg", "png", "gif", "webp"].includes(ext);
-  const isSpreadsheet = ["xlsx", "xls"].includes(ext);
+  const isSpreadsheet = ext === "xlsx";
   const isPreviewable = isPdf || isImage || isSpreadsheet;
 
   const [sheets, setSheets] = useState<SheetPreview[] | null>(null);
@@ -28,6 +28,54 @@ export default function AttachmentPreviewModal({
   // `key` prop callers pass), so there's no stale-state case an effect would otherwise need to reset.
   const [isLoading, setIsLoading] = useState(isSpreadsheet);
   const [error, setError] = useState<string | null>(null);
+  const [pdfObjectUrl, setPdfObjectUrl] = useState<string | null>(null);
+  const [isPdfLoading, setIsPdfLoading] = useState(isPdf);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!attachment || !isPdf) return;
+
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    fetch(attachment.url, { credentials: "same-origin", signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Không thể tải nội dung PDF.");
+        const sourceBlob = await res.blob();
+        if ((await sourceBlob.slice(0, 5).text()) !== "%PDF-") {
+          throw new Error("Tệp trả về không phải định dạng PDF hợp lệ.");
+        }
+        // Some static hosts return application/octet-stream even for a valid PDF. Give the
+        // in-memory URL an explicit type so Chrome's built-in viewer can render it consistently.
+        const blob = sourceBlob.type.toLowerCase().includes("pdf")
+          ? sourceBlob
+          : new Blob([sourceBlob], { type: "application/pdf" });
+
+        const nextObjectUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(nextObjectUrl);
+          return;
+        }
+        objectUrl = nextObjectUrl;
+        setPdfObjectUrl(nextObjectUrl);
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setPdfError(err instanceof Error ? err.message : "Không thể xem trước tệp PDF.");
+      })
+      .finally(() => {
+        if (!cancelled) setIsPdfLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+    // The modal is remounted with a key when the selected attachment changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachment?.url, isPdf]);
 
   useEffect(() => {
     if (!attachment || !isSpreadsheet) return;
@@ -78,8 +126,10 @@ export default function AttachmentPreviewModal({
         </div>
 
         <div className="flex-1 overflow-auto p-4">
-          {isPdf && (
-            <iframe src={attachment.url} className="h-full min-h-[70vh] w-full" title={attachment.name} />
+          {isPdf && isPdfLoading && <p className="text-center text-gray-400">Đang tải PDF...</p>}
+          {isPdf && pdfError && <p className="text-center text-red-600">{pdfError}</p>}
+          {isPdf && pdfObjectUrl && (
+            <iframe src={pdfObjectUrl} className="h-full min-h-[70vh] w-full" title={attachment.name} />
           )}
 
           {isImage && (
@@ -112,8 +162,7 @@ export default function AttachmentPreviewModal({
                       ))}
                     </div>
                   )}
-                  {/* Rendered straight from SheetJS's sheet_to_html — keeps the original file's real
-                      column/merged-cell layout rather than reflowing it, per what was asked. */}
+                  {/* Safe HTML returned by the authenticated Excel preview endpoint. */}
                   <div
                     className="overflow-x-auto text-xs [&_table]:border-collapse [&_td]:border [&_td]:border-gray-200 [&_td]:px-1.5 [&_td]:py-0.5 [&_td]:align-top [&_td]:whitespace-nowrap"
                     dangerouslySetInnerHTML={{ __html: sheets[activeSheet].html }}

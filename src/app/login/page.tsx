@@ -9,6 +9,7 @@ export default function LoginPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [setupSecret, setSetupSecret] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,7 +35,7 @@ export default function LoginPage() {
 
     try {
       const url = needsSetup ? "/api/auth/setup" : "/api/auth/login";
-      const body = needsSetup ? { name, email, password } : { email, password };
+      const body = needsSetup ? { name, email, password, setupSecret } : { email, password };
 
       const res = await fetch(url, {
         method: "POST",
@@ -72,15 +73,28 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
           {needsSetup && (
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Họ tên</span>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="input"
-                required
-              />
-            </label>
+            <>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">Họ tên</span>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="input"
+                  required
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">Mã khởi tạo quản trị</span>
+                <input
+                  type="password"
+                  value={setupSecret}
+                  onChange={(e) => setSetupSecret(e.target.value)}
+                  className="input"
+                  autoComplete="off"
+                  required
+                />
+              </label>
+            </>
           )}
 
           <label className="block">
@@ -101,7 +115,8 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="input"
-              minLength={needsSetup ? 8 : undefined}
+              minLength={needsSetup ? 12 : undefined}
+              autoComplete={needsSetup ? "new-password" : "current-password"}
               required
             />
           </label>

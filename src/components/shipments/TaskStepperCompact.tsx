@@ -18,14 +18,14 @@ const STATUS_LABEL: Record<string, string> = {
  * task hasn't been created yet, treated the same as "TODO" visually. */
 export default function TaskStepperCompact({ statuses }: { statuses: (string | null)[] }) {
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex w-max items-center gap-1">
       {SHIPMENT_TASK_STEPS.map((title, i) => {
         const status = statuses[i] ?? "TODO";
         return (
           <span
             key={title}
             title={`${title}: ${STATUS_LABEL[status] ?? status}`}
-            className={`h-2.5 w-2.5 rounded-full ${DOT_CLASS[status] ?? "bg-gray-300"}`}
+            className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT_CLASS[status] ?? "bg-gray-300"}`}
           />
         );
       })}

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { saveUploadedFile } from "@/lib/save-upload";
+import { UnsafeUploadError, uploadedFileExtension } from "@/lib/file-security";
 
 // Whitelist, not blacklist: files land in public/uploads and are served as-is, so anything a
 // browser will execute (.html, .svg, .js, ...) must never get through — an uploaded .html on this
@@ -22,7 +23,7 @@ export async function POST(request: NextRequest) {
       return apiError("Không có tệp nào được gửi lên.", 400);
     }
 
-    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const extension = uploadedFileExtension(file.name);
     if (!ALLOWED_EXTENSIONS.includes(extension)) {
       return apiError(
         `Loại tệp ".${extension}" không được hỗ trợ. Chỉ chấp nhận: ${ALLOWED_EXTENSIONS.join(", ")}.`,
@@ -39,6 +40,7 @@ export async function POST(request: NextRequest) {
 
     return apiSuccess(saved, 201);
   } catch (error) {
+    if (error instanceof UnsafeUploadError) return apiError(error.message, 400);
     console.error("POST /api/upload failed:", error);
     return apiError("Không thể tải lên tệp đính kèm.", 500);
   }

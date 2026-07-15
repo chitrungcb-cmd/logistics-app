@@ -2,17 +2,30 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { applyCostPresetsToShipment } from "@/lib/cost-presets";
 
 // totalAmount deliberately NOT here (audit 3.1) — the legacy per-shipment cost field is vestigial;
 // real costs live in ShipmentCost / the /costs page. The DB column is kept for historical reference
 // but nothing in the app reads or writes it anymore.
 const UPDATABLE_FIELDS = [
   "transport",
+  "transportRoute",
+  "vehiclePlate",
   "status",
   "note",
   "attachments",
   "customerId",
   "customerName",
+  "taxCode",
+  "declarationNo",
+  "declarationDate",
+  "invoiceNo",
+  "customsType",
+  "port",
+  "goodsName",
+  "channel",
+  "customsOffice",
+  "consultationDate",
 ] as const;
 
 export async function GET(
@@ -72,7 +85,22 @@ export async function PATCH(
       }
     }
 
+    for (const dateField of ["declarationDate", "consultationDate"] as const) {
+      if (dateField in data) data[dateField] = data[dateField] ? new Date(data[dateField] as string) : null;
+    }
+
+    const nullableTextFields = [
+      "transport", "transportRoute", "vehiclePlate", "note", "taxCode", "declarationNo", "invoiceNo",
+      "customsType", "port", "goodsName", "channel", "customsOffice",
+    ];
+    for (const field of nullableTextFields) {
+      if (field in data && data[field] === "") data[field] = null;
+    }
+
     const shipment = await prisma.shipment.update({ where: { id }, data });
+    if (shipment.declarationNo && ("declarationNo" in data || "goodsName" in data)) {
+      await applyCostPresetsToShipment({ shipmentId: shipment.id, userId: user.id });
+    }
     return apiSuccess(shipment);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "P2025") {

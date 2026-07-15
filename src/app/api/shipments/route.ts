@@ -3,6 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { generateShipmentCode } from "@/lib/shipment-constants";
+import { applyCostPresetsToShipment } from "@/lib/cost-presets";
+import { ensureShipmentWorkflowTasks } from "@/lib/shipment-workflow";
+import { notifyNewShipmentAssignees } from "@/lib/notifications";
 
 export async function GET() {
   try {
@@ -76,6 +79,12 @@ export async function POST(request: NextRequest) {
         note: body.note || null,
       },
     });
+
+    await Promise.all([
+      applyCostPresetsToShipment({ shipmentId: shipment.id, userId: user.id }),
+      ensureShipmentWorkflowTasks({ shipmentId: shipment.id, createdByUserId: user.id }),
+    ]);
+    await notifyNewShipmentAssignees({ shipmentId: shipment.id, actorUserId: user.id });
 
     return apiSuccess(shipment, 201);
   } catch (error) {

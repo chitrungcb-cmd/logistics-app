@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getGoodsKeyword } from "@/lib/goods-keyword";
 
 /**
  * There's no HS-code/product-category field on Shipment — goodsName is free text derived from the
@@ -9,14 +10,6 @@ import { prisma } from "@/lib/prisma";
  * matching) since it's easy to reason about and tune, and the data volume doesn't need anything
  * more sophisticated.
  */
-export function getGoodsKeyword(goodsName: string | null | undefined): string | null {
-  if (!goodsName) return null;
-  const withoutQty = goodsName.replace(/^\d+\s+/, "").trim();
-  const words = withoutQty.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return null;
-  return words.slice(0, 2).join(" ").toUpperCase();
-}
-
 export async function findSimilarShipments(params: {
   shipmentId: string;
   goodsName: string | null;

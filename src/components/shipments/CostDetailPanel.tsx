@@ -1,13 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { COST_CATEGORY_ICON, COST_CATEGORY_LABELS, COST_CATEGORY_OPTIONS } from "@/lib/shipment-cost-constants";
+import {
+  COST_CATEGORY_ICON,
+  COST_CATEGORY_LABELS,
+  COST_CATEGORY_OPTIONS,
+  INVOICE_COST_CATEGORIES,
+  isInvoiceCostCategory,
+} from "@/lib/shipment-cost-constants";
 
 type CostRow = {
   id: string;
   category: string;
   costPrice: number;
-  sellPrice: number;
   invoiceNumber: string | null;
   attachmentUrl: string | null;
   note: string | null;
@@ -34,15 +39,21 @@ export default function CostDetailPanel({
   shipmentId,
   invoiceNumber,
   onClose,
+  onCostsChanged,
 }: {
   shipmentId: string;
   invoiceNumber: string | null;
   onClose: () => void;
+  onCostsChanged?: () => void;
 }) {
   const [costs, setCosts] = useState<CostRow[]>([]);
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [manualInvoiceNumber, setManualInvoiceNumber] = useState(invoiceNumber ?? "");
+  const [manualAmounts, setManualAmounts] = useState<Record<string, string>>({});
+  const [savingCategory, setSavingCategory] = useState<string | null>(null);
+  const [manualError, setManualError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -62,26 +73,72 @@ export default function CostDetailPanel({
   // the whole cost taxonomy, not just the categories that happen to have rows yet.
   const rows = COST_CATEGORY_OPTIONS.map((category) => {
     const matching = costs.filter((c) => c.category === category);
-    const chiPhiCoHoaDon = matching
-      .filter((c) => c.invoiceNumber && c.invoiceNumber.trim())
-      .reduce((sum, c) => sum + c.costPrice, 0);
-    const baoGia = matching.reduce((sum, c) => sum + c.sellPrice, 0);
-    return { category, chiPhiCoHoaDon, baoGia };
+    const chiPhiCoHoaDon = isInvoiceCostCategory(category)
+      ? matching
+          .filter((c) => c.invoiceNumber && c.invoiceNumber.trim())
+          .reduce((sum, c) => sum + c.costPrice, 0)
+      : 0;
+    return { category, chiPhiCoHoaDon };
   });
 
   const totalChiPhiCoHoaDon = rows.reduce((sum, r) => sum + r.chiPhiCoHoaDon, 0);
-  const totalBaoGia = rows.reduce((sum, r) => sum + r.baoGia, 0);
-  const caNhan = totalBaoGia - totalChiPhiCoHoaDon;
 
   const attachments = costs
     .filter((c) => c.attachmentUrl)
     .map((c) => ({ url: c.attachmentUrl!, name: c.attachmentUrl!.split("/").pop() || "file" }));
   const combinedNotes = costs.map((c) => c.note).filter((n): n is string => !!n && n.trim().length > 0);
 
+  async function handleManualCost(category: string) {
+    if (savingCategory) return;
+    if (!isInvoiceCostCategory(category)) return;
+    const amount = Number(manualAmounts[category]);
+    if (!manualInvoiceNumber.trim()) {
+      setManualError("Vui lòng nhập số hóa đơn trước khi thêm chi phí.");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setManualError("Số tiền chi phí phải lớn hơn 0.");
+      return;
+    }
+
+    setSavingCategory(category);
+    setManualError(null);
+    try {
+      const response = await fetch("/api/costs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shipmentId,
+          category,
+          unitPrice: amount,
+          quantity: 1,
+          invoiceNumber: manualInvoiceNumber.trim(),
+        }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.error || "Không thể thêm chi phí.");
+
+      setCosts((current) => [json.data, ...current]);
+      setManualAmounts((current) => ({ ...current, [category]: "" }));
+      onCostsChanged?.();
+
+      fetch(`/api/costs/audit-log?shipmentId=${shipmentId}`)
+        .then((res) => res.json())
+        .then((auditJson) => {
+          if (auditJson.success) setAuditLog(auditJson.data);
+        })
+        .catch(() => {});
+    } catch (err) {
+      setManualError(err instanceof Error ? err.message : "Không thể thêm chi phí.");
+    } finally {
+      setSavingCategory(null);
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50" onClick={onClose}>
       <div
-        className="flex h-full w-full max-w-lg flex-col overflow-y-auto bg-white shadow-xl"
+        className="flex h-full w-full max-w-4xl flex-col overflow-y-auto bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between border-b border-gray-200 px-5 py-4">
@@ -90,9 +147,6 @@ export default function CostDetailPanel({
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
                 {invoiceNumber || "—"}
-              </span>
-              <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
-                Cá nhân
               </span>
             </div>
           </div>
@@ -107,15 +161,78 @@ export default function CostDetailPanel({
 
           {!isLoading && !error && (
             <>
+              <section className="rounded-lg border border-blue-100 bg-blue-50/50 p-4">
+                <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900">Nhập chi phí có hóa đơn</h4>
+                    <p className="mt-0.5 text-xs text-gray-500">
+                      Chỉ áp dụng cho Kiểm dịch, Hạ tầng, Sang tải, Bến bãi và Vận tải.
+                    </p>
+                  </div>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-gray-600">Số hóa đơn</span>
+                    <input
+                      value={manualInvoiceNumber}
+                      onChange={(event) => {
+                        setManualInvoiceNumber(event.target.value);
+                        setManualError(null);
+                      }}
+                      className="input w-40"
+                      placeholder="Nhập số hóa đơn"
+                    />
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  {INVOICE_COST_CATEGORIES.map((category) => {
+                    const row = rows.find((item) => item.category === category)!;
+                    return (
+                      <div key={category} className="rounded-lg border border-gray-200 bg-white p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-medium text-gray-900">
+                            {COST_CATEGORY_ICON[category]} {COST_CATEGORY_LABELS[category]}
+                          </p>
+                          <span className="text-xs font-semibold text-blue-700">{formatVnd(row.chiPhiCoHoaDon)}</span>
+                        </div>
+                        <div className="mt-3 flex items-center gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            value={manualAmounts[category] ?? ""}
+                            onChange={(event) => {
+                              setManualAmounts((current) => ({ ...current, [category]: event.target.value }));
+                              setManualError(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") handleManualCost(category);
+                            }}
+                            className="input min-w-0 flex-1"
+                            placeholder="Nhập số tiền"
+                            aria-label={`Nhập chi phí ${COST_CATEGORY_LABELS[category]}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleManualCost(category)}
+                            disabled={savingCategory !== null}
+                            className="rounded-md bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            {savingCategory === category ? "..." : "Thêm"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {manualError && <p className="mt-2 text-xs text-red-600">{manualError}</p>}
+              </section>
+
               <section>
-                <h4 className="mb-2 text-sm font-semibold text-gray-900">So sánh chi phí / báo giá</h4>
+                <h4 className="mb-2 text-sm font-semibold text-gray-900">Chi phí có hóa đơn theo hạng mục</h4>
                 <div className="overflow-x-auto rounded-md border border-gray-200">
                   <table className="min-w-full divide-y divide-gray-200 text-sm">
                     <thead className="bg-gray-50">
                       <tr>
                         <th className="px-3 py-2 text-left font-medium text-gray-500">Hạng mục</th>
                         <th className="px-3 py-2 text-left font-medium text-gray-500">Chi phí (có hóa đơn)</th>
-                        <th className="px-3 py-2 text-left font-medium text-gray-500">Báo giá</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -124,8 +241,9 @@ export default function CostDetailPanel({
                           <td className="px-3 py-2 text-gray-900">
                             {COST_CATEGORY_ICON[row.category]} {COST_CATEGORY_LABELS[row.category] ?? row.category}
                           </td>
-                          <td className="px-3 py-2 text-gray-600">{formatVnd(row.chiPhiCoHoaDon)}</td>
-                          <td className="px-3 py-2 text-gray-600">{formatVnd(row.baoGia)}</td>
+                          <td className="px-3 py-2 text-gray-600">
+                            {isInvoiceCostCategory(row.category) ? formatVnd(row.chiPhiCoHoaDon) : "—"}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -133,23 +251,11 @@ export default function CostDetailPanel({
                 </div>
               </section>
 
-              <section className="space-y-3">
+              <section>
                 <div className="flex items-center justify-between rounded-lg bg-blue-50 px-4 py-3">
                   <p className="text-sm font-medium text-blue-700">Tổng chi phí có hóa đơn</p>
                   <p className="text-base font-semibold text-blue-900">{formatVnd(totalChiPhiCoHoaDon)}</p>
                 </div>
-                <div className="flex items-center justify-between rounded-lg bg-blue-50 px-4 py-3">
-                  <p className="text-sm font-medium text-blue-700">Tổng báo giá</p>
-                  <p className="text-base font-semibold text-blue-900">{formatVnd(totalBaoGia)}</p>
-                </div>
-              </section>
-
-              <section className="rounded-lg border border-orange-200 bg-orange-50 p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium text-orange-800">Cá nhân</p>
-                  <p className="text-xl font-semibold text-orange-900">{formatVnd(caNhan)}</p>
-                </div>
-                <p className="mt-1 text-xs text-orange-700">= Tổng báo giá − Tổng chi phí có hóa đơn</p>
               </section>
 
               <section>

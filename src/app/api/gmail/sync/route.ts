@@ -6,13 +6,18 @@ import { parseTokhaiExcel, type ParsedDeclaration } from "@/lib/tokhai-parser";
 import { saveUploadedFile } from "@/lib/save-upload";
 import { prisma } from "@/lib/prisma";
 import { generateShipmentCode, mergeDeclarationBranch, type Attachment } from "@/lib/shipment-constants";
+import { applyCostPresetsToShipment } from "@/lib/cost-presets";
+import { ensureShipmentWorkflowTasks } from "@/lib/shipment-workflow";
+import { syncVendorInvoices, type VendorInvoiceSyncSummary } from "@/lib/vendor-invoice-sync";
+import { notifyNewShipmentAssignees } from "@/lib/notifications";
 
 // How many *new* (not-yet-processed) messages one sync call takes on. Gmail returns matches
 // newest-first, and every call starts pagination from page 1 — so once the newest ~500 are already
 // processed, capping by raw messages-seen would keep re-fetching the same done page forever and
-// never reach older backlog. Capping by new-message count instead means every click makes progress
+// never reach older backlog. Capping by new-message count instead means every run makes progress
 // until the whole mailbox is caught up, however many pages that takes.
 const NEW_MESSAGES_PER_SYNC = 150;
+let syncInProgress = false;
 
 type AttachmentPart = { filename: string; mimeType: string; attachmentId: string };
 
@@ -78,7 +83,8 @@ function extractGoodsName(rawSubject: string): string {
 }
 
 function isDeclarationFile(filename: string) {
-  return filename.toLowerCase().replace(/\s+/g, "").includes("tokhai");
+  const normalized = filename.toLowerCase().replace(/\s+/g, "");
+  return normalized.includes("tokhai") && normalized.endsWith(".xlsx");
 }
 
 // "QDTQ" = "Quyết định thông quan" — a different attachment than the channel-result printout,
@@ -182,6 +188,7 @@ async function findOrCreateCustomer(parsed: ParsedDeclaration): Promise<string |
 }
 
 export async function POST() {
+  let ownsSyncLock = false;
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
@@ -191,6 +198,27 @@ export async function POST() {
     if (!gmail) {
       return apiError("Chưa kết nối Gmail. Hãy bấm \"Kết nối Gmail\" trước.", 400);
     }
+
+    if (syncInProgress) {
+      return apiSuccess({
+        scanned: 0,
+        newlyFound: 0,
+        created: 0,
+        updated: 0,
+        skipped: 0,
+        errors: 0,
+        invoicesScanned: 0,
+        invoicesCreated: 0,
+        invoicesMatched: 0,
+        invoicesUnmatched: 0,
+        invoicesNeedsReview: 0,
+        invoiceErrors: 0,
+        results: [],
+        inProgress: true,
+      }, 202);
+    }
+    syncInProgress = true;
+    ownsSyncLock = true;
 
     // Set, not array: Gmail's search pagination isn't guaranteed collision-free across pages (seen
     // in practice returning the same message ID twice), and a duplicate ID in this list would hit
@@ -212,11 +240,16 @@ export async function POST() {
 
       const pageIds = (listRes.data.messages ?? []).map((m) => m.id!).filter(Boolean);
       scanned += pageIds.length;
+      const processedIds = new Set(
+        (await prisma.processedEmail.findMany({
+          where: { gmailMessageId: { in: pageIds } },
+          select: { gmailMessageId: true },
+        })).map((email) => email.gmailMessageId)
+      );
 
       for (const id of pageIds) {
         if (messageIdSet.has(id)) continue;
-        const already = await prisma.processedEmail.findUnique({ where: { gmailMessageId: id } });
-        if (!already) messageIdSet.add(id);
+        if (!processedIds.has(id)) messageIdSet.add(id);
       }
 
       pageToken = listRes.data.nextPageToken ?? undefined;
@@ -251,7 +284,7 @@ export async function POST() {
           id: declarationPart.attachmentId,
         });
         const declarationBuffer = Buffer.from(declarationAttachment.data.data ?? "", "base64url");
-        const parsed = parseTokhaiExcel(declarationBuffer);
+        const parsed = await parseTokhaiExcel(declarationBuffer);
         const isCleared = isClearanceDecisionFile(declarationPart.filename);
         const rawSubject = getSubject(message);
         const subject = rawSubject ? extractGoodsName(rawSubject) : null;
@@ -323,6 +356,10 @@ export async function POST() {
               attachments: mergedAttachments,
             },
           });
+          await Promise.all([
+            applyCostPresetsToShipment({ shipmentId: existing.id, userId: user.id }),
+            ensureShipmentWorkflowTasks({ shipmentId: existing.id, createdByUserId: user.id }),
+          ]);
 
           updated++;
           const detail = `Cập nhật lô hàng có số tờ khai ${parsed.declarationNo}.${statusNote}`;
@@ -357,6 +394,11 @@ export async function POST() {
               attachments: savedAttachments,
             },
           });
+          await Promise.all([
+            applyCostPresetsToShipment({ shipmentId: shipment.id, userId: user.id }),
+            ensureShipmentWorkflowTasks({ shipmentId: shipment.id, createdByUserId: user.id }),
+          ]);
+          await notifyNewShipmentAssignees({ shipmentId: shipment.id, actorUserId: user.id });
 
           created++;
           const detail = `Tạo lô hàng mới từ số tờ khai ${parsed.declarationNo}.${statusNote}`;
@@ -374,6 +416,22 @@ export async function POST() {
       }
     }
 
+    let invoiceSummary: VendorInvoiceSyncSummary = {
+      scanned: 0,
+      created: 0,
+      matched: 0,
+      unmatched: 0,
+      needsReview: 0,
+      skipped: 0,
+      errors: 0,
+    };
+    try {
+      invoiceSummary = await syncVendorInvoices(gmail);
+    } catch (invoiceError) {
+      invoiceSummary.errors++;
+      console.error("Gmail vendor-invoice sync failed:", invoiceError);
+    }
+
     return apiSuccess({
       scanned,
       newlyFound: messageIds.length,
@@ -381,10 +439,18 @@ export async function POST() {
       updated,
       skipped,
       errors,
+      invoicesScanned: invoiceSummary.scanned,
+      invoicesCreated: invoiceSummary.created,
+      invoicesMatched: invoiceSummary.matched,
+      invoicesUnmatched: invoiceSummary.unmatched,
+      invoicesNeedsReview: invoiceSummary.needsReview,
+      invoiceErrors: invoiceSummary.errors,
       results,
     });
   } catch (error) {
     console.error("POST /api/gmail/sync failed:", error);
     return apiError("Đồng bộ email thất bại.", 500);
+  } finally {
+    if (ownsSyncLock) syncInProgress = false;
   }
 }

@@ -1,12 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { timingSafeEqual } from "crypto";
 import { google } from "googleapis";
 import { getCurrentUser } from "@/lib/auth";
 import { createOAuth2Client } from "@/lib/google";
 import { prisma } from "@/lib/prisma";
+import { GOOGLE_OAUTH_STATE_COOKIE } from "@/lib/google";
+import { encryptSecret } from "@/lib/secret-encryption";
+
+function statesMatch(received: string | null, expected: string | undefined) {
+  if (!received || !expected) return false;
+  const receivedBuffer = Buffer.from(received);
+  const expectedBuffer = Buffer.from(expected);
+  return receivedBuffer.length === expectedBuffer.length && timingSafeEqual(receivedBuffer, expectedBuffer);
+}
 
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
+  const state = request.nextUrl.searchParams.get("state");
   const shipmentsUrl = new URL("/shipments", request.url);
+  const cookieStore = await cookies();
+  const expectedState = cookieStore.get(GOOGLE_OAUTH_STATE_COOKIE)?.value;
+  cookieStore.set(GOOGLE_OAUTH_STATE_COOKIE, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0,
+  });
 
   // Google redirects the admin's own browser here, so the session cookie is present on the request.
   // Without this check, anyone could complete an OAuth flow with their own Gmail account and REPLACE
@@ -18,6 +39,11 @@ export async function GET(request: NextRequest) {
   }
   if (user.role !== "ADMIN") {
     shipmentsUrl.searchParams.set("gmail_error", "Chỉ Admin mới được kết nối Gmail.");
+    return NextResponse.redirect(shipmentsUrl);
+  }
+
+  if (!statesMatch(state, expectedState)) {
+    shipmentsUrl.searchParams.set("gmail_error", "Phiên kết nối Gmail không hợp lệ hoặc đã hết hạn.");
     return NextResponse.redirect(shipmentsUrl);
   }
 
@@ -45,7 +71,7 @@ export async function GET(request: NextRequest) {
 
     await prisma.gmailAuth.deleteMany({});
     await prisma.gmailAuth.create({
-      data: { email, refreshToken: tokens.refresh_token },
+      data: { email, refreshToken: encryptSecret(tokens.refresh_token) },
     });
 
     shipmentsUrl.searchParams.set("gmail_connected", email);

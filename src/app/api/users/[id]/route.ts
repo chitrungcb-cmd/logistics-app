@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getCurrentUser, hashPassword } from "@/lib/auth";
+import { getCurrentUser, hashPassword, validateNewPassword } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -21,7 +21,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       data.role = body.role;
     }
     if (body.password) {
-      if (body.password.length < 8) return apiError("Mật khẩu cần ít nhất 8 ký tự.", 400);
+      const passwordError = validateNewPassword(body.password);
+      if (passwordError) return apiError(passwordError, 400);
       data.passwordHash = await hashPassword(body.password);
     }
     if (typeof body.isActive === "boolean") {

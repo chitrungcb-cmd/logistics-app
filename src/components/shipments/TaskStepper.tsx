@@ -1,15 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { SHIPMENT_TASK_STEPS, TASK_STATUS_LABELS } from "@/lib/task-constants";
 
 const POLL_MS = 15000;
 
 type StepTask = {
   id: string;
   status: string;
+  createdAt: string;
   updatedAt: string;
   assignedTo: { id: string; name: string };
+  statusLogs: Array<{
+    id: string;
+    fromStatus: string;
+    toStatus: string;
+    createdAt: string;
+    actor: { id: string; name: string };
+  }>;
 } | null;
 
 type Step = { title: string; task: StepTask };
@@ -26,28 +35,38 @@ function circleClassFor(status: string) {
 }
 
 export default function TaskStepper({ shipmentId }: { shipmentId: string }) {
-  const router = useRouter();
-  const [steps, setSteps] = useState<Step[]>([]);
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [steps, setSteps] = useState<Step[]>(() =>
+    SHIPMENT_TASK_STEPS.map((title) => ({ title, task: null }))
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
 
   useEffect(() => {
     function load() {
       fetch(`/api/shipments/${shipmentId}/task-steps`)
         .then((res) => res.json())
         .then((json) => {
-          if (json.success) setSteps(json.data);
+          if (!json.success) throw new Error(json.error || "Không thể tải tiến trình.");
+          setSteps(json.data);
+          setLoadError(null);
         })
-        .catch(() => {});
+        .catch((error) => setLoadError(error instanceof Error ? error.message : "Không thể tải tiến trình."));
     }
     load();
     const interval = setInterval(load, POLL_MS);
     return () => clearInterval(interval);
   }, [shipmentId]);
 
-  if (steps.length === 0) return null;
+  const selectedStep = selectedIndex === null ? null : steps[selectedIndex];
 
   return (
-    <div className="flex items-start">
+    <div>
+      {loadError && (
+        <p className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          ⚠ {loadError} Hệ thống sẽ tự thử lại.
+        </p>
+      )}
+      <div className="flex items-start">
       {steps.map((step, index) => {
         const status = step.task?.status ?? "TODO";
         const isDone = status === "DONE";
@@ -56,37 +75,19 @@ export default function TaskStepper({ shipmentId }: { shipmentId: string }) {
           <div key={step.title} className={`flex items-start ${index < steps.length - 1 ? "flex-1" : ""}`}>
             <div
               className="relative flex flex-col items-center"
-              onMouseEnter={() => setHoveredIndex(index)}
-              onMouseLeave={() => setHoveredIndex((prev) => (prev === index ? null : prev))}
             >
               <button
                 type="button"
-                onClick={() => step.task && router.push(`/tasks/${step.task.id}`)}
+                onClick={() => setSelectedIndex((current) => (current === index ? null : index))}
                 className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 text-sm font-semibold transition ${circleClassFor(
                   status
-                )} ${step.task ? "cursor-pointer hover:opacity-80" : "cursor-default"}`}
+                )} cursor-pointer hover:opacity-80 ${selectedIndex === index ? "ring-4 ring-blue-100" : ""}`}
               >
                 {status === "DONE" ? "✓" : status === "IN_PROGRESS" ? "⏳" : index + 1}
               </button>
               <span className="mt-1 max-w-[84px] text-center text-[11px] leading-tight text-gray-600">
                 {step.title}
               </span>
-
-              {hoveredIndex === index && (
-                <div className="absolute top-11 z-10 w-48 rounded-md border border-gray-200 bg-white p-2 text-xs shadow-lg">
-                  <p className="font-medium text-gray-900">{step.title}</p>
-                  {step.task ? (
-                    <>
-                      <p className="mt-0.5 text-gray-500">Người phụ trách: {step.task.assignedTo.name}</p>
-                      <p className="text-gray-400">
-                        Cập nhật: {new Date(step.task.updatedAt).toLocaleString("vi-VN")}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="mt-0.5 text-gray-400">Chưa tạo nhiệm vụ này.</p>
-                  )}
-                </div>
-              )}
             </div>
 
             {index < steps.length - 1 && (
@@ -95,6 +96,42 @@ export default function TaskStepper({ shipmentId }: { shipmentId: string }) {
           </div>
         );
       })}
+      </div>
+
+      {selectedStep && (
+        <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/50 p-4 text-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-semibold text-gray-900">{selectedStep.title}</p>
+              {selectedStep.task ? (
+                <>
+                  <p className="mt-1 text-gray-600">Người phụ trách: <span className="font-medium">{selectedStep.task.assignedTo.name}</span></p>
+                  <p className="text-gray-500">Trạng thái: {TASK_STATUS_LABELS[selectedStep.task.status] ?? selectedStep.task.status}</p>
+                </>
+              ) : <p className="mt-1 text-gray-500">Chưa tạo nhiệm vụ và chưa có người phụ trách.</p>}
+            </div>
+            {selectedStep.task && <Link href={`/tasks/${selectedStep.task.id}`} className="text-blue-600 hover:underline">Mở nhiệm vụ →</Link>}
+          </div>
+          {selectedStep.task && (
+            <div className="mt-3 border-t border-blue-100 pt-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Lịch sử tiến trình</p>
+              <ul className="space-y-2">
+                {selectedStep.task.statusLogs.map((log) => (
+                  <li key={log.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="text-gray-700">
+                      {TASK_STATUS_LABELS[log.fromStatus] ?? log.fromStatus} → <span className="font-medium">{TASK_STATUS_LABELS[log.toStatus] ?? log.toStatus}</span> · {log.actor.name}
+                    </span>
+                    <span className="text-gray-400">{new Date(log.createdAt).toLocaleString("vi-VN")}</span>
+                  </li>
+                ))}
+                {selectedStep.task.statusLogs.length === 0 && (
+                  <li className="text-xs text-gray-400">Chưa có lần thay đổi trạng thái nào được ghi nhận.</li>
+                )}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 export type ParsedDeclaration = {
   declarationNo: string;
@@ -41,12 +41,50 @@ const STORAGE_LOCATION_PORT_MAP: Record<string, string> = {
 
 type Rows = string[][];
 
-function cellsToRows(sheet: XLSX.WorkSheet): Rows {
-  return XLSX.utils.sheet_to_json<string[]>(sheet, {
-    header: 1,
-    raw: false,
-    blankrows: false,
+const MAX_WORKBOOK_BYTES = 10 * 1024 * 1024;
+const MAX_WORKSHEETS = 20;
+const MAX_ROWS_PER_SHEET = 10_000;
+const MAX_COLUMNS_PER_SHEET = 256;
+
+function cellText(cell: ExcelJS.Cell) {
+  if (cell.isMerged && cell.master !== cell) return "";
+  try {
+    return cell.text ?? "";
+  } catch {
+    const value = cell.value;
+    if (value == null) return "";
+    if (value instanceof Date) return value.toLocaleDateString("vi-VN");
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    if (typeof value === "object" && "result" in value && value.result != null) {
+      return String(value.result);
+    }
+    if (typeof value === "object" && "richText" in value && Array.isArray(value.richText)) {
+      return value.richText.map((part) => part.text).join("");
+    }
+    if (typeof value === "object" && "text" in value && typeof value.text === "string") {
+      return value.text;
+    }
+    return "";
+  }
+}
+
+function cellsToRows(sheet: ExcelJS.Worksheet): Rows {
+  if (sheet.rowCount > MAX_ROWS_PER_SHEET || sheet.columnCount > MAX_COLUMNS_PER_SHEET) {
+    throw new Error("Tệp tờ khai vượt quá giới hạn dòng hoặc cột an toàn.");
+  }
+
+  const rows: Rows = [];
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    const values: string[] = [];
+    const lastColumn = Math.min(row.cellCount, MAX_COLUMNS_PER_SHEET);
+    for (let column = 1; column <= lastColumn; column++) {
+      values.push(cellText(row.getCell(column)));
+    }
+    rows.push(values);
   });
+  return rows;
 }
 
 /** Finds a cell matching `label` exactly, returns up to `count` non-empty cells after it in the same row. */
@@ -205,11 +243,20 @@ function parseInstructions(rows: Rows): { consultationDate: Date | null; hasStor
  * Returns null if the file doesn't contain a "Số tờ khai" (declaration number) — i.e. it isn't
  * actually a declaration printout, so callers shouldn't trust it as a match/creation source.
  */
-export function parseTokhaiExcel(buffer: Buffer): ParsedDeclaration | null {
-  const workbook = XLSX.read(buffer, { type: "buffer", cellText: true });
+export async function parseTokhaiExcel(buffer: Buffer): Promise<ParsedDeclaration | null> {
+  if (buffer.length === 0 || buffer.length > MAX_WORKBOOK_BYTES) {
+    throw new Error("Tệp tờ khai trống hoặc vượt quá 10MB.");
+  }
 
-  for (const sheetName of workbook.SheetNames) {
-    const rows = cellsToRows(workbook.Sheets[sheetName]);
+  const workbook = new ExcelJS.Workbook();
+  // ExcelJS bundles Buffer typings from an older @types/node release; runtime accepts Node Buffer.
+  await workbook.xlsx.load(buffer as never);
+  if (workbook.worksheets.length > MAX_WORKSHEETS) {
+    throw new Error("Tệp tờ khai có quá nhiều trang tính.");
+  }
+
+  for (const sheet of workbook.worksheets) {
+    const rows = cellsToRows(sheet);
     const declarationNo = findLabelValue(rows, "Số tờ khai");
     if (!declarationNo) continue;
 

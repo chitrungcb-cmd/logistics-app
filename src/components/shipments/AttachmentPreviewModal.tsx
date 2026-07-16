@@ -1,12 +1,44 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Attachment } from "@/lib/shipment-constants";
 
 type SheetPreview = { name: string; html: string };
 
 function getExtension(name: string) {
   return name.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function DownloadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current" strokeWidth="1.8">
+      <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6 fill-none stroke-current" strokeWidth="1.8">
+      <path d="m6 6 12 12M18 6 6 18" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function FileIcon({ extension }: { extension: string }) {
+  const label = extension ? extension.slice(0, 4).toUpperCase() : "FILE";
+  const isExcel = ["xlsx", "xls", "csv"].includes(extension);
+
+  return (
+    <span
+      className={`inline-flex h-8 min-w-8 shrink-0 items-center justify-center rounded px-1.5 text-[9px] font-bold tracking-wide text-white ${
+        isExcel ? "bg-emerald-600" : extension === "pdf" ? "bg-red-600" : "bg-blue-600"
+      }`}
+      aria-hidden="true"
+    >
+      {label}
+    </span>
+  );
 }
 
 export default function AttachmentPreviewModal({
@@ -22,15 +54,35 @@ export default function AttachmentPreviewModal({
   const isSpreadsheet = ext === "xlsx";
   const isPreviewable = isPdf || isImage || isSpreadsheet;
 
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [sheets, setSheets] = useState<SheetPreview[] | null>(null);
   const [activeSheet, setActiveSheet] = useState(0);
-  // Starts true when this instance opens on a spreadsheet — remounted fresh per attachment (see the
-  // `key` prop callers pass), so there's no stale-state case an effect would otherwise need to reset.
+  // Callers remount the modal with an attachment URL key, keeping file-specific state isolated.
   const [isLoading, setIsLoading] = useState(isSpreadsheet);
   const [error, setError] = useState<string | null>(null);
   const [pdfObjectUrl, setPdfObjectUrl] = useState<string | null>(null);
   const [isPdfLoading, setIsPdfLoading] = useState(isPdf);
   const [pdfError, setPdfError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!attachment) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.body.style.overflow = "hidden";
+    dialogRef.current?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [attachment, onClose]);
 
   useEffect(() => {
     if (!attachment || !isPdf) return;
@@ -46,8 +98,6 @@ export default function AttachmentPreviewModal({
         if ((await sourceBlob.slice(0, 5).text()) !== "%PDF-") {
           throw new Error("Tệp trả về không phải định dạng PDF hợp lệ.");
         }
-        // Some static hosts return application/octet-stream even for a valid PDF. Give the
-        // in-memory URL an explicit type so Chrome's built-in viewer can render it consistently.
         const blob = sourceBlob.type.toLowerCase().includes("pdf")
           ? sourceBlob
           : new Blob([sourceBlob], { type: "application/pdf" });
@@ -73,119 +123,168 @@ export default function AttachmentPreviewModal({
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-    // The modal is remounted with a key when the selected attachment changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachment?.url, isPdf]);
+  }, [attachment, isPdf]);
 
   useEffect(() => {
     if (!attachment || !isSpreadsheet) return;
 
-    fetch(`/api/attachments/preview?url=${encodeURIComponent(attachment.url)}`)
-      .then((res) => res.json())
-      .then((json) => {
-        if (!json.success) throw new Error(json.error || "Không thể xem trước tệp.");
-        setSheets(json.data.sheets);
+    const controller = new AbortController();
+    fetch(`/api/attachments/preview?url=${encodeURIComponent(attachment.url)}`, {
+      credentials: "same-origin",
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(json.error || "Không thể xem trước tệp.");
+        return json.data.sheets as SheetPreview[];
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra."))
-      .finally(() => setIsLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachment?.url]);
+      .then((nextSheets) => {
+        if (nextSheets.length === 0) throw new Error("Tệp không có trang tính để hiển thị.");
+        setSheets(nextSheets);
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [attachment, isSpreadsheet]);
 
   if (!attachment) return null;
 
+  const activeSheetData = sheets?.[activeSheet] ?? sheets?.[0];
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Xem trước ${attachment.name}`}
+      tabIndex={-1}
+      className="fixed inset-0 z-[100] flex flex-col bg-[#202124]/95 text-white outline-none"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
     >
-      <div
-        className={`flex h-full max-h-[90vh] w-full flex-col rounded-lg bg-white shadow-xl ${
-          isSpreadsheet ? "max-w-[95vw]" : "max-w-4xl"
-        }`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-          <h3 className="truncate text-sm font-medium text-gray-900">{attachment.name}</h3>
-          <div className="flex items-center gap-3">
-            <a
-              href={attachment.url}
-              download={attachment.name}
-              className="text-sm text-blue-600 hover:underline"
-            >
-              Tải xuống
-            </a>
-            <button
-              type="button"
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600"
-              aria-label="Đóng"
-            >
-              ✕
-            </button>
+      <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-white/10 px-3 sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <FileIcon extension={ext} />
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-medium text-white sm:text-base">{attachment.name}</h2>
+            <p className="hidden text-xs text-white/55 sm:block">Xem trước tệp đính kèm</p>
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto p-4">
-          {isPdf && isPdfLoading && <p className="text-center text-gray-400">Đang tải PDF...</p>}
-          {isPdf && pdfError && <p className="text-center text-red-600">{pdfError}</p>}
-          {isPdf && pdfObjectUrl && (
-            <iframe src={pdfObjectUrl} className="h-full min-h-[70vh] w-full" title={attachment.name} />
-          )}
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+          <a
+            href={attachment.url}
+            download={attachment.name}
+            className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm font-medium text-white/90 hover:bg-white/10 hover:text-white"
+            aria-label={`Tải xuống ${attachment.name}`}
+          >
+            <DownloadIcon />
+            <span className="hidden sm:inline">Tải xuống</span>
+          </a>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full text-white/80 hover:bg-white/10 hover:text-white"
+            aria-label="Đóng trình xem"
+            title="Đóng (Esc)"
+          >
+            <CloseIcon />
+          </button>
+        </div>
+      </header>
 
-          {isImage && (
-            // Unknown natural size (arbitrary uploaded file) — next/image needs fixed dimensions or a sized fill parent.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={attachment.url} alt={attachment.name} className="mx-auto max-h-full max-w-full" />
-          )}
+      <main className="flex min-h-0 flex-1 items-center justify-center p-2 sm:p-5">
+        {isPdf && isPdfLoading && <p className="text-sm text-white/65">Đang tải PDF...</p>}
+        {isPdf && pdfError && <p className="rounded-lg bg-red-950/70 px-4 py-3 text-sm text-red-100">{pdfError}</p>}
+        {isPdf && pdfObjectUrl && (
+          <iframe
+            src={pdfObjectUrl}
+            className="h-full w-full max-w-[1440px] rounded-lg bg-white shadow-2xl"
+            title={attachment.name}
+          />
+        )}
 
-          {isSpreadsheet && (
-            <>
-              {isLoading && <p className="text-center text-gray-400">Đang tải...</p>}
-              {error && <p className="text-center text-red-600">{error}</p>}
-              {sheets && sheets.length > 0 && (
-                <div>
-                  {sheets.length > 1 && (
-                    <div className="mb-3 flex gap-2 border-b border-gray-200">
-                      {sheets.map((sheet, index) => (
-                        <button
-                          key={sheet.name}
-                          type="button"
-                          onClick={() => setActiveSheet(index)}
-                          className={`px-3 py-1.5 text-sm font-medium ${
-                            index === activeSheet
-                              ? "border-b-2 border-blue-600 text-blue-600"
-                              : "text-gray-500 hover:text-gray-700"
-                          }`}
-                        >
-                          {sheet.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {/* Safe HTML returned by the authenticated Excel preview endpoint. */}
+        {isImage && (
+          // Arbitrary uploaded dimensions cannot be known ahead of time for next/image.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={attachment.url}
+            alt={attachment.name}
+            className="max-h-full max-w-full rounded-sm object-contain shadow-2xl"
+          />
+        )}
+
+        {isSpreadsheet && (
+          <section className="flex h-full min-h-0 w-full max-w-[1800px] flex-col overflow-hidden rounded-lg bg-white text-gray-900 shadow-2xl">
+            {isLoading && <p className="m-auto text-sm text-gray-500">Đang mở bảng tính...</p>}
+            {error && (
+              <div className="m-auto flex max-w-md flex-col items-center gap-3 px-5 text-center">
+                <p className="text-sm text-red-600">{error}</p>
+                <a
+                  href={attachment.url}
+                  download={attachment.name}
+                  className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                >
+                  Tải xuống để xem
+                </a>
+              </div>
+            )}
+            {sheets && activeSheetData && (
+              <>
+                <nav className="flex min-h-12 shrink-0 items-end gap-1 overflow-x-auto border-b border-gray-200 px-4" aria-label="Trang tính">
+                  {sheets.map((sheet, index) => (
+                    <button
+                      key={`${sheet.name}-${index}`}
+                      type="button"
+                      onClick={() => setActiveSheet(index)}
+                      className={`h-12 shrink-0 border-b-2 px-3 text-sm font-medium transition-colors ${
+                        index === activeSheet
+                          ? "border-blue-600 text-blue-600"
+                          : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-800"
+                      }`}
+                      aria-current={index === activeSheet ? "page" : undefined}
+                    >
+                      {sheet.name}
+                    </button>
+                  ))}
+                </nav>
+                <div className="min-h-0 flex-1 overflow-auto bg-[#f8fafd] p-3 sm:p-5">
+                  {/* Cell text is escaped by the authenticated Excel preview endpoint. */}
                   <div
-                    className="overflow-x-auto text-xs [&_table]:border-collapse [&_td]:border [&_td]:border-gray-200 [&_td]:px-1.5 [&_td]:py-0.5 [&_td]:align-top [&_td]:whitespace-nowrap"
-                    dangerouslySetInnerHTML={{ __html: sheets[activeSheet].html }}
+                    className="w-max min-w-full rounded-sm bg-white text-xs shadow-sm [&_table]:min-w-full [&_td]:border [&_td]:border-gray-200 [&_td]:px-1.5 [&_td]:py-1 [&_td]:align-middle"
+                    dangerouslySetInnerHTML={{ __html: activeSheetData.html }}
                   />
                 </div>
-              )}
-            </>
-          )}
+              </>
+            )}
+          </section>
+        )}
 
-          {!isPreviewable && (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-500">
-              <p>Không thể xem trước loại tệp này.</p>
-              <a
-                href={attachment.url}
-                download={attachment.name}
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                Tải xuống để xem
-              </a>
+        {!isPreviewable && (
+          <div className="flex max-w-md flex-col items-center justify-center gap-4 rounded-xl bg-white/10 px-8 py-10 text-center text-white/80">
+            <FileIcon extension={ext} />
+            <div>
+              <p className="font-medium text-white">Chưa thể xem trực tiếp loại tệp này</p>
+              <p className="mt-1 text-sm text-white/60">Bạn vẫn có thể tải tệp xuống để mở trên thiết bị.</p>
             </div>
-          )}
-        </div>
-      </div>
+            <a
+              href={attachment.url}
+              download={attachment.name}
+              className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-100"
+            >
+              <DownloadIcon />
+              Tải xuống
+            </a>
+          </div>
+        )}
+      </main>
     </div>
   );
 }

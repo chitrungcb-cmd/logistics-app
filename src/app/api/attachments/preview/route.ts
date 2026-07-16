@@ -10,6 +10,8 @@ const MAX_PREVIEW_SHEETS = 20;
 const MAX_PREVIEW_ROWS = 2_000;
 const MAX_PREVIEW_COLUMNS = 128;
 
+export const runtime = "nodejs";
+
 type MergeCell = { covered: boolean; rowSpan: number; colSpan: number };
 
 function cellText(cell: ExcelJS.Cell) {
@@ -43,6 +45,80 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function colorToCss(color?: Partial<ExcelJS.Color>) {
+  const argb = color?.argb;
+  if (!argb || !/^[0-9a-f]{8}$/i.test(argb)) return null;
+  return `#${argb.slice(2)}`;
+}
+
+function borderToCss(border?: Partial<ExcelJS.Border>) {
+  if (!border?.style) return null;
+
+  const width = ["medium", "mediumDashed", "mediumDashDot", "mediumDashDotDot"].includes(border.style)
+    ? 2
+    : ["thick", "double"].includes(border.style)
+      ? 3
+      : 1;
+  const lineStyle = ["dotted", "hair"].includes(border.style)
+    ? "dotted"
+    : ["dashed", "mediumDashed", "dashDot", "dashDotDot", "slantDashDot", "mediumDashDot", "mediumDashDotDot"].includes(border.style)
+      ? "dashed"
+      : border.style === "double"
+        ? "double"
+        : "solid";
+  return `${width}px ${lineStyle} ${colorToCss(border.color) ?? "#d1d5db"}`;
+}
+
+function cellStyle(cell: ExcelJS.Cell) {
+  const styles: string[] = [];
+  const font = cell.font;
+  const alignment = cell.alignment;
+  const borders = cell.border;
+
+  if (font?.bold) styles.push("font-weight:700");
+  if (font?.italic) styles.push("font-style:italic");
+  if (font?.size && Number.isFinite(font.size)) {
+    styles.push(`font-size:${Math.max(6, Math.min(48, font.size))}pt`);
+  }
+  const fontColor = colorToCss(font?.color);
+  if (fontColor) styles.push(`color:${fontColor}`);
+
+  const decorations: string[] = [];
+  if (font?.underline && font.underline !== "none") decorations.push("underline");
+  if (font?.strike) decorations.push("line-through");
+  if (decorations.length > 0) styles.push(`text-decoration:${decorations.join(" ")}`);
+
+  if (cell.fill?.type === "pattern" && cell.fill.pattern !== "none") {
+    const backgroundColor = colorToCss(cell.fill.fgColor ?? cell.fill.bgColor);
+    if (backgroundColor) styles.push(`background-color:${backgroundColor}`);
+  }
+
+  if (alignment?.horizontal && ["left", "center", "right", "justify"].includes(alignment.horizontal)) {
+    styles.push(`text-align:${alignment.horizontal}`);
+  }
+  if (alignment?.vertical) {
+    const vertical = alignment.vertical === "middle" ? "middle" : alignment.vertical === "bottom" ? "bottom" : "top";
+    styles.push(`vertical-align:${vertical}`);
+  }
+  styles.push(alignment?.wrapText ? "white-space:normal" : "white-space:nowrap");
+  if (alignment?.indent && Number.isFinite(alignment.indent)) {
+    styles.push(`padding-left:${Math.max(0, Math.min(20, alignment.indent)) * 10 + 6}px`);
+  }
+
+  const borderEntries: Array<[string, Partial<ExcelJS.Border> | undefined]> = [
+    ["top", borders?.top],
+    ["right", borders?.right],
+    ["bottom", borders?.bottom],
+    ["left", borders?.left],
+  ];
+  for (const [side, border] of borderEntries) {
+    const css = borderToCss(border);
+    if (css) styles.push(`border-${side}:${css}`);
+  }
+
+  return styles.join(";");
 }
 
 function columnNumber(letters: string) {
@@ -110,10 +186,16 @@ function worksheetToSafeHtml(sheet: ExcelJS.Worksheet) {
         merge && merge.rowSpan > 1 ? ` rowspan="${merge.rowSpan}"` : "",
         merge && merge.colSpan > 1 ? ` colspan="${merge.colSpan}"` : "",
       ].join("");
-      const value = escapeHtml(cellText(sheet.getCell(rowNumber, columnNumber)));
-      cells.push(`<td${attributes}>${value}</td>`);
+      const cell = sheet.getCell(rowNumber, columnNumber);
+      const value = escapeHtml(cellText(cell));
+      const style = cellStyle(cell);
+      cells.push(`<td${attributes}${style ? ` style="${style}"` : ""}>${value}</td>`);
     }
-    rows.push(`<tr>${cells.join("")}</tr>`);
+    const height = sheet.getRow(rowNumber).height;
+    const rowStyle = height && Number.isFinite(height)
+      ? ` style="height:${Math.max(12, Math.min(240, Math.round(height * 1.333)))}px"`
+      : "";
+    rows.push(`<tr${rowStyle}>${cells.join("")}</tr>`);
   }
 
   return `<table style="table-layout:fixed;border-collapse:collapse"><colgroup>${columns}</colgroup><tbody>${rows.join("")}</tbody></table>`;

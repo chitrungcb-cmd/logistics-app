@@ -4,22 +4,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { CurrentUser } from "@/lib/auth";
 import NotificationBell from "@/components/NotificationBell";
+import { APP_MODULES, hasModuleAccess } from "@/lib/module-permissions";
 
-const NAV_ITEMS = [
-  { label: "Tổng quan", href: "/", icon: "🏠" },
-  { label: "Khách hàng", href: "/customers", icon: "👥" },
-  { label: "Lô hàng", href: "/shipments", icon: "📦" },
-  { label: "Nhiệm vụ", href: "/tasks", icon: "✅" },
-  { label: "Tin nhắn", href: "/messages", icon: "💬" },
-  { label: "Chi phí", href: "/costs", icon: "💰" },
-  { label: "Kho chứng từ", href: "/documents", icon: "🗂️" },
-  { label: "Báo cáo", href: "/reports", icon: "📊" },
-  { label: "Đối tác", href: "/partners", icon: "🤝" },
-  { label: "Cài đặt", href: "/settings", icon: "⚙️" },
-];
-
-const DEBTS_NAV_ITEM = { label: "Công nợ", href: "/debts", icon: "📒" };
-const USERS_NAV_ITEM = { label: "Người dùng", href: "/users", icon: "🛡️" };
+const DASHBOARD_NAV_ITEM = { label: "Tổng quan", href: "/", icon: "🏠" };
 
 const ROLE_LABELS: Record<string, string> = {
   ADMIN: "Quản trị viên",
@@ -38,13 +25,10 @@ export default function Sidebar({ user }: { user: CurrentUser | null }) {
   const pathname = usePathname();
   const router = useRouter();
 
-  const navItems = [...NAV_ITEMS];
-  if (user?.role === "ADMIN" || user?.role === "ACCOUNTANT") {
-    navItems.splice(6, 0, DEBTS_NAV_ITEM);
-  }
-  if (user?.role === "ADMIN") {
-    navItems.push(USERS_NAV_ITEM);
-  }
+  const navItems = [
+    DASHBOARD_NAV_ITEM,
+    ...APP_MODULES.filter((module) => user && hasModuleAccess(user, module.key)),
+  ];
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });

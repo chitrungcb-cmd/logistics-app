@@ -2,6 +2,12 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser, hashPassword, validateNewPassword } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import {
+  getRoleModules,
+  hasOnlyValidModulePermissions,
+  normalizeModulePermissions,
+} from "@/lib/module-permissions";
+import type { UserRole } from "@/generated/prisma/enums";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -12,6 +18,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const { id } = await params;
     const body = await request.json();
     const data: Record<string, unknown> = {};
+    const existing = await prisma.user.findUnique({ where: { id }, select: { role: true } });
+    if (!existing) return apiError("Không tìm thấy người dùng.", 404);
 
     if (body.name) data.name = body.name;
     if (body.role) {
@@ -19,6 +27,15 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         return apiError("Vai trò không hợp lệ.", 400);
       }
       data.role = body.role;
+    }
+    const nextRole = (body.role ?? existing.role) as UserRole;
+    const requestedPermissions = body.modulePermissions ??
+      (body.role && body.role !== existing.role ? getRoleModules(nextRole) : undefined);
+    if (requestedPermissions !== undefined) {
+      if (!hasOnlyValidModulePermissions(requestedPermissions, nextRole)) {
+        return apiError("Danh sách quyền mô-đun không hợp lệ với vai trò đã chọn.", 400);
+      }
+      data.modulePermissions = normalizeModulePermissions(requestedPermissions, nextRole);
     }
     if (body.password) {
       const passwordError = validateNewPassword(body.password);
@@ -40,7 +57,15 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const updated = await prisma.user.update({
       where: { id },
       data,
-      select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        modulePermissions: true,
+        isActive: true,
+        createdAt: true,
+      },
     });
     return apiSuccess(updated);
   } catch (error) {

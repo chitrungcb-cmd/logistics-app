@@ -29,38 +29,38 @@ model Customer {
 }
 
 model Shipment {
-  id              String   @id @default(cuid())
-  shipmentCode    String   @unique
-  customerName    String
-  customer        Customer? @relation(fields: [customerId], references: [id])
-  customerId      String?
-  taxCode         String?
-  declarationNo   String?
-  declarationDate DateTime?
-  invoiceNo       String?
-  customsType     String?
-  port            String?
-  goodsName       String?
-  channel         String?
-  status          String   @default("Đang làm thủ tục")
-  customsOffice   String?
-  transport       String?
-  transportRoute  String?
-  vehiclePlate    String?
-  totalAmount     Float    @default(0)
-  attachments     Json?
-  note            String?
-  consultationDate DateTime?
+  id                  String              @id @default(cuid())
+  shipmentCode        String              @unique
+  customerName        String
+  customer            Customer?           @relation(fields: [customerId], references: [id])
+  customerId          String?
+  taxCode             String?
+  declarationNo       String?
+  declarationDate     DateTime?
+  invoiceNo           String?
+  customsType         String?
+  port                String?
+  goodsName           String?
+  channel             String?
+  status              String              @default("Đang làm thủ tục")
+  customsOffice       String?
+  transport           String?
+  transportRoute      String?
+  vehiclePlate        String?
+  totalAmount         Float               @default(0)
+  attachments         Json?
+  note                String?
+  consultationDate    DateTime?
   declarationBranches Json?
-  tasks           Task[]
-  notifications   Notification[]
-  costs           ShipmentCost[]
-  quotes          Quote[]
-  quoteLines      ShipmentQuoteLine[]
-  conversations   Conversation[]
-  debts           Debt[]
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  tasks               Task[]
+  notifications       Notification[]
+  costs               ShipmentCost[]
+  quotes              Quote[]
+  quoteLines          ShipmentQuoteLine[]
+  conversations       Conversation[]
+  debts               Debt[]
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 }
 
 enum CostCategory {
@@ -80,30 +80,30 @@ enum CostCategory {
 // already covered by the quote don't get counted twice. ADMIN-only data (see CLAUDE.md "Profit
 // visibility"): ACCOUNTANT must never see costPrice or anything profit-derived from it.
 model ShipmentCost {
-  id            String       @id @default(cuid())
-  shipment      Shipment     @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  shipmentId    String
-  category      CostCategory
-  unitPrice     Float        @default(0)
-  quantity      Float        @default(1)
+  id             String          @id @default(cuid())
+  shipment       Shipment        @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  shipmentId     String
+  category       CostCategory
+  unitPrice      Float           @default(0)
+  quantity       Float           @default(1)
   // Always server-computed as unitPrice * quantity (see /api/costs) — never accept this directly
   // from a client write.
-  costPrice     Float        @default(0)
-  sellPrice     Float        @default(0)
-  isAdditional  Boolean      @default(false)
+  costPrice      Float           @default(0)
+  sellPrice      Float           @default(0)
+  isAdditional   Boolean         @default(false)
   // Preset-generated rows remain estimates until a user edits or explicitly confirms them.
-  isActual      Boolean      @default(true)
-  invoiceNumber String?
-  attachmentUrl String?
-  note          String?
-  vendor        Vendor?      @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  vendorId      String?
-  preset        CostPreset?  @relation(fields: [presetId], references: [id], onDelete: SetNull)
-  presetId      String?
-  auditLogs     CostAuditLog[]
+  isActual       Boolean         @default(true)
+  invoiceNumber  String?
+  attachmentUrl  String?
+  note           String?
+  vendor         Vendor?         @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorId       String?
+  preset         CostPreset?     @relation(fields: [presetId], references: [id], onDelete: SetNull)
+  presetId       String?
+  auditLogs      CostAuditLog[]
   vendorInvoices VendorInvoice[]
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@unique([shipmentId, presetId])
   @@index([vendorId])
@@ -179,37 +179,37 @@ enum QuoteLineCategory {
 // Bảng báo giá hiện hành theo bốn hạng mục cố định. Tách khỏi ShipmentCost để chi phí nội bộ và
 // báo giá khách hàng có thể sửa độc lập trong cùng màn hình.
 model ShipmentQuoteLine {
-  id         String            @id @default(cuid())
-  shipment   Shipment          @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  shipmentId String
-  category   QuoteLineCategory?
+  id          String             @id @default(cuid())
+  shipment    Shipment           @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  shipmentId  String
+  category    QuoteLineCategory?
   description String
-  quantity   Float             @default(1)
-  unit       String?
-  unitPrice  Float             @default(0)
-  amount     Float             @default(0)
-  hasInvoice Boolean           @default(false)
-  note       String?
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
+  quantity    Float              @default(1)
+  unit        String?
+  unitPrice   Float              @default(0)
+  amount      Float              @default(0)
+  hasInvoice  Boolean            @default(false)
+  note        String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
 }
 
 // Đối tác NQ Logistics trả tiền cho (hãng vận tải/kho bãi/đại lý hải quan/khác) — free-text `type`
 // rather than an enum since this list isn't as fixed as CostCategory.
 model Vendor {
-  id        String   @id @default(cuid())
-  name      String
-  type      String?
-  phone     String?
-  address   String?
-  taxCode   String?
-  note      String?
-  debts     Debt[]
+  id            String          @id @default(cuid())
+  name          String
+  type          String?
+  phone         String?
+  address       String?
+  taxCode       String?
+  note          String?
+  debts         Debt[]
   shipmentCosts ShipmentCost[]
   costPresets   CostPreset[]
   invoices      VendorInvoice[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 }
 
 enum InvoiceReconciliationStatus {
@@ -221,36 +221,36 @@ enum InvoiceReconciliationStatus {
 // Hóa đơn đầu vào được đọc từ email gửi cho NQ Logistics. sourceKey là khóa Gmail + attachment
 // giúp đồng bộ lặp lại an toàn; shipmentCostId được tự động ghép theo số hóa đơn và nhà cung cấp.
 model VendorInvoice {
-  id              String                      @id @default(cuid())
-  sourceKey       String                      @unique
-  gmailMessageId  String
-  gmailThreadId   String?
-  emailSubject    String?
-  emailFrom       String?
-  vendor          Vendor?                     @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  vendorId        String?
-  shipmentCost    ShipmentCost?               @relation(fields: [shipmentCostId], references: [id], onDelete: SetNull)
-  shipmentCostId  String?
-  sellerName      String?
-  sellerTaxCode   String?
-  buyerName       String?
-  buyerTaxCode    String?
-  isIssuedToNq    Boolean?
-  invoiceNumber   String?
-  invoiceSymbol   String?
-  invoiceDate     DateTime?
-  subtotal        Float?
-  taxAmount       Float?
-  totalAmount     Float?
-  currency        String                      @default("VND")
-  attachmentName  String
-  attachmentUrl   String
-  xmlUrl          String?
-  pdfUrl          String?
-  status          InvoiceReconciliationStatus @default(NEEDS_REVIEW)
-  note            String?
-  createdAt       DateTime                    @default(now())
-  updatedAt       DateTime                    @updatedAt
+  id             String                      @id @default(cuid())
+  sourceKey      String                      @unique
+  gmailMessageId String
+  gmailThreadId  String?
+  emailSubject   String?
+  emailFrom      String?
+  vendor         Vendor?                     @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorId       String?
+  shipmentCost   ShipmentCost?               @relation(fields: [shipmentCostId], references: [id], onDelete: SetNull)
+  shipmentCostId String?
+  sellerName     String?
+  sellerTaxCode  String?
+  buyerName      String?
+  buyerTaxCode   String?
+  isIssuedToNq   Boolean?
+  invoiceNumber  String?
+  invoiceSymbol  String?
+  invoiceDate    DateTime?
+  subtotal       Float?
+  taxAmount      Float?
+  totalAmount    Float?
+  currency       String                      @default("VND")
+  attachmentName String
+  attachmentUrl  String
+  xmlUrl         String?
+  pdfUrl         String?
+  status         InvoiceReconciliationStatus @default(NEEDS_REVIEW)
+  note           String?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
 
   @@index([gmailMessageId])
   @@index([vendorId])
@@ -317,29 +317,31 @@ enum UserRole {
 }
 
 model User {
-  id                String         @id @default(cuid())
-  email             String         @unique
-  passwordHash      String
-  name              String
-  role              UserRole       @default(FIELD_STAFF)
+  id                      String               @id @default(cuid())
+  email                   String               @unique
+  passwordHash            String
+  name                    String
+  role                    UserRole             @default(FIELD_STAFF)
+  // Danh sách mô-đun được phép mở. Vai trò vẫn quyết định các thao tác nhạy cảm bên trong mô-đun.
+  modulePermissions       String[]             @default([])
   // Soft lock instead of delete (audit 3.3): a departed employee is locked, not deleted, so their
   // task/message history stays intact and no FK constraints break. A locked user can't log in and
   // getCurrentUser() treats them as unauthenticated, so any live session stops working immediately.
-  isActive          Boolean        @default(true)
-  tasksAssigned     Task[]         @relation("AssignedTasks")
-  tasksCreated      Task[]         @relation("CreatedTasks")
-  customersAssigned Customer[]     @relation("CustomerAssignments")
-  notifications     Notification[]
-  costAuditLogs     CostAuditLog[]
-  taskStatusLogs    TaskStatusLog[]
-  conversationsCreated Conversation[]      @relation("CreatedConversations")
+  isActive                Boolean              @default(true)
+  tasksAssigned           Task[]               @relation("AssignedTasks")
+  tasksCreated            Task[]               @relation("CreatedTasks")
+  customersAssigned       Customer[]           @relation("CustomerAssignments")
+  notifications           Notification[]
+  costAuditLogs           CostAuditLog[]
+  taskStatusLogs          TaskStatusLog[]
+  conversationsCreated    Conversation[]       @relation("CreatedConversations")
   conversationMemberships ConversationMember[]
-  sentMessages      Message[]           @relation("SentMessages")
-  mentions          MessageMention[]    @relation("MentionedInMessages")
-  passwordResetsReceived PasswordResetLog[] @relation("ResetTarget")
-  passwordResetsPerformed PasswordResetLog[] @relation("ResetBy")
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  sentMessages            Message[]            @relation("SentMessages")
+  mentions                MessageMention[]     @relation("MentionedInMessages")
+  passwordResetsReceived  PasswordResetLog[]   @relation("ResetTarget")
+  passwordResetsPerformed PasswordResetLog[]   @relation("ResetBy")
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
 }
 
 // Audit trail for BƯỚC 3 — who reset whose password, when. The password itself is never stored
@@ -360,34 +362,34 @@ enum TaskStatus {
 }
 
 model Task {
-  id                 String         @id @default(cuid())
-  title              String
-  description        String?
-  assignedTo         User           @relation("AssignedTasks", fields: [assignedToUserId], references: [id])
-  assignedToUserId   String
-  status             TaskStatus     @default(TODO)
-  dueDate            DateTime?
-  relatedShipment    Shipment?      @relation(fields: [relatedShipmentId], references: [id])
-  relatedShipmentId  String?
-  attachmentUrl      String?
-  createdBy          User           @relation("CreatedTasks", fields: [createdByUserId], references: [id])
-  createdByUserId    String
-  notifications      Notification[]
-  statusLogs         TaskStatusLog[]
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  id                String          @id @default(cuid())
+  title             String
+  description       String?
+  assignedTo        User            @relation("AssignedTasks", fields: [assignedToUserId], references: [id])
+  assignedToUserId  String
+  status            TaskStatus      @default(TODO)
+  dueDate           DateTime?
+  relatedShipment   Shipment?       @relation(fields: [relatedShipmentId], references: [id])
+  relatedShipmentId String?
+  attachmentUrl     String?
+  createdBy         User            @relation("CreatedTasks", fields: [createdByUserId], references: [id])
+  createdByUserId   String
+  notifications     Notification[]
+  statusLogs        TaskStatusLog[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 }
 
 // Lưu lịch sử tích/chuyển trạng thái tiến trình để biết ai thao tác và thời điểm nào.
 model TaskStatusLog {
-  id        String     @id @default(cuid())
-  task      Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  taskId    String
-  actor     User       @relation(fields: [actorUserId], references: [id])
+  id          String     @id @default(cuid())
+  task        Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId      String
+  actor       User       @relation(fields: [actorUserId], references: [id])
   actorUserId String
-  fromStatus TaskStatus
-  toStatus   TaskStatus
-  createdAt DateTime   @default(now())
+  fromStatus  TaskStatus
+  toStatus    TaskStatus
+  createdAt   DateTime   @default(now())
 }
 
 enum NotificationType {

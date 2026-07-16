@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { generateReadablePassword } from "@/lib/password";
+import {
+  APP_MODULES,
+  getRoleModules,
+  type AppModule,
+} from "@/lib/module-permissions";
 
 type Role = "ADMIN" | "ACCOUNTANT" | "FIELD_STAFF";
 
@@ -10,6 +15,7 @@ type User = {
   email: string;
   name: string;
   role: Role;
+  modulePermissions: AppModule[];
   isActive: boolean;
   createdAt: string;
 };
@@ -28,7 +34,27 @@ const ROLE_BADGE: Record<Role, string> = {
 
 type OneTime = { name: string; email: string; password: string };
 
-const emptyCreate = { name: "", email: "", password: "", role: "FIELD_STAFF" as Role };
+type UserForm = {
+  name: string;
+  role: Role;
+  modulePermissions: AppModule[];
+};
+
+type CreateUserForm = UserForm & {
+  email: string;
+  password: string;
+};
+
+function getEmptyCreateForm(): CreateUserForm {
+  const role: Role = "FIELD_STAFF";
+  return {
+    name: "",
+    email: "",
+    password: "",
+    role,
+    modulePermissions: getRoleModules(role),
+  };
+}
 
 export default function UsersClient({ currentUserId }: { currentUserId: string }) {
   const [users, setUsers] = useState<User[]>([]);
@@ -36,7 +62,7 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
   const [error, setError] = useState<string | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState(emptyCreate);
+  const [createForm, setCreateForm] = useState(getEmptyCreateForm);
   const [createError, setCreateError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -47,7 +73,11 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
   const [resetError, setResetError] = useState<string | null>(null);
 
   const [editTarget, setEditTarget] = useState<User | null>(null);
-  const [editForm, setEditForm] = useState<{ name: string; role: Role }>({ name: "", role: "FIELD_STAFF" });
+  const [editForm, setEditForm] = useState<UserForm>({
+    name: "",
+    role: "FIELD_STAFF",
+    modulePermissions: getRoleModules("FIELD_STAFF"),
+  });
   const [editError, setEditError] = useState<string | null>(null);
 
   async function refreshUsers() {
@@ -85,7 +115,7 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
       if (!res.ok || !json.success) throw new Error(json.error || "Không thể tạo người dùng.");
       // Show the plaintext (which only ever existed in this browser) exactly once.
       setOneTime({ name: createForm.name, email: createForm.email.toLowerCase().trim(), password: createForm.password });
-      setCreateForm(emptyCreate);
+      setCreateForm(getEmptyCreateForm());
       setCreateOpen(false);
       await refreshUsers();
     } catch (err) {
@@ -145,7 +175,7 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
       const res = await fetch(`/api/users/${editTarget.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: editForm.name, role: editForm.role }),
+        body: JSON.stringify(editForm),
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "Không thể cập nhật.");
@@ -160,13 +190,13 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
     <div className="p-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Quản lý người dùng</h1>
-          <p className="mt-1 text-sm text-gray-500">Cấp tài khoản, đặt lại mật khẩu, khóa/mở tài khoản nhân viên.</p>
+          <h1 className="text-2xl font-semibold text-gray-900">Quản lý người sử dụng</h1>
+          <p className="mt-1 text-sm text-gray-500">Cấp tài khoản, phân quyền mô-đun, đặt lại mật khẩu và khóa/mở tài khoản.</p>
         </div>
         <button
           type="button"
           onClick={() => {
-            setCreateForm(emptyCreate);
+            setCreateForm(getEmptyCreateForm());
             setCreateError(null);
             setCreateOpen(true);
           }}
@@ -183,6 +213,7 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
               <th className="px-4 py-3 text-left font-medium text-gray-500">Họ tên</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Email</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Vai trò</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-500">Mô-đun được truy cập</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Trạng thái</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Ngày tạo</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500"></th>
@@ -191,12 +222,12 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
           <tbody className="divide-y divide-gray-100">
             {isLoading && (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-gray-400">Đang tải...</td>
+                <td colSpan={7} className="px-4 py-6 text-center text-gray-400">Đang tải...</td>
               </tr>
             )}
             {!isLoading && error && (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-red-600">{error}</td>
+                <td colSpan={7} className="px-4 py-6 text-center text-red-600">{error}</td>
               </tr>
             )}
             {!isLoading &&
@@ -212,6 +243,11 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
                     <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${ROLE_BADGE[u.role]}`}>
                       {ROLE_LABELS[u.role]}
                     </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">
+                    {u.role === "ADMIN"
+                      ? "Toàn bộ mô-đun"
+                      : `${u.modulePermissions.length}/${getRoleModules(u.role).length} mô-đun`}
                   </td>
                   <td className="px-4 py-3">
                     {u.isActive ? (
@@ -233,7 +269,13 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
                         type="button"
                         onClick={() => {
                           setEditTarget(u);
-                          setEditForm({ name: u.name, role: u.role });
+                          setEditForm({
+                            name: u.name,
+                            role: u.role,
+                            modulePermissions: u.role === "ADMIN"
+                              ? getRoleModules("ADMIN")
+                              : [...u.modulePermissions],
+                          });
                           setEditError(null);
                         }}
                         className="text-xs font-medium text-blue-600 hover:underline"
@@ -271,7 +313,7 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
       {/* Create account modal */}
       {createOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setCreateOpen(false)}>
-          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h2 className="mb-4 text-base font-semibold text-gray-900">Thêm nhân viên</h2>
             <form onSubmit={handleCreate} className="space-y-4">
               <label className="block">
@@ -284,12 +326,24 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
               </label>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Vai trò</span>
-                <select value={createForm.role} onChange={(e) => setCreateForm({ ...createForm, role: e.target.value as Role })} className="input">
+                <select
+                  value={createForm.role}
+                  onChange={(e) => {
+                    const role = e.target.value as Role;
+                    setCreateForm({ ...createForm, role, modulePermissions: getRoleModules(role) });
+                  }}
+                  className="input"
+                >
                   {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
                     <option key={r} value={r}>{ROLE_LABELS[r]}</option>
                   ))}
                 </select>
               </label>
+              <ModulePermissionGrid
+                role={createForm.role}
+                value={createForm.modulePermissions}
+                onChange={(modulePermissions) => setCreateForm({ ...createForm, modulePermissions })}
+              />
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Mật khẩu</span>
                 <div className="flex gap-2">
@@ -363,8 +417,8 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
       {/* Edit modal */}
       {editTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setEditTarget(null)}>
-          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h2 className="mb-4 text-base font-semibold text-gray-900">Sửa người dùng</h2>
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="mb-4 text-base font-semibold text-gray-900">Sửa người sử dụng</h2>
             <form onSubmit={handleEditSave} className="space-y-4">
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Họ tên</span>
@@ -372,12 +426,24 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
               </label>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Vai trò</span>
-                <select value={editForm.role} onChange={(e) => setEditForm({ ...editForm, role: e.target.value as Role })} className="input">
+                <select
+                  value={editForm.role}
+                  onChange={(e) => {
+                    const role = e.target.value as Role;
+                    setEditForm({ ...editForm, role, modulePermissions: getRoleModules(role) });
+                  }}
+                  className="input"
+                >
                   {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
                     <option key={r} value={r}>{ROLE_LABELS[r]}</option>
                   ))}
                 </select>
               </label>
+              <ModulePermissionGrid
+                role={editForm.role}
+                value={editForm.modulePermissions}
+                onChange={(modulePermissions) => setEditForm({ ...editForm, modulePermissions })}
+              />
 
               {editError && <p className="text-sm text-red-600">{editError}</p>}
 
@@ -397,6 +463,65 @@ export default function UsersClient({ currentUserId }: { currentUserId: string }
       {/* One-time password reveal (create + reset share this) */}
       {oneTime && <OneTimePasswordModal data={oneTime} onClose={() => setOneTime(null)} />}
     </div>
+  );
+}
+
+function ModulePermissionGrid({
+  role,
+  value,
+  onChange,
+}: {
+  role: Role;
+  value: AppModule[];
+  onChange: (value: AppModule[]) => void;
+}) {
+  const allowed = new Set(getRoleModules(role));
+  const selected = new Set(value);
+
+  function toggle(module: AppModule, checked: boolean) {
+    if (!allowed.has(module) || role === "ADMIN") return;
+    onChange(
+      checked
+        ? [...value, module]
+        : value.filter((item) => item !== module)
+    );
+  }
+
+  return (
+    <fieldset>
+      <legend className="text-sm font-medium text-gray-700">Quyền truy cập mô-đun</legend>
+      <p className="mt-1 text-xs text-gray-500">
+        Tổng quan luôn mở. Vai trò vẫn kiểm soát các thao tác nhạy cảm bên trong từng mô-đun.
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {APP_MODULES.map((module) => {
+          const isAllowed = allowed.has(module.key);
+          const isChecked = role === "ADMIN" || (isAllowed && selected.has(module.key));
+          return (
+            <label
+              key={module.key}
+              className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+                isAllowed ? "border-gray-200 bg-white text-gray-700" : "border-gray-100 bg-gray-50 text-gray-400"
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={isChecked}
+                disabled={!isAllowed || role === "ADMIN"}
+                onChange={(event) => toggle(module.key, event.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-blue-600"
+              />
+              <span>{module.icon}</span>
+              <span className="font-medium">{module.label}</span>
+              {!isAllowed && <span className="ml-auto text-[11px]">Không thuộc vai trò</span>}
+            </label>
+          );
+        })}
+      </div>
+      {role === "ADMIN" && (
+        <p className="mt-2 text-xs text-purple-700">Admin luôn có toàn quyền để quản trị và khôi phục hệ thống.</p>
+      )}
+    </fieldset>
   );
 }
 

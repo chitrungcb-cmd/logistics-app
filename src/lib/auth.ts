@@ -73,6 +73,7 @@ export type CurrentUser = {
   email: string;
   name: string;
   role: UserRole;
+  modulePermissions: string[];
 };
 
 /** Reads the session cookie and re-fetches the user fresh from the DB (so role changes take effect immediately). */
@@ -92,7 +93,13 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   // Password resets revoke every existing session for that user without a separate session table.
   if (session.credentialVersion !== credentialVersion(user.passwordHash)) return null;
 
-  return { id: user.id, email: user.email, name: user.name, role: user.role };
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    modulePermissions: user.modulePermissions,
+  };
 }
 
 export async function setSessionCookie(userId: string, passwordHash: string) {

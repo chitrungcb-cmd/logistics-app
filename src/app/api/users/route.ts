@@ -3,6 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser, hashPassword, validateNewPassword } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { addUserToCompanyConversation } from "@/lib/chat";
+import {
+  getRoleModules,
+  hasOnlyValidModulePermissions,
+  normalizeModulePermissions,
+} from "@/lib/module-permissions";
+import type { UserRole } from "@/generated/prisma/enums";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -11,7 +17,15 @@ export async function GET() {
   if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền xem danh sách người dùng.", 403);
 
   const users = await prisma.user.findMany({
-    select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      modulePermissions: true,
+      isActive: true,
+      createdAt: true,
+    },
     orderBy: { createdAt: "asc" },
   });
   return apiSuccess(users);
@@ -23,12 +37,17 @@ export async function POST(request: NextRequest) {
     if (!user) return apiError("Chưa đăng nhập.", 401);
     if (user.role !== "ADMIN") return apiError("Chỉ Admin mới tạo được người dùng.", 403);
 
-    const { email, password, name, role } = await request.json();
+    const { email, password, name, role, modulePermissions } = await request.json();
     if (!email || !password || !name || !role) {
       return apiError("Vui lòng nhập đầy đủ họ tên, email, mật khẩu và vai trò.", 400);
     }
     if (!["ADMIN", "ACCOUNTANT", "FIELD_STAFF"].includes(role)) {
       return apiError("Vai trò không hợp lệ.", 400);
+    }
+    const validRole = role as UserRole;
+    const requestedPermissions = modulePermissions ?? getRoleModules(validRole);
+    if (!hasOnlyValidModulePermissions(requestedPermissions, validRole)) {
+      return apiError("Danh sách quyền mô-đun không hợp lệ với vai trò đã chọn.", 400);
     }
     const passwordError = validateNewPassword(password);
     if (passwordError) return apiError(passwordError, 400);
@@ -38,9 +57,18 @@ export async function POST(request: NextRequest) {
         email: String(email).toLowerCase().trim(),
         name,
         role,
+        modulePermissions: normalizeModulePermissions(requestedPermissions, validRole),
         passwordHash: await hashPassword(password),
       },
-      select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        modulePermissions: true,
+        isActive: true,
+        createdAt: true,
+      },
     });
 
     await addUserToCompanyConversation(created.id);

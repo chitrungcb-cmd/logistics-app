@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
-import { COST_CATEGORY_OPTIONS } from "@/lib/shipment-cost-constants";
+import { COST_CATEGORY_OPTIONS, isVendorlessCostCategory } from "@/lib/shipment-cost-constants";
 import { getGoodsKeyword } from "@/lib/goods-keyword";
 import { applyPresetToExistingShipments } from "@/lib/cost-presets";
 
@@ -22,11 +22,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (!COST_CATEGORY_OPTIONS.includes(category)) return apiError("Hạng mục chi phí không hợp lệ.", 400);
     const unitPrice = body.unitPrice === undefined ? existing.unitPrice : Number(body.unitPrice);
     const quantity = body.quantity === undefined ? existing.quantity : Number(body.quantity);
-    const vendorId = body.vendorId === undefined
-      ? existing.vendorId
-      : typeof body.vendorId === "string" && body.vendorId
-        ? body.vendorId
-        : null;
+    const vendorId = isVendorlessCostCategory(category)
+      ? null
+      : body.vendorId === undefined
+        ? existing.vendorId
+        : typeof body.vendorId === "string" && body.vendorId
+          ? body.vendorId
+          : null;
     if (vendorId && !(await prisma.vendor.findUnique({ where: { id: vendorId }, select: { id: true } }))) {
       return apiError("Nhà cung cấp không hợp lệ.", 400);
     }

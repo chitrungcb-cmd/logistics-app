@@ -2,7 +2,11 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
-import { COST_CATEGORY_LABELS, COST_CATEGORY_OPTIONS } from "@/lib/shipment-cost-constants";
+import {
+  COST_CATEGORY_LABELS,
+  COST_CATEGORY_OPTIONS,
+  VENDORLESS_COST_CATEGORIES,
+} from "@/lib/shipment-cost-constants";
 
 type DetailRow = {
   costId: string;
@@ -48,7 +52,10 @@ export async function GET(request: NextRequest) {
 
   const costs = await prisma.shipmentCost.findMany({
     where: {
-      ...(category ? { category: category as (typeof COST_CATEGORY_OPTIONS)[number] } : {}),
+      category: {
+        ...(category ? { equals: category as (typeof COST_CATEGORY_OPTIONS)[number] } : {}),
+        notIn: [...VENDORLESS_COST_CATEGORIES],
+      },
       OR: [
         { shipment: { declarationDate: { gte: start, lt: end } } },
         { shipment: { declarationDate: null }, createdAt: { gte: start, lt: end } },

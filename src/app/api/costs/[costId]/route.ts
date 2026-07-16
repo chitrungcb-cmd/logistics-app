@@ -6,6 +6,7 @@ import {
   COST_CATEGORY_LABELS,
   COST_CATEGORY_OPTIONS,
   isInvoiceCostCategory,
+  isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
 import { buildUpdateDetail, logCostAudit } from "@/lib/cost-audit-log";
 
@@ -45,8 +46,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (field in body) data[field] = body[field];
     }
 
+    const nextCategory = typeof data.category === "string" ? data.category : existing.category;
     let nextVendorName = existing.vendor?.name ?? null;
-    if ("vendorId" in data) {
+    if (isVendorlessCostCategory(nextCategory)) {
+      data.vendorId = null;
+      nextVendorName = null;
+    } else if ("vendorId" in data) {
       data.vendorId = typeof data.vendorId === "string" && data.vendorId ? data.vendorId : null;
       if (data.vendorId) {
         const vendor = await prisma.vendor.findUnique({
@@ -62,7 +67,6 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     // Chỉ Kiểm dịch, Hạ tầng, Sang tải, Bến bãi và Vận tải được phép mang số hóa đơn.
     if ("category" in data || "invoiceNumber" in data) {
-      const nextCategory = typeof data.category === "string" ? data.category : existing.category;
       if (!isInvoiceCostCategory(nextCategory)) data.invoiceNumber = null;
     }
 

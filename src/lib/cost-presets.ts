@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getGoodsKeyword } from "@/lib/goods-keyword";
-import { COST_CATEGORY_LABELS } from "@/lib/shipment-cost-constants";
+import { COST_CATEGORY_LABELS, isVendorlessCostCategory } from "@/lib/shipment-cost-constants";
 
 export async function applyCostPresetsToShipment(params: {
   shipmentId: string;
@@ -19,6 +19,7 @@ export async function applyCostPresetsToShipment(params: {
   const presets = await prisma.costPreset.findMany({ where: { goodsKeyword: keyword, isActive: true } });
   let applied = 0;
   for (const preset of presets) {
+    const vendorId = isVendorlessCostCategory(preset.category) ? null : preset.vendorId;
     const existing = await prisma.shipmentCost.findUnique({
       where: { shipmentId_presetId: { shipmentId: shipment.id, presetId: preset.id } },
     });
@@ -33,7 +34,7 @@ export async function applyCostPresetsToShipment(params: {
             quantity: preset.quantity,
             costPrice: preset.unitPrice * preset.quantity,
             note: preset.note,
-            vendorId: preset.vendorId,
+            vendorId,
           },
         });
       }
@@ -49,7 +50,7 @@ export async function applyCostPresetsToShipment(params: {
         quantity: preset.quantity,
         costPrice: preset.unitPrice * preset.quantity,
         note: preset.note,
-        vendorId: preset.vendorId,
+        vendorId,
         isActual: false,
       },
     });

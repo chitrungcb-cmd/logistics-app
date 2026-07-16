@@ -6,6 +6,7 @@ import {
   COST_CATEGORY_LABELS,
   COST_CATEGORY_OPTIONS,
   isInvoiceCostCategory,
+  isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
 import { logCostAudit } from "@/lib/cost-audit-log";
 
@@ -72,7 +73,11 @@ export async function POST(request: NextRequest) {
 
     const unitPrice = Number(body.unitPrice) || 0;
     const quantity = Number(body.quantity) || 1;
-    const vendorId = typeof body.vendorId === "string" && body.vendorId ? body.vendorId : null;
+    const vendorId = isVendorlessCostCategory(body.category)
+      ? null
+      : typeof body.vendorId === "string" && body.vendorId
+        ? body.vendorId
+        : null;
     const vendor = vendorId
       ? await prisma.vendor.findUnique({ where: { id: vendorId }, select: { id: true, name: true } })
       : null;
@@ -104,7 +109,7 @@ export async function POST(request: NextRequest) {
       shipmentId: cost.shipmentId,
       shipmentCostId: cost.id,
       action: "CREATE",
-      detail: `Tạo chi phí ${COST_CATEGORY_LABELS[cost.category] ?? cost.category}: ${cost.costPrice.toLocaleString("vi-VN")} đ${vendor ? ` · Nhà cung cấp: ${vendor.name}` : " · Chưa gắn nhà cung cấp"}`,
+      detail: `Tạo chi phí ${COST_CATEGORY_LABELS[cost.category] ?? cost.category}: ${cost.costPrice.toLocaleString("vi-VN")} đ${isVendorlessCostCategory(cost.category) ? "" : vendor ? ` · Nhà cung cấp: ${vendor.name}` : " · Chưa gắn nhà cung cấp"}`,
     });
 
     return apiSuccess(cost, 201);

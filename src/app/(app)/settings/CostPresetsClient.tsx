@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { COST_CATEGORY_LABELS, COST_CATEGORY_OPTIONS } from "@/lib/shipment-cost-constants";
+import {
+  COST_CATEGORY_LABELS,
+  COST_CATEGORY_OPTIONS,
+  isVendorlessCostCategory,
+} from "@/lib/shipment-cost-constants";
 import VendorCombobox from "@/components/vendors/VendorCombobox";
 
 type Preset = {
@@ -110,7 +114,11 @@ export default function CostPresetsClient() {
             <span className="mb-1 block text-sm font-medium text-gray-700">Hạng mục</span>
             <select
               value={form.category}
-              onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}
+              onChange={(event) => setForm((current) => ({
+                ...current,
+                category: event.target.value,
+                ...(isVendorlessCostCategory(event.target.value) ? { vendorId: null, vendorName: "" } : {}),
+              }))}
               className="input"
             >
               {COST_CATEGORY_OPTIONS.map((category) => (
@@ -120,11 +128,17 @@ export default function CostPresetsClient() {
           </label>
           <label className="block md:col-span-2">
             <span className="mb-1 block text-sm font-medium text-gray-700">Nhà cung cấp mặc định</span>
-            <VendorCombobox
-              vendorName={form.vendorName}
-              vendorId={form.vendorId}
-              onChange={({ vendorName, vendorId }) => setForm((current) => ({ ...current, vendorName, vendorId }))}
-            />
+            {isVendorlessCostCategory(form.category) ? (
+              <div className="flex min-h-10 items-center rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-gray-500">
+                Không áp dụng
+              </div>
+            ) : (
+              <VendorCombobox
+                vendorName={form.vendorName}
+                vendorId={form.vendorId}
+                onChange={({ vendorName, vendorId }) => setForm((current) => ({ ...current, vendorName, vendorId }))}
+              />
+            )}
           </label>
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-gray-700">Đơn giá</span>
@@ -167,11 +181,11 @@ export default function CostPresetsClient() {
               <td className="px-4 py-3 font-medium text-gray-900">{preset.goodsName}</td>
               <td className="px-4 py-3 text-gray-500">{preset.goodsKeyword}</td>
               <td className="px-4 py-3 text-gray-700">{COST_CATEGORY_LABELS[preset.category]}</td>
-              <td className="px-4 py-3 text-gray-600">{preset.vendor?.name || <span className="text-amber-600">Chưa gắn</span>}</td>
+              <td className="px-4 py-3 text-gray-600">{isVendorlessCostCategory(preset.category) ? <span className="text-gray-400">Không áp dụng</span> : preset.vendor?.name || <span className="text-amber-600">Chưa gắn</span>}</td>
               <td className="px-4 py-3 text-gray-600">{formatVnd(preset.unitPrice)} × {preset.quantity}</td>
               <td className="px-4 py-3 font-medium text-gray-900">{formatVnd(preset.unitPrice * preset.quantity)}</td>
               <td className="px-4 py-3"><div className="flex gap-3">
-                <button type="button" onClick={() => setForm({ id: preset.id, goodsName: preset.goodsName, category: preset.category, unitPrice: String(preset.unitPrice), quantity: String(preset.quantity), note: preset.note || "", vendorId: preset.vendorId, vendorName: preset.vendor?.name || "" })} className="text-blue-600 hover:underline">Sửa</button>
+                <button type="button" onClick={() => setForm({ id: preset.id, goodsName: preset.goodsName, category: preset.category, unitPrice: String(preset.unitPrice), quantity: String(preset.quantity), note: preset.note || "", vendorId: isVendorlessCostCategory(preset.category) ? null : preset.vendorId, vendorName: isVendorlessCostCategory(preset.category) ? "" : preset.vendor?.name || "" })} className="text-blue-600 hover:underline">Sửa</button>
                 <button type="button" onClick={() => handleDelete(preset.id)} className="text-red-600 hover:underline">Xóa</button>
               </div></td>
             </tr>)}

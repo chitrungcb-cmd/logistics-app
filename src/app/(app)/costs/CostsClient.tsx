@@ -12,6 +12,7 @@ import {
   COST_CATEGORY_BADGE_CLASS,
   COST_CATEGORY_ICON,
   COST_CATEGORY_LABELS,
+  isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
 import { calculateCostOpportunities } from "@/lib/cost-optimization";
 
@@ -277,7 +278,7 @@ export default function CostsClient() {
       "Số tờ khai": shipment.declarationNo || "",
       "Tên hàng": shipment.goodsName || "",
       "Hạng mục": COST_CATEGORY_LABELS[cost.category] ?? cost.category,
-      "Nhà cung cấp": cost.vendor?.name || "",
+      "Nhà cung cấp": isVendorlessCostCategory(cost.category) ? "Không áp dụng" : cost.vendor?.name || "",
       "Đơn giá": cost.unitPrice,
       "Số lượng": cost.quantity,
       "Tổng chi": cost.costPrice,
@@ -424,7 +425,7 @@ function ShipmentCostDetails({ shipment, opportunityByCostId, onHistory, onCompa
       const spike = !!opportunity && opportunity.differencePercent >= SPIKE_DIFFERENCE_PERCENT;
       return <div key={cost.id} className={`grid items-center gap-3 rounded-lg border px-4 py-3 md:grid-cols-[1.2fr_1.5fr_1fr_1fr_1.5fr_auto] ${spike ? "border-red-200 bg-red-50" : "border-gray-200 bg-white"}`}>
         <div><span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${COST_CATEGORY_BADGE_CLASS[cost.category] || "bg-gray-100 text-gray-600"}`}>{COST_CATEGORY_ICON[cost.category]} {COST_CATEGORY_LABELS[cost.category] || cost.category}</span>{cost.isAdditional && <span className="ml-1 text-[10px] text-orange-600">Phát sinh</span>}<span className={`ml-1 text-[10px] font-medium ${cost.isActual ? "text-emerald-700" : "text-amber-700"}`}>{cost.isActual ? "Thực tế" : "Dự kiến"}</span></div>
-        <div className={cost.vendor ? "text-sm text-gray-700" : "text-sm font-medium text-amber-600"}>{cost.vendor?.name || "Chưa gắn nhà cung cấp"}</div>
+        <div className={isVendorlessCostCategory(cost.category) ? "text-sm text-gray-400" : cost.vendor ? "text-sm text-gray-700" : "text-sm font-medium text-amber-600"}>{isVendorlessCostCategory(cost.category) ? "Không áp dụng" : cost.vendor?.name || "Chưa gắn nhà cung cấp"}</div>
         <div className="text-sm text-gray-600">{formatVnd(cost.unitPrice)} × {cost.quantity}</div>
         <div className="text-sm font-semibold text-gray-900">{formatVnd(cost.costPrice)}</div>
         <div className="text-xs text-gray-500">HĐ: {cost.invoiceNumber || "—"}{cost.note && <span className="block">{cost.note}</span>}{spike && <span className="block font-medium text-red-700">⚠ Cao hơn {Math.round(opportunity.differencePercent)}% · Mức tham chiếu {formatVnd(opportunity.benchmarkUnitPrice)}</span>}</div>

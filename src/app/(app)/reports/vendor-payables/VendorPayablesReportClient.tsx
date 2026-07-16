@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { downloadExcel } from "@/lib/export-excel";
-import { COST_CATEGORY_LABELS, COST_CATEGORY_OPTIONS } from "@/lib/shipment-cost-constants";
+import {
+  COST_CATEGORY_LABELS,
+  COST_CATEGORY_OPTIONS,
+  isVendorlessCostCategory,
+} from "@/lib/shipment-cost-constants";
 
 type DetailRow = {
   costId: string;
@@ -135,7 +139,7 @@ export default function VendorPayablesReportClient() {
           <span className="mb-1 block text-xs font-medium text-gray-600">Hạng mục</span>
           <select value={category} onChange={(event) => { setIsLoading(true); setError(null); setCategory(event.target.value); }} className="input min-w-56">
             <option value="">Tất cả hạng mục</option>
-            {COST_CATEGORY_OPTIONS.map((item) => <option key={item} value={item}>{COST_CATEGORY_LABELS[item]}</option>)}
+            {COST_CATEGORY_OPTIONS.filter((item) => !isVendorlessCostCategory(item)).map((item) => <option key={item} value={item}>{COST_CATEGORY_LABELS[item]}</option>)}
           </select>
         </label>
       </div>

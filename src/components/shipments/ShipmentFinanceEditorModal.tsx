@@ -5,6 +5,7 @@ import {
   COST_CATEGORY_LABELS,
   COST_CATEGORY_OPTIONS,
   isInvoiceCostCategory,
+  isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
 import { QUOTE_LINE_LABELS, QUOTE_LINE_OPTIONS } from "@/lib/quote-line-constants";
 
@@ -110,7 +111,7 @@ export default function ShipmentFinanceEditorModal({
           quantity: String(cost.quantity),
           invoiceNumber: cost.invoiceNumber || "",
           note: cost.note || "",
-          vendorId: cost.vendorId || "",
+          vendorId: isVendorlessCostCategory(cost.category) ? "" : cost.vendorId || "",
           presetId: cost.presetId,
           isActual: cost.isActual ?? true,
         }));
@@ -285,7 +286,7 @@ export default function ShipmentFinanceEditorModal({
         <div className="border-b border-gray-200 px-6 pt-4">
           <div className="flex items-start justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-gray-900">Tài chính lô hàng</h2>
+              <h2 className="text-xl font-semibold text-gray-900">Chi phí lô hàng</h2>
               <p className="mt-1 text-sm text-gray-500">
                 {shipment.goodsName || "Chưa có tên hàng"} · TK {shipment.declarationNo || "—"} · {shipment.customerName}
               </p>
@@ -357,8 +358,8 @@ export default function ShipmentFinanceEditorModal({
                   <table className="min-w-[1050px] divide-y divide-gray-200 text-sm">
                     <thead className="bg-gray-50"><tr><th className="px-2 py-2 text-left text-gray-500">Hạng mục</th><th className="px-2 py-2 text-left text-gray-500">Nhà cung cấp</th><th className="px-2 py-2 text-left text-gray-500">Đơn giá</th><th className="px-2 py-2 text-left text-gray-500">SL</th><th className="px-2 py-2 text-left text-gray-500">Số HĐ</th><th className="px-2 py-2 text-left text-gray-500">Ghi chú</th><th></th></tr></thead>
                     <tbody className="divide-y divide-gray-100">{costs.map((cost, index) => <tr key={cost.clientKey}>
-                      <td className="px-2 py-2"><select value={cost.category} onChange={(event) => updateCost(index, { category: event.target.value, invoiceNumber: isInvoiceCostCategory(event.target.value) ? cost.invoiceNumber : "" }, true)} className="input min-w-32">{COST_CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{COST_CATEGORY_LABELS[category]}</option>)}</select>{cost.presetId && !cost.isActual && <span className="mt-1 block text-[10px] font-medium text-amber-700">Dự kiến tự động</span>}{cost.isActual && cost.id && <span className="mt-1 block text-[10px] font-medium text-emerald-700">✓ Chi phí thực tế</span>}</td>
-                      <td className="px-2 py-2"><select value={cost.vendorId} onChange={(event) => updateCost(index, { vendorId: event.target.value }, true)} className={`input min-w-48 ${cost.vendorId ? "" : "border-amber-300 bg-amber-50"}`}><option value="">Chưa gắn nhà cung cấp</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}{vendor.type ? ` · ${vendor.type}` : ""}</option>)}</select></td>
+                      <td className="px-2 py-2"><select value={cost.category} onChange={(event) => { const category = event.target.value; updateCost(index, { category, invoiceNumber: isInvoiceCostCategory(category) ? cost.invoiceNumber : "", vendorId: isVendorlessCostCategory(category) ? "" : cost.vendorId }, true); }} className="input min-w-32">{COST_CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{COST_CATEGORY_LABELS[category]}</option>)}</select>{cost.presetId && !cost.isActual && <span className="mt-1 block text-[10px] font-medium text-amber-700">Dự kiến tự động</span>}{cost.isActual && cost.id && <span className="mt-1 block text-[10px] font-medium text-emerald-700">✓ Chi phí thực tế</span>}</td>
+                      <td className="px-2 py-2">{isVendorlessCostCategory(cost.category) ? <div className="flex min-h-10 min-w-48 items-center rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-gray-500">Không áp dụng</div> : <select value={cost.vendorId} onChange={(event) => updateCost(index, { vendorId: event.target.value }, true)} className={`input min-w-48 ${cost.vendorId ? "" : "border-amber-300 bg-amber-50"}`}><option value="">Chưa gắn nhà cung cấp</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}{vendor.type ? ` · ${vendor.type}` : ""}</option>)}</select>}</td>
                       <td className="px-2 py-2"><input type="number" min="0" value={cost.unitPrice} onChange={(event) => updateCost(index, { unitPrice: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-32" /></td>
                       <td className="px-2 py-2"><input type="number" min="0" step="any" value={cost.quantity} onChange={(event) => updateCost(index, { quantity: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-20" /></td>
                       <td className="px-2 py-2"><input value={cost.invoiceNumber} onChange={(event) => updateCost(index, { invoiceNumber: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} disabled={!isInvoiceCostCategory(cost.category)} className="input w-32" placeholder={isInvoiceCostCategory(cost.category) ? "Số HĐ" : "—"} /></td>

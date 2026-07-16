@@ -17,6 +17,13 @@ export function isInvoiceCostCategory(category: string) {
   return INVOICE_COST_CATEGORIES.some((item) => item === category);
 }
 
+// Các khoản nộp trực tiếp cho cơ quan/chức năng nhà nước không được theo dõi như công nợ nhà cung cấp.
+export const VENDORLESS_COST_CATEGORIES = ["HAI_QUAN", "BIEN_PHONG", "KIEM_DICH", "HA_TANG"] as const;
+
+export function isVendorlessCostCategory(category: string) {
+  return VENDORLESS_COST_CATEGORIES.some((item) => item === category);
+}
+
 export const COST_CATEGORY_LABELS: Record<string, string> = {
   HAI_QUAN: "Hải quan",
   BIEN_PHONG: "Biên phòng",

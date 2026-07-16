@@ -31,16 +31,19 @@ export async function POST(request: NextRequest) {
     if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền thêm nhà cung cấp.", 403);
 
     const body = await request.json();
-    if (!body.name) return apiError("Vui lòng nhập tên nhà cung cấp.", 400);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) return apiError("Vui lòng nhập tên nhà cung cấp.", 400);
+
+    const optionalText = (value: unknown) => typeof value === "string" && value.trim() ? value.trim() : null;
 
     const vendor = await prisma.vendor.create({
       data: {
-        name: body.name,
-        type: body.type || null,
-        phone: body.phone || null,
-        address: body.address || null,
-        taxCode: body.taxCode || null,
-        note: body.note || null,
+        name,
+        type: optionalText(body.type),
+        phone: optionalText(body.phone),
+        address: optionalText(body.address),
+        taxCode: optionalText(body.taxCode),
+        note: optionalText(body.note),
       },
     });
     return apiSuccess(vendor, 201);

@@ -25,9 +25,16 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const { id } = await params;
     const body = await request.json();
 
+    if ("name" in body && (typeof body.name !== "string" || !body.name.trim())) {
+      return apiError("Vui lòng nhập tên nhà cung cấp.", 400);
+    }
+
     const data: Record<string, unknown> = {};
     for (const field of UPDATABLE_FIELDS) {
-      if (field in body) data[field] = field === "name" ? body[field] : body[field] || null;
+      if (field in body) {
+        const value = typeof body[field] === "string" ? body[field].trim() : "";
+        data[field] = field === "name" ? value : value || null;
+      }
     }
 
     if (Object.keys(data).length === 0) return apiError("Không có dữ liệu để cập nhật.", 400);

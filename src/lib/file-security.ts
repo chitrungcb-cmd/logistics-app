@@ -1,5 +1,5 @@
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
-const ALLOWED_EXTENSIONS = new Set(["pdf", "xlsx", "xls", "docx", "doc", "png", "jpg", "jpeg"]);
+const ALLOWED_EXTENSIONS = new Set(["pdf", "xlsx", "xls", "docx", "doc", "png", "jpg", "jpeg", "xml"]);
 
 export class UnsafeUploadError extends Error {}
 
@@ -41,6 +41,12 @@ export function validateUploadedFile(filename: string, buffer: Buffer) {
     }
     if (extension === "docx") {
       return isZip(buffer) && containsZipEntry(buffer, "[Content_Types].xml") && containsZipEntry(buffer, "word/");
+    }
+    // XML is imported only by the Gmail invoice sync (the public upload endpoint does not allow it)
+    // and is always served with nosniff + attachment disposition by the authenticated file route.
+    if (extension === "xml") {
+      const prefix = buffer.subarray(0, Math.min(buffer.length, 512)).toString("utf8").trimStart();
+      return prefix.startsWith("<?xml") || /^<[A-Za-z_][\w:.-]*(?:\s|>)/.test(prefix);
     }
     return false;
   })();

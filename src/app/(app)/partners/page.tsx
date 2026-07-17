@@ -7,5 +7,5 @@ export default async function PartnersPage() {
   if (!user) redirect("/login");
   if (user.role === "FIELD_STAFF") redirect("/");
 
-  return <PartnersClient isAdmin={user.role === "ADMIN"} />;
+  return <PartnersClient />;
 }

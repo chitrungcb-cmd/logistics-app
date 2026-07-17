@@ -14,7 +14,7 @@ type Notification = {
   createdAt: string;
 };
 
-const POLL_INTERVAL_MS = 20000;
+const POLL_INTERVAL_MS = 60000;
 
 export default function NotificationBell() {
   const router = useRouter();
@@ -37,8 +37,17 @@ export default function NotificationBell() {
     }
 
     load();
-    const interval = setInterval(load, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    const loadWhenVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    const interval = setInterval(loadWhenVisible, POLL_INTERVAL_MS);
+    window.addEventListener("focus", loadWhenVisible);
+    document.addEventListener("visibilitychange", loadWhenVisible);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", loadWhenVisible);
+      document.removeEventListener("visibilitychange", loadWhenVisible);
+    };
   }, []);
 
   useEffect(() => {

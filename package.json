@@ -7,9 +7,15 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "check:production-env": "node scripts/check-production-env.mjs",
+    "prestart": "npm run check:production-env",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
+    "db:sync-shipment-debts": "node scripts/sync-shipment-debts.mjs",
+    "storage:audit": "node scripts/migrate-private-attachments.mjs --verify",
+    "storage:migrate": "node scripts/migrate-private-attachments.mjs --apply --verify",
     "db:studio": "prisma studio"
   },
   "dependencies": {
@@ -37,7 +43,8 @@
     "eslint-config-next": "16.2.10",
     "prisma": "^7.8.0",
     "tailwindcss": "^4.3.2",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "@hono/node-server": "1.19.13",

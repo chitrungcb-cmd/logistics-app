@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { computeDebtStatus, sumPayments } from "@/lib/debt-constants";
+import { isAutomaticDebt, isAutomaticPayableDebt } from "@/lib/shipment-debt-sync";
 
 const UPDATABLE_FIELDS = ["totalAmount", "dueDate", "note", "shipmentId"] as const;
 
@@ -25,12 +26,16 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
           declarationNo: true,
           declarationDate: true,
           invoiceNo: true,
+          customerName: true,
         },
       },
       payments: { orderBy: { paymentDate: "desc" } },
     },
   });
   if (!debt) return apiError("Không tìm thấy công nợ.", 404);
+  if (user.role !== "ADMIN" && isAutomaticPayableDebt(debt.sourceKey)) {
+    return apiError("Bạn không có quyền xem công nợ chi phí tự động.", 403);
+  }
 
   const paidAmount = sumPayments(debt.payments);
   return apiSuccess({ ...debt, paidAmount, remainingAmount: debt.totalAmount - paidAmount });
@@ -57,6 +62,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     const existing = await prisma.debt.findUnique({ where: { id }, include: { payments: { select: { amount: true } } } });
     if (!existing) return apiError("Không tìm thấy công nợ.", 404);
+    if (user.role !== "ADMIN" && isAutomaticPayableDebt(existing.sourceKey)) {
+      return apiError("Bạn không có quyền sửa công nợ chi phí tự động.", 403);
+    }
+    if (isAutomaticDebt(existing.sourceKey) && ("totalAmount" in body || "shipmentId" in body)) {
+      return apiError("Số tiền và lô hàng của công nợ tự động được cập nhật từ tài chính lô hàng.", 400);
+    }
 
     const newTotalAmount = typeof data.totalAmount === "number" ? data.totalAmount : existing.totalAmount;
     const paidAmount = sumPayments(existing.payments);
@@ -76,6 +87,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
             declarationNo: true,
             declarationDate: true,
             invoiceNo: true,
+            customerName: true,
           },
         },
       },
@@ -98,6 +110,14 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền xóa công nợ.", 403);
 
     const { id } = await params;
+    const existing = await prisma.debt.findUnique({ where: { id }, select: { sourceKey: true } });
+    if (!existing) return apiError("Không tìm thấy công nợ.", 404);
+    if (user.role !== "ADMIN" && isAutomaticPayableDebt(existing.sourceKey)) {
+      return apiError("Bạn không có quyền xóa công nợ chi phí tự động.", 403);
+    }
+    if (isAutomaticDebt(existing.sourceKey)) {
+      return apiError("Công nợ này được đồng bộ tự động từ tài chính lô hàng và không thể xóa trực tiếp.", 400);
+    }
     await prisma.debt.delete({ where: { id } });
     return apiSuccess({ ok: true });
   } catch (error) {

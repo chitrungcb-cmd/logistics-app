@@ -1,5 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { normalizeInvoiceNumber, type ParsedVendorInvoice } from "@/lib/vendor-invoice-parser";
+import {
+  determineInvoiceDirection,
+  normalizeInvoiceNumber,
+  type ParsedVendorInvoice,
+} from "@/lib/vendor-invoice-parser";
 
 export type ReconciliationStatus = "MATCHED" | "UNMATCHED" | "NEEDS_REVIEW";
 
@@ -80,10 +84,11 @@ async function findMatchingShipmentCost(invoiceNumber: string, vendorId: string 
 }
 
 export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) {
-  // Do not pollute the partner directory with sellers from invoices addressed to another company.
-  const vendor = parsed.isIssuedToNq === false ? null : await findOrCreateInvoiceVendor(parsed);
+  // Only the seller on an input invoice is a supplier. For output invoices NQ itself is the seller,
+  // so creating NQ as its own vendor or matching the row to a shipment cost would be incorrect.
+  const vendor = parsed.invoiceDirection === "INPUT" ? await findOrCreateInvoiceVendor(parsed) : null;
 
-  if (parsed.isIssuedToNq === false || !parsed.invoiceNumber) {
+  if (parsed.invoiceDirection !== "INPUT" || !parsed.invoiceNumber) {
     return {
       vendorId: vendor?.id ?? null,
       shipmentCostId: null,
@@ -128,6 +133,12 @@ export async function reconcileStoredVendorInvoices() {
       taxAmount: invoice.taxAmount,
       totalAmount: invoice.totalAmount,
       currency: invoice.currency,
+      invoiceDirection: determineInvoiceDirection(
+        invoice.sellerName,
+        invoice.sellerTaxCode,
+        invoice.buyerName,
+        invoice.buyerTaxCode
+      ),
       isIssuedToNq: invoice.isIssuedToNq,
     };
     const result = await reconcileParsedVendorInvoice(parsed);

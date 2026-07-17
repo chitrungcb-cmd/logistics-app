@@ -5,7 +5,8 @@ export const APP_MODULES = [
   { key: "SHIPMENTS", label: "Lô hàng", href: "/shipments", icon: "📦" },
   { key: "TASKS", label: "Nhiệm vụ", href: "/tasks", icon: "✅" },
   { key: "MESSAGES", label: "Tin nhắn", href: "/messages", icon: "💬" },
-  { key: "COSTS", label: "Chi phí", href: "/costs", icon: "💰" },
+  { key: "COSTS", label: "Chi phí lô hàng", href: "/costs", icon: "💰" },
+  { key: "OTHER_EXPENSES", label: "Chi phí khác", href: "/other-expenses", icon: "🧾" },
   { key: "DEBTS", label: "Công nợ", href: "/debts", icon: "📒" },
   { key: "DOCUMENTS", label: "Kho chứng từ", href: "/documents", icon: "🗂️" },
   { key: "REPORTS", label: "Báo cáo", href: "/reports", icon: "📊" },
@@ -25,6 +26,7 @@ const ROLE_MODULES: Record<UserRole, readonly AppModule[]> = {
     "SHIPMENTS",
     "TASKS",
     "MESSAGES",
+    "OTHER_EXPENSES",
     "DEBTS",
     "DOCUMENTS",
     "REPORTS",
@@ -47,12 +49,14 @@ export function normalizeModulePermissions(value: unknown, role: UserRole): AppM
   if (!Array.isArray(value)) return [];
 
   const requested = new Set(value.filter((item): item is string => typeof item === "string"));
-  return ROLE_MODULES[role].filter((module) => requested.has(module));
+  return ALL_APP_MODULES.filter((module) => requested.has(module));
 }
 
 export function hasOnlyValidModulePermissions(value: unknown, role: UserRole): value is AppModule[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) return false;
-  const allowed = new Set(ROLE_MODULES[role]);
+  if (role === "ADMIN") return value.length === ALL_APP_MODULES.length &&
+    ALL_APP_MODULES.every((module) => value.includes(module));
+  const allowed = new Set(ALL_APP_MODULES);
   return value.every((item) => allowed.has(item as AppModule));
 }
 
@@ -79,6 +83,7 @@ export function getPageModule(pathname: string): AppModule | null {
 export function getApiModules(pathname: string, method: string): AppModule[] | null {
   if (pathname.startsWith("/api/conversations")) return ["MESSAGES"];
   if (pathname.startsWith("/api/costs")) return ["COSTS"];
+  if (pathname.startsWith("/api/other-expenses")) return ["OTHER_EXPENSES"];
   if (pathname.startsWith("/api/cost-presets")) return ["COSTS", "SETTINGS"];
   if (pathname.startsWith("/api/customers")) return ["CUSTOMERS", "SHIPMENTS"];
   if (pathname.startsWith("/api/debts")) return ["DEBTS"];
@@ -86,10 +91,10 @@ export function getApiModules(pathname: string, method: string): AppModule[] | n
   if (pathname.startsWith("/api/reports")) return ["REPORTS"];
   if (pathname.startsWith("/api/shipments")) return ["SHIPMENTS", "TASKS", "MESSAGES", "DEBTS"];
   if (pathname.startsWith("/api/tasks")) return ["TASKS"];
-  if (pathname.startsWith("/api/vendor-invoices")) return ["PARTNERS", "REPORTS"];
+  if (pathname.startsWith("/api/vendor-invoices")) return ["DEBTS", "PARTNERS", "REPORTS"];
   if (pathname.startsWith("/api/vendors")) return ["PARTNERS", "SETTINGS", "COSTS"];
   if (pathname.startsWith("/api/attachments") || pathname.startsWith("/api/upload")) {
-    return ["SHIPMENTS", "TASKS", "MESSAGES", "DEBTS", "DOCUMENTS", "PARTNERS"];
+    return ["SHIPMENTS", "TASKS", "MESSAGES", "DEBTS", "DOCUMENTS", "PARTNERS", "OTHER_EXPENSES"];
   }
   if (pathname.startsWith("/api/users")) {
     return method === "GET" ? ["USERS", "TASKS", "MESSAGES", "CUSTOMERS"] : ["USERS"];

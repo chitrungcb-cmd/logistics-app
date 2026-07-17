@@ -194,7 +194,7 @@ export default function ShipmentFinanceEditorModal({
       const json = await readApiJson(response);
       if (!response.ok || !json.success) throw new Error(json.error || "Không thể lưu báo giá.");
       onCostsChanged();
-      setMessage("Đã lưu bảng báo giá.");
+      setMessage("Đã lưu bảng báo giá và đồng bộ công nợ khi đủ dữ liệu.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
     } finally {
@@ -306,6 +306,9 @@ export default function ShipmentFinanceEditorModal({
         <div className="flex-1 overflow-auto p-6">
           {isLoading ? <p className="py-12 text-center text-gray-400">Đang tải dữ liệu...</p> : (
             <>
+              <p className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-2.5 text-xs text-blue-700">
+                Khi báo giá và toàn bộ chi phí thực tế đã được nhập đầy đủ, hệ thống tự động đồng bộ phải thu và phải trả sang Công nợ.
+              </p>
               {activeTab === "quote" && <section className="rounded-xl border border-blue-200 bg-blue-50/30 p-5">
                 <div className="mb-3">
                   <h3 className="font-semibold text-gray-900">Bảng báo giá</h3>

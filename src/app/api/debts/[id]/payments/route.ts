@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { sumPayments } from "@/lib/debt-constants";
 import { recomputeDebtStatus } from "@/lib/debt";
+import { isAutomaticPayableDebt } from "@/lib/shipment-debt-sync";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -20,6 +21,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const debt = await prisma.debt.findUnique({ where: { id }, include: { payments: { select: { amount: true } } } });
     if (!debt) return apiError("Không tìm thấy công nợ.", 404);
+    if (user.role !== "ADMIN" && isAutomaticPayableDebt(debt.sourceKey)) {
+      return apiError("Bạn không có quyền ghi nhận thanh toán cho công nợ chi phí tự động.", 403);
+    }
 
     // Block over-payment (audit 3.4) so "Còn lại" can never go negative.
     const remaining = debt.totalAmount - sumPayments(debt.payments);

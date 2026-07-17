@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import Badge from "@/components/shipments/Badge";
+import PaginationControls from "@/components/PaginationControls";
 import { TASK_STATUS_LABELS, taskStatusBadgeClass } from "@/lib/task-constants";
+import type { PaginationMeta } from "@/lib/pagination";
+
+const PAGE_SIZE = 50;
+const EMPTY_PAGINATION: PaginationMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 };
 
 type Task = {
   id: string;
@@ -19,15 +24,19 @@ export default function TasksClient({ canManage }: { canManage: boolean }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginationMeta>(EMPTY_PAGINATION);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/tasks")
+    fetch(`/api/tasks?page=${page}&pageSize=${PAGE_SIZE}`)
       .then((res) => res.json())
       .then((json) => {
         if (cancelled) return;
         if (!json.success) throw new Error(json.error);
-        setTasks(json.data);
+        setTasks(json.data.items);
+        setPagination(json.data.pagination);
+        setError(null);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
@@ -38,7 +47,7 @@ export default function TasksClient({ canManage }: { canManage: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [page]);
 
   return (
     <div className="p-8">
@@ -119,6 +128,7 @@ export default function TasksClient({ canManage }: { canManage: boolean }) {
           </tbody>
         </table>
       </div>
+      <PaginationControls pagination={pagination} onPageChange={(nextPage) => { setIsLoading(true); setPage(nextPage); }} />
     </div>
   );
 }

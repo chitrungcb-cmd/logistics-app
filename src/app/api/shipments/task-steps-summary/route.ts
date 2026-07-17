@@ -1,25 +1,32 @@
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { SHIPMENT_TASK_STEPS } from "@/lib/task-constants";
-import { backfillShipmentWorkflowTasks } from "@/lib/shipment-workflow";
 
 // One batched query for every shipment's 6-step progress, instead of the /shipments list page (no
 // pagination, hundreds of rows) making one GET /api/shipments/[id]/task-steps call per row — that
 // would be hundreds of requests on a single page load. Returns just status per step (no assignee/
 // timestamp — the compact dots on the list only need color, the full detail lives on the shipment
 // detail page's TaskStepper).
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
 
-    if (user.role === "ADMIN") {
-      await backfillShipmentWorkflowTasks({ createdByUserId: user.id });
-    }
+    const shipmentIds = [...new Set(
+      (request.nextUrl.searchParams.get("shipmentIds") ?? "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean)
+    )].slice(0, 100);
+    if (shipmentIds.length === 0) return apiSuccess({});
 
     const tasks = await prisma.task.findMany({
-      where: { relatedShipmentId: { not: null }, title: { in: [...SHIPMENT_TASK_STEPS] } },
+      where: {
+        relatedShipmentId: { in: shipmentIds },
+        title: { in: [...SHIPMENT_TASK_STEPS] },
+      },
       select: { relatedShipmentId: true, title: true, status: true },
     });
 

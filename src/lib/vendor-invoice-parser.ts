@@ -10,8 +10,13 @@ export type ParsedVendorInvoice = {
   taxAmount: number | null;
   totalAmount: number | null;
   currency: string;
+  invoiceDirection: InvoiceDirection;
   isIssuedToNq: boolean | null;
 };
+
+export type InvoiceDirection = "INPUT" | "OUTPUT" | "UNRELATED" | "UNKNOWN";
+
+const DEFAULT_NQ_TAX_CODE = "4900917685";
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -125,12 +130,33 @@ function normalizeCompanyName(value: string) {
     .toUpperCase();
 }
 
-export function determineIssuedToNq(buyerName: string | null, buyerTaxCode: string | null) {
-  const expectedTaxCode = (process.env.NQ_TAX_CODE || process.env.NQ_COMPANY_TAX_CODE || "").replace(/\D/g, "");
-  const normalizedBuyerTaxCode = (buyerTaxCode || "").replace(/\D/g, "");
-  if (expectedTaxCode && normalizedBuyerTaxCode) return expectedTaxCode === normalizedBuyerTaxCode;
-  if (buyerName) return /(^|[^A-Z0-9])NQ([^A-Z0-9]|$)/.test(normalizeCompanyName(buyerName));
+function determinePartyIsNq(name: string | null, taxCode: string | null) {
+  const expectedTaxCode = (
+    process.env.NQ_TAX_CODE || process.env.NQ_COMPANY_TAX_CODE || DEFAULT_NQ_TAX_CODE
+  ).replace(/\D/g, "");
+  const normalizedTaxCode = (taxCode || "").replace(/\D/g, "");
+  if (expectedTaxCode && normalizedTaxCode) return expectedTaxCode === normalizedTaxCode;
+  if (name) return /(^|[^A-Z0-9])NQ([^A-Z0-9]|$)/.test(normalizeCompanyName(name));
   return null;
+}
+
+export function determineInvoiceDirection(
+  sellerName: string | null,
+  sellerTaxCode: string | null,
+  buyerName: string | null,
+  buyerTaxCode: string | null
+): InvoiceDirection {
+  const sellerIsNq = determinePartyIsNq(sellerName, sellerTaxCode);
+  const buyerIsNq = determinePartyIsNq(buyerName, buyerTaxCode);
+
+  if (sellerIsNq === true && buyerIsNq !== true) return "OUTPUT";
+  if (buyerIsNq === true && sellerIsNq !== true) return "INPUT";
+  if (sellerIsNq === false && buyerIsNq === false) return "UNRELATED";
+  return "UNKNOWN";
+}
+
+export function determineIssuedToNq(buyerName: string | null, buyerTaxCode: string | null) {
+  return determinePartyIsNq(buyerName, buyerTaxCode);
 }
 
 export function normalizeInvoiceNumber(value: string | null | undefined) {
@@ -158,6 +184,7 @@ export function parseVendorInvoiceXml(buffer: Buffer): ParsedVendorInvoice | nul
   const taxAmount = parseAmount(findTag(paymentSection || xml, ["TgTThue", "TaxAmount", "TotalTaxAmount"]));
   const totalAmount = parseAmount(findTag(paymentSection || xml, ["TgTTTBSo", "TgTTTSo", "TotalAmount", "AmountDue"]));
   const currency = findTag(generalSection || xml, ["DVTTe", "Currency", "CurrencyCode"]) || "VND";
+  const invoiceDirection = determineInvoiceDirection(sellerName, sellerTaxCode, buyerName, buyerTaxCode);
 
   if (!invoiceNumber && !sellerTaxCode && !sellerName) return null;
   return {
@@ -172,6 +199,7 @@ export function parseVendorInvoiceXml(buffer: Buffer): ParsedVendorInvoice | nul
     taxAmount,
     totalAmount,
     currency,
-    isIssuedToNq: determineIssuedToNq(buyerName, buyerTaxCode),
+    invoiceDirection,
+    isIssuedToNq: invoiceDirection === "INPUT" ? true : invoiceDirection === "UNKNOWN" ? null : false,
   };
 }

@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
-
 type SyncSummary = {
   scanned: number;
   newlyFound: number;
@@ -26,6 +24,7 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
   const [isSyncing, setIsSyncing] = useState(false);
   const [summary, setSummary] = useState<SyncSummary | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [serverSyncConfigured, setServerSyncConfigured] = useState(false);
   const isSyncingRef = useRef(false);
   const [error, setError] = useState<string | null>(() =>
     typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("gmail_error")
@@ -44,6 +43,8 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
         if (res.ok && json.success) {
           setIsConnected(json.data.connected);
           setEmail(json.data.email);
+          setLastSyncedAt(json.data.lastSyncedAt ? new Date(json.data.lastSyncedAt) : null);
+          setServerSyncConfigured(Boolean(json.data.serverSyncConfigured));
         }
       } catch {
         setIsConnected(false);
@@ -53,8 +54,8 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
     loadStatus();
   }, []);
 
-  const runAutomaticSync = useCallback(async () => {
-    if (isSyncingRef.current || document.visibilityState === "hidden") return;
+  const runSync = useCallback(async () => {
+    if (isSyncingRef.current) return;
 
     isSyncingRef.current = true;
     setIsSyncing(true);
@@ -64,7 +65,7 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
       const text = await res.text();
       const json = text ? JSON.parse(text) : null;
       if (!res.ok || !json.success) {
-        throw new Error(json?.error || "Đồng bộ tự động thất bại.");
+        throw new Error(json?.error || "Đồng bộ email thất bại.");
       }
       setSummary(json.data);
       setLastSyncedAt(new Date());
@@ -79,22 +80,6 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
     }
   }, [onSynced]);
 
-  useEffect(() => {
-    if (!isConnected) return;
-
-    const initialSync = window.setTimeout(() => void runAutomaticSync(), 0);
-    const interval = window.setInterval(() => void runAutomaticSync(), AUTO_SYNC_INTERVAL_MS);
-    function handleVisibilityChange() {
-      if (document.visibilityState === "visible") void runAutomaticSync();
-    }
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      window.clearTimeout(initialSync);
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [isConnected, runAutomaticSync]);
-
   if (isConnected === null) return null;
 
   return (
@@ -104,20 +89,30 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
           <h2 className="text-sm font-semibold text-gray-900">Đồng bộ dữ liệu từ Email</h2>
           <p className="mt-0.5 text-xs text-gray-500">
             {isConnected
-              ? `Đã kết nối Gmail: ${email} · tự đọc tờ khai và hóa đơn đầu vào`
+              ? `Đã kết nối Gmail: ${email} · tự đọc tờ khai và hóa đơn đầu vào/đầu ra`
               : "Chưa kết nối Gmail — tự động tạo/cập nhật lô hàng và đối chiếu hóa đơn đính kèm trong email."}
           </p>
         </div>
         {isConnected ? (
-          <div className="text-right">
-            <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${isSyncing ? "bg-blue-100 text-blue-700" : "bg-emerald-100 text-emerald-700"}`}>
-              {isSyncing ? "Đang tự động đồng bộ..." : "✓ Tự động đồng bộ"}
-            </span>
-            <p className="mt-1 text-[11px] text-gray-400">
-              {lastSyncedAt
-                ? `Lần kiểm tra gần nhất: ${lastSyncedAt.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}`
-                : "Tự kiểm tra mỗi 5 phút"}
-            </p>
+          <div className="flex items-center gap-3 text-right">
+            <div>
+              <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${serverSyncConfigured ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                {serverSyncConfigured ? "✓ Tác vụ máy chủ" : "Chưa cấu hình tác vụ máy chủ"}
+              </span>
+              <p className="mt-1 text-[11px] text-gray-400">
+                {lastSyncedAt
+                  ? `Dữ liệu xử lý gần nhất: ${lastSyncedAt.toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}`
+                  : serverSyncConfigured ? "Máy chủ sẽ tự kiểm tra theo lịch" : "Cần thêm CRON_SECRET và lịch chạy"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void runSync()}
+              disabled={isSyncing}
+              className="rounded-md border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSyncing ? "Đang đồng bộ..." : "Đồng bộ ngay"}
+            </button>
           </div>
         ) : (
           <a

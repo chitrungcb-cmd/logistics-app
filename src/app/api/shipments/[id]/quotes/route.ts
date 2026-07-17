@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { syncShipmentDebts } from "@/lib/shipment-debt-sync";
 
 // Quote (báo giá gửi khách) is visible to ADMIN and ACCOUNTANT — unlike ShipmentCost, ACCOUNTANT
 // needs this to issue quotes to customers. FIELD_STAFF gets no access at all.
@@ -31,14 +32,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return apiError("Vui lòng nhập số tiền báo giá.", 400);
     }
 
-    const quote = await prisma.quote.create({
-      data: {
-        shipmentId: id,
-        quoteAmount: Number(body.quoteAmount) || 0,
-        quoteDate: body.quoteDate ? new Date(body.quoteDate) : null,
-        attachmentUrl: body.attachmentUrl || null,
-        note: body.note || null,
-      },
+    const quote = await prisma.$transaction(async (tx) => {
+      const created = await tx.quote.create({
+        data: {
+          shipmentId: id,
+          quoteAmount: Number(body.quoteAmount) || 0,
+          quoteDate: body.quoteDate ? new Date(body.quoteDate) : null,
+          attachmentUrl: body.attachmentUrl || null,
+          note: body.note || null,
+        },
+      });
+      await syncShipmentDebts(tx, id);
+      return created;
     });
     return apiSuccess(quote, 201);
   } catch (error) {

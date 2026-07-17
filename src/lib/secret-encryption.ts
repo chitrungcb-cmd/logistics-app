@@ -4,6 +4,10 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypt
 
 const PREFIX = "enc:v1";
 
+export function isEncryptedSecret(value: string) {
+  return value.startsWith(`${PREFIX}:`);
+}
+
 function encryptionKey() {
   const tokenKey = process.env.TOKEN_ENCRYPTION_KEY;
   const authKey = process.env.AUTH_SECRET;
@@ -29,7 +33,7 @@ export function encryptSecret(value: string) {
 }
 
 export function decryptSecret(value: string) {
-  if (!value.startsWith(`${PREFIX}:`)) return value; // one-time compatibility for an existing token
+  if (!isEncryptedSecret(value)) return value; // one-time compatibility for an existing token
   const [, , ivRaw, tagRaw, encryptedRaw] = value.split(":");
   if (!ivRaw || !tagRaw || !encryptedRaw) throw new Error("Encrypted secret has an invalid format.");
 

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { computeDebtStatus, sumPayments } from "@/lib/debt-constants";
+import { AUTOMATIC_PAYABLE_DEBT_PREFIX } from "@/lib/shipment-debt-sync";
 
 const SHIPMENT_SELECT = {
   id: true,
@@ -11,6 +12,7 @@ const SHIPMENT_SELECT = {
   declarationNo: true,
   declarationDate: true,
   invoiceNo: true,
+  customerName: true,
 } as const;
 
 // Fetched once, unfiltered (mirrors the /api/costs "fetch all, filter client-side" pattern) — /debts
@@ -22,6 +24,14 @@ export async function GET() {
   if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền xem công nợ.", 403);
 
   const debts = await prisma.debt.findMany({
+    where: user.role === "ADMIN"
+      ? undefined
+      : {
+          OR: [
+            { sourceKey: null },
+            { sourceKey: { not: { startsWith: AUTOMATIC_PAYABLE_DEBT_PREFIX } } },
+          ],
+        },
     include: {
       customer: { select: { id: true, companyName: true, taxCode: true } },
       vendor: { select: { id: true, name: true } },

@@ -475,11 +475,10 @@ function ModulePermissionGrid({
   value: AppModule[];
   onChange: (value: AppModule[]) => void;
 }) {
-  const allowed = new Set(getRoleModules(role));
   const selected = new Set(value);
 
   function toggle(module: AppModule, checked: boolean) {
-    if (!allowed.has(module) || role === "ADMIN") return;
+    if (role === "ADMIN") return;
     onChange(
       checked
         ? [...value, module]
@@ -495,25 +494,21 @@ function ModulePermissionGrid({
       </p>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         {APP_MODULES.map((module) => {
-          const isAllowed = allowed.has(module.key);
-          const isChecked = role === "ADMIN" || (isAllowed && selected.has(module.key));
+          const isChecked = role === "ADMIN" || selected.has(module.key);
           return (
             <label
               key={module.key}
-              className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${
-                isAllowed ? "border-gray-200 bg-white text-gray-700" : "border-gray-100 bg-gray-50 text-gray-400"
-              }`}
+              className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700"
             >
               <input
                 type="checkbox"
                 checked={isChecked}
-                disabled={!isAllowed || role === "ADMIN"}
+                disabled={role === "ADMIN"}
                 onChange={(event) => toggle(module.key, event.target.checked)}
                 className="h-4 w-4 rounded border-gray-300 text-blue-600"
               />
               <span>{module.icon}</span>
               <span className="font-medium">{module.label}</span>
-              {!isAllowed && <span className="ml-auto text-[11px]">Không thuộc vai trò</span>}
             </label>
           );
         })}

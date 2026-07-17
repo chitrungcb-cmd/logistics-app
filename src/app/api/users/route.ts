@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     const validRole = role as UserRole;
     const requestedPermissions = modulePermissions ?? getRoleModules(validRole);
     if (!hasOnlyValidModulePermissions(requestedPermissions, validRole)) {
-      return apiError("Danh sách quyền mô-đun không hợp lệ với vai trò đã chọn.", 400);
+      return apiError("Danh sách quyền mô-đun không hợp lệ.", 400);
     }
     const passwordError = validateNewPassword(password);
     if (passwordError) return apiError(passwordError, 400);

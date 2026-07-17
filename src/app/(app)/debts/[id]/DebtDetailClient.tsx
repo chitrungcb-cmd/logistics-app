@@ -22,6 +22,7 @@ type Payment = {
 
 type DebtDetail = {
   id: string;
+  sourceKey: string | null;
   type: "RECEIVABLE" | "PAYABLE";
   totalAmount: number;
   dueDate: string | null;
@@ -33,6 +34,7 @@ type DebtDetail = {
   shipment: {
     id: string;
     shipmentCode: string;
+    customerName: string;
     goodsName: string | null;
     declarationNo: string | null;
     declarationDate: string | null;
@@ -178,7 +180,7 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
   async function handleEditSave(event: React.FormEvent) {
     event.preventDefault();
     setEditError(null);
-    if (!editForm.totalAmount || Number(editForm.totalAmount) <= 0) {
+    if (!debt?.sourceKey && (!editForm.totalAmount || Number(editForm.totalAmount) <= 0)) {
       setEditError("Tổng tiền phải lớn hơn 0.");
       return;
     }
@@ -187,7 +189,7 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          totalAmount: editForm.totalAmount,
+          ...(debt?.sourceKey ? {} : { totalAmount: editForm.totalAmount }),
           dueDate: editForm.dueDate || null,
           note: editForm.note,
         }),
@@ -216,7 +218,14 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
   }
 
   const badge = debtStatusBadge(debt.status, debt.dueDate);
-  const partnerName = debt.customer?.companyName || debt.vendor?.name || "—";
+  const partnerName =
+    debt.customer?.companyName ||
+    debt.vendor?.name ||
+    (debt.sourceKey
+      ? debt.type === "RECEIVABLE"
+        ? debt.shipment?.customerName || "Khách hàng lô hàng"
+        : "Chi phí lô hàng"
+      : "—");
 
   return (
     <div className="p-8">
@@ -230,6 +239,11 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
             <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>
               {badge.label}
             </span>
+            {debt.sourceKey && (
+              <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                Tự động từ lô hàng
+              </span>
+            )}
           </div>
           <div className="flex gap-2">
             <button
@@ -239,13 +253,15 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
             >
               Sửa
             </button>
-            <button
-              type="button"
-              onClick={handleDeleteDebt}
-              className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50"
-            >
-              Xóa nợ
-            </button>
+            {!debt.sourceKey && (
+              <button
+                type="button"
+                onClick={handleDeleteDebt}
+                className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50"
+              >
+                Xóa nợ
+              </button>
+            )}
           </div>
         </div>
         <p className="mt-1 text-sm text-gray-500">{DEBT_TYPE_LABELS[debt.type]}</p>
@@ -275,6 +291,7 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
               </dd>
             </div>
             <Info label="Ghi chú" value={debt.note} />
+            {debt.sourceKey && <Info label="Nguồn" value="Đồng bộ tự động từ tài chính lô hàng" />}
           </dl>
 
           <div className="mt-6">
@@ -465,11 +482,14 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
                   type="number"
                   value={editForm.totalAmount}
                   onChange={(e) => setEditForm((prev) => ({ ...prev, totalAmount: e.target.value }))}
-                  className="input"
+                  className={`input ${debt.sourceKey ? "cursor-not-allowed bg-gray-100 text-gray-500" : ""}`}
                   min={0}
+                  disabled={Boolean(debt.sourceKey)}
                 />
                 <span className="mt-1 block text-xs text-gray-400">
-                  Đã thanh toán {formatVnd(debt.paidAmount)} — sửa tổng tiền sẽ tính lại trạng thái.
+                  {debt.sourceKey
+                    ? "Số tiền được đồng bộ từ báo giá hoặc chi phí lô hàng; hãy sửa tại tài chính lô hàng."
+                    : `Đã thanh toán ${formatVnd(debt.paidAmount)} — sửa tổng tiền sẽ tính lại trạng thái.`}
                 </span>
               </label>
               <label className="block">

@@ -8,7 +8,8 @@ import {
   isInvoiceCostCategory,
   isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
-import { buildUpdateDetail, logCostAudit } from "@/lib/cost-audit-log";
+import { buildUpdateDetail } from "@/lib/cost-audit-log";
+import { syncShipmentDebts } from "@/lib/shipment-debt-sync";
 
 const UPDATABLE_FIELDS = [
   "category",
@@ -114,6 +115,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           detail,
         },
       });
+      if (updated.isActual && updated.costPrice > 0) {
+        await tx.notification.deleteMany({
+          where: { type: "COST_MISSING", relatedShipmentId: updated.shipmentId },
+        });
+      }
+      await syncShipmentDebts(tx, updated.shipmentId);
       return updated;
     });
 
@@ -137,16 +144,19 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     const existing = await prisma.shipmentCost.findUnique({ where: { id: costId } });
     if (!existing) return apiError("Không tìm thấy khoản chi phí.", 404);
 
-    await prisma.shipmentCost.delete({ where: { id: costId } });
-
-    // shipmentCostId: null — the row is gone by the time this log is read, so there's nothing left
-    // to reference (the FK's own ON DELETE SET NULL only handles logs created *before* this delete).
-    await logCostAudit({
-      userId: user.id,
-      shipmentId: existing.shipmentId,
-      shipmentCostId: null,
-      action: "DELETE",
-      detail: `Xóa chi phí ${COST_CATEGORY_LABELS[existing.category] ?? existing.category}: ${existing.costPrice.toLocaleString("vi-VN")} đ`,
+    await prisma.$transaction(async (tx) => {
+      await tx.shipmentCost.delete({ where: { id: costId } });
+      // shipmentCostId để null vì dòng chi phí đã bị xóa nhưng lịch sử vẫn phải được giữ lại.
+      await tx.costAuditLog.create({
+        data: {
+          userId: user.id,
+          shipmentId: existing.shipmentId,
+          shipmentCostId: null,
+          action: "DELETE",
+          detail: `Xóa chi phí ${COST_CATEGORY_LABELS[existing.category] ?? existing.category}: ${existing.costPrice.toLocaleString("vi-VN")} đ`,
+        },
+      });
+      await syncShipmentDebts(tx, existing.shipmentId);
     });
 
     return apiSuccess({ ok: true });

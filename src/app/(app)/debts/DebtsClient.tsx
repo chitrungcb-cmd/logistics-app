@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import CustomerCombobox from "@/components/customers/CustomerCombobox";
 import VendorCombobox from "@/components/vendors/VendorCombobox";
+import { InvoiceManagementPanel } from "@/app/(app)/partners/PartnersClient";
 import {
   DEBT_TYPE_LABELS,
   DEBT_STATUS_OPTIONS,
@@ -28,6 +29,7 @@ type ShipmentOption = {
 
 type DebtRow = {
   id: string;
+  sourceKey: string | null;
   type: "RECEIVABLE" | "PAYABLE";
   customerId: string | null;
   vendorId: string | null;
@@ -50,6 +52,16 @@ function formatVnd(amount: number) {
 
 function shipmentLabelFor(s: ShipmentOption) {
   return `${s.goodsName || "Chưa có tên hàng"} - TK ${s.declarationNo || "—"} - INV ${s.invoiceNo || "—"} - ${s.customerName}`;
+}
+
+function debtPartyName(debt: DebtRow) {
+  if (debt.customer?.companyName) return debt.customer.companyName;
+  if (debt.vendor?.name) return debt.vendor.name;
+  if (!debt.sourceKey) return "—";
+
+  return debt.type === "RECEIVABLE"
+    ? debt.shipment?.customerName || "Khách hàng lô hàng"
+    : "Chi phí lô hàng";
 }
 
 const emptyForm = {
@@ -75,13 +87,14 @@ function daysOverdue(dueDate: string) {
   return Math.floor((Date.now() - new Date(dueDate).getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export default function DebtsClient() {
+export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
   const router = useRouter();
 
   const [debts, setDebts] = useState<DebtRow[]>([]);
   const [shipments, setShipments] = useState<ShipmentOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [section, setSection] = useState<"DEBTS" | "INVOICES">("DEBTS");
 
   const [activeTab, setActiveTab] = useState<"RECEIVABLE" | "PAYABLE">("RECEIVABLE");
   const [filters, setFilters] = useState({
@@ -165,7 +178,7 @@ export default function DebtsClient() {
     return tabDebts.filter((d) => {
       if (filters.search) {
         const query = filters.search.toLowerCase();
-        const name = (d.customer?.companyName || d.vendor?.name || "").toLowerCase();
+        const name = debtPartyName(d).toLowerCase();
         if (!name.includes(query)) return false;
       }
       if (filters.status === OVERDUE_FILTER) {
@@ -260,9 +273,9 @@ export default function DebtsClient() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Công nợ</h1>
-          <p className="mt-1 text-sm text-gray-500">Theo dõi công nợ phải thu và phải trả.</p>
+          <p className="mt-1 text-sm text-gray-500">Theo dõi phải thu, phải trả và hóa đơn đầu vào/đầu ra.</p>
         </div>
-        <button
+        {section === "DEBTS" && <button
           type="button"
           onClick={() => {
             resetForm();
@@ -271,9 +284,17 @@ export default function DebtsClient() {
           className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
         >
           + Thêm công nợ
-        </button>
+        </button>}
       </div>
 
+      <div className="mb-6 flex gap-2 border-b border-gray-200">
+        <button type="button" onClick={() => setSection("DEBTS")} className={`border-b-2 px-4 py-3 text-sm font-medium ${section === "DEBTS" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-700"}`}>Phải thu & phải trả</button>
+        <button type="button" onClick={() => setSection("INVOICES")} className={`border-b-2 px-4 py-3 text-sm font-medium ${section === "INVOICES" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-700"}`}>Hóa đơn đầu vào/đầu ra</button>
+      </div>
+
+      {section === "INVOICES" ? (
+        <InvoiceManagementPanel isAdmin={isAdmin} embedded />
+      ) : <>
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <KpiCard icon="📥" label="Tổng phải thu" value={formatVnd(kpi.tongPhaiThu)} valueClassName="text-blue-700" />
         <KpiCard icon="📤" label="Tổng phải trả" value={formatVnd(kpi.tongPhaiTra)} valueClassName="text-orange-700" />
@@ -348,7 +369,7 @@ export default function DebtsClient() {
           <thead className="bg-gray-50">
             <tr>
               <th className="px-4 py-3 text-left font-medium text-gray-500">
-                {activeTab === "RECEIVABLE" ? "Khách hàng" : "Nhà cung cấp"}
+                {activeTab === "RECEIVABLE" ? "Khách hàng" : "Nhà cung cấp / nguồn chi"}
               </th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Lô hàng liên quan</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Tổng tiền</th>
@@ -391,7 +412,12 @@ export default function DebtsClient() {
                     className="cursor-pointer hover:bg-gray-50"
                   >
                     <td className="px-4 py-3 font-medium text-gray-900">
-                      {debt.customer?.companyName || debt.vendor?.name || "—"}
+                      <div>{debtPartyName(debt)}</div>
+                      {debt.sourceKey && (
+                        <span className="mt-1 inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                          Tự động từ lô hàng
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-gray-600">
                       {debt.shipment ? (
@@ -573,6 +599,7 @@ export default function DebtsClient() {
           </div>
         </div>
       )}
+      </>}
     </div>
   );
 }

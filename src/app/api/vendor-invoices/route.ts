@@ -3,6 +3,8 @@ import type { Prisma } from "@/generated/prisma/client";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { prisma } from "@/lib/prisma";
+import { determineInvoiceDirection, type InvoiceDirection } from "@/lib/vendor-invoice-parser";
+import { AUTOMATIC_PAYABLE_DEBT_PREFIX } from "@/lib/shipment-debt-sync";
 
 const STATUSES = new Set(["MATCHED", "UNMATCHED", "NEEDS_REVIEW"]);
 
@@ -27,6 +29,10 @@ export async function GET(request: NextRequest) {
     const status = rawStatus && STATUSES.has(rawStatus) ? rawStatus as "MATCHED" | "UNMATCHED" | "NEEDS_REVIEW" : null;
     const monthRange = getMonthRange(request.nextUrl.searchParams.get("month"));
     const nq = request.nextUrl.searchParams.get("nq");
+    const rawDirection = request.nextUrl.searchParams.get("direction");
+    const direction = ["INPUT", "OUTPUT", "UNRELATED", "UNKNOWN"].includes(rawDirection || "")
+      ? rawDirection as InvoiceDirection
+      : null;
 
     const where: Prisma.VendorInvoiceWhereInput = {
       status: status ?? undefined,
@@ -36,6 +42,8 @@ export async function GET(request: NextRequest) {
         ? [
             { sellerName: { contains: search, mode: "insensitive" } },
             { sellerTaxCode: { contains: search, mode: "insensitive" } },
+            { buyerName: { contains: search, mode: "insensitive" } },
+            { buyerTaxCode: { contains: search, mode: "insensitive" } },
             { invoiceNumber: { contains: search, mode: "insensitive" } },
             { emailSubject: { contains: search, mode: "insensitive" } },
             { vendor: { name: { contains: search, mode: "insensitive" } } },
@@ -82,16 +90,69 @@ export async function GET(request: NextRequest) {
       }),
     ]);
 
-    const totals = invoices.reduce(
+    const shipmentIds = Array.from(new Set(
+      invoices.flatMap((invoice) => invoice.shipmentCost?.shipment.id ? [invoice.shipmentCost.shipment.id] : [])
+    ));
+    const payableDebts = shipmentIds.length > 0
+      ? await prisma.debt.findMany({
+          where: { sourceKey: { in: shipmentIds.map((shipmentId) => `${AUTOMATIC_PAYABLE_DEBT_PREFIX}${shipmentId}`) } },
+          select: { id: true, sourceKey: true, totalAmount: true, status: true, dueDate: true },
+        })
+      : [];
+    const payableDebtByShipment = new Map(
+      payableDebts.map((debt) => [debt.sourceKey?.slice(AUTOMATIC_PAYABLE_DEBT_PREFIX.length), debt])
+    );
+
+    const classifiedInvoices = invoices.map((invoice) => {
+      const invoiceDirection = determineInvoiceDirection(
+        invoice.sellerName,
+        invoice.sellerTaxCode,
+        invoice.buyerName,
+        invoice.buyerTaxCode
+      );
+      const note = invoiceDirection === "OUTPUT"
+        ? "Hóa đơn đầu ra do NQ Logistics xuất cho khách hàng."
+        : invoiceDirection === "UNRELATED"
+          ? "NQ Logistics không phải bên bán hoặc bên mua; cần kiểm tra hóa đơn."
+          : invoiceDirection === "UNKNOWN"
+            ? "Chưa xác định được hóa đơn đầu vào hay đầu ra; cần kiểm tra MST bên bán và bên mua."
+            : null;
+      const payableDebt = invoiceDirection === "INPUT" && invoice.shipmentCost
+        ? payableDebtByShipment.get(invoice.shipmentCost.shipment.id) ?? null
+        : null;
+      return { ...invoice, invoiceDirection, note, payableDebt };
+    });
+    const invoiceRows = direction
+      ? classifiedInvoices.filter((invoice) => invoice.invoiceDirection === direction)
+      : classifiedInvoices;
+
+    const totals = invoiceRows.reduce(
       (acc, invoice) => {
         acc.count++;
-        if (invoice.status === "MATCHED") acc.matched++;
-        else if (invoice.status === "UNMATCHED") acc.unmatched++;
-        else acc.needsReview++;
-        if (invoice.isIssuedToNq !== false) acc.totalAmount += invoice.totalAmount ?? 0;
+        if (invoice.invoiceDirection === "INPUT") {
+          acc.inputCount++;
+          acc.inputAmount += invoice.totalAmount ?? 0;
+          if (invoice.status === "MATCHED") acc.matched++;
+          else if (invoice.status === "UNMATCHED") acc.unmatched++;
+          else acc.needsReview++;
+        } else if (invoice.invoiceDirection === "OUTPUT") {
+          acc.outputCount++;
+          acc.outputAmount += invoice.totalAmount ?? 0;
+        } else {
+          acc.needsReview++;
+        }
         return acc;
       },
-      { count: 0, matched: 0, unmatched: 0, needsReview: 0, totalAmount: 0 }
+      {
+        count: 0,
+        inputCount: 0,
+        outputCount: 0,
+        matched: 0,
+        unmatched: 0,
+        needsReview: 0,
+        inputAmount: 0,
+        outputAmount: 0,
+      }
     );
 
     const partnerRows = partners.map(({ invoices: partnerInvoices, ...partner }) => ({
@@ -104,7 +165,7 @@ export async function GET(request: NextRequest) {
       ),
     }));
 
-    return apiSuccess({ invoices, totals, partners: partnerRows });
+    return apiSuccess({ invoices: invoiceRows, totals, partners: partnerRows });
   } catch (error) {
     console.error("GET /api/vendor-invoices failed:", error);
     return apiError("Không thể tải danh sách hóa đơn đối tác.", 500);

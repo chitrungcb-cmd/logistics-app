@@ -33,7 +33,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       (body.role && body.role !== existing.role ? getRoleModules(nextRole) : undefined);
     if (requestedPermissions !== undefined) {
       if (!hasOnlyValidModulePermissions(requestedPermissions, nextRole)) {
-        return apiError("Danh sách quyền mô-đun không hợp lệ với vai trò đã chọn.", 400);
+        return apiError("Danh sách quyền mô-đun không hợp lệ.", 400);
       }
       data.modulePermissions = normalizeModulePermissions(requestedPermissions, nextRole);
     }

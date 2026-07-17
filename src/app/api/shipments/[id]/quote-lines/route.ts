@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { syncShipmentDebts } from "@/lib/shipment-debt-sync";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -32,17 +33,24 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     if (lines.some((line: { quantity: number; unitPrice: number }) => line.quantity < 0 || line.unitPrice < 0)) {
       return apiError("Số lượng và đơn giá không được âm.", 400);
     }
-    await prisma.$transaction(async (tx) => {
+    const saved = await prisma.$transaction(async (tx) => {
       await tx.shipmentQuoteLine.deleteMany({ where: { shipmentId: id } });
       for (const line of lines) {
         await tx.shipmentQuoteLine.create({
           data: { shipmentId: id, ...line, amount: line.quantity * line.unitPrice },
         });
       }
+      const currentLines = await tx.shipmentQuoteLine.findMany({
+        where: { shipmentId: id },
+        orderBy: { createdAt: "asc" },
+      });
+      const total = currentLines.reduce((sum, line) => sum + line.amount, 0);
+      await tx.quote.create({
+        data: { shipmentId: id, quoteAmount: total, note: "Tổng hợp từ bảng báo giá chi tiết" },
+      });
+      await syncShipmentDebts(tx, id);
+      return currentLines;
     });
-    const saved = await prisma.shipmentQuoteLine.findMany({ where: { shipmentId: id }, orderBy: { createdAt: "asc" } });
-    const total = saved.reduce((sum, line) => sum + line.amount, 0);
-    await prisma.quote.create({ data: { shipmentId: id, quoteAmount: total, note: "Tổng hợp từ bảng báo giá chi tiết" } });
     return apiSuccess(saved);
   } catch (error) {
     console.error("PUT /api/shipments/[id]/quote-lines failed:", error);

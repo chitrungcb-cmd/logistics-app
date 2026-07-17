@@ -298,7 +298,7 @@ export default function CostsClient() {
     <div className="p-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Chi phí</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">Chi phí lô hàng</h1>
           <p className="mt-1 text-sm text-gray-500">Mỗi lô hàng chỉ hiển thị một dòng tổng hợp; mở rộng khi cần xem từng khoản.</p>
         </div>
         <Link href="/reports/vendor-payables" className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
@@ -382,7 +382,7 @@ export default function CostsClient() {
                     <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-blue-700">{formatVnd(shipment.totalRevenue)}</td>
                     <td className={`whitespace-nowrap px-3 py-3 text-right font-semibold ${shipment.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>{formatVnd(shipment.profit)}</td>
                     <td className="px-3 py-3 text-center text-gray-500">📎 {shipment.documentCount}</td>
-                    <td className="px-3 py-3"><div className="flex min-w-44 justify-end gap-3"><button type="button" onClick={() => setExpandedShipmentId(expanded ? null : shipment.id)} className="text-blue-600 hover:underline">{expanded ? "Thu gọn" : `Chi tiết (${shipment.costs.length})`}</button><button type="button" onClick={() => setEditingShipment(shipment)} className="font-medium text-blue-600 hover:underline">Mở chi phí</button></div></td>
+                    <td className="px-3 py-3"><div className="flex min-w-44 justify-end gap-3"><button type="button" onClick={() => setExpandedShipmentId(expanded ? null : shipment.id)} className="text-blue-600 hover:underline">{expanded ? "Thu gọn" : `Chi tiết (${shipment.costs.length})`}</button><button type="button" onClick={() => setEditingShipment(shipment)} className="font-medium text-blue-600 hover:underline">Mở chi phí lô hàng</button></div></td>
                   </tr>
                   {expanded && <tr><td colSpan={9} className="bg-slate-50 px-6 py-4"><ShipmentCostDetails shipment={shipment} opportunityByCostId={opportunityByCostId} onHistory={setViewingCost} onCompare={() => setSimilarShipmentId(shipment.id)} /></td></tr>}
                 </Fragment>;

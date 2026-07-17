@@ -7,5 +7,5 @@ export default async function DebtsPage() {
   if (!user) redirect("/login");
   if (user.role === "FIELD_STAFF") redirect("/");
 
-  return <DebtsClient />;
+  return <DebtsClient isAdmin={user.role === "ADMIN"} />;
 }

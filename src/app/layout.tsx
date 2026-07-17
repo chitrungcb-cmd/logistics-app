@@ -23,7 +23,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="vi">
-      <body>{children}</body>
+      {/* Một số tiện ích ký số nghiệp vụ chèn class vào body trước khi React hydrate. */}
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }

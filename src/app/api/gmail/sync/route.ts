@@ -1,4 +1,6 @@
 import type { gmail_v1 } from "googleapis";
+import { timingSafeEqual } from "crypto";
+import { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { getAuthorizedGmailClient } from "@/lib/google";
@@ -9,7 +11,7 @@ import { generateShipmentCode, mergeDeclarationBranch, type Attachment } from "@
 import { applyCostPresetsToShipment } from "@/lib/cost-presets";
 import { ensureShipmentWorkflowTasks } from "@/lib/shipment-workflow";
 import { syncVendorInvoices, type VendorInvoiceSyncSummary } from "@/lib/vendor-invoice-sync";
-import { notifyNewShipmentAssignees } from "@/lib/notifications";
+import { notifyNewShipmentAssignees, syncMissingActualCostAlerts } from "@/lib/notifications";
 
 // How many *new* (not-yet-processed) messages one sync call takes on. Gmail returns matches
 // newest-first, and every call starts pagination from page 1 — so once the newest ~500 are already
@@ -18,6 +20,30 @@ import { notifyNewShipmentAssignees } from "@/lib/notifications";
 // until the whole mailbox is caught up, however many pages that takes.
 const NEW_MESSAGES_PER_SYNC = 150;
 let syncInProgress = false;
+
+export const runtime = "nodejs";
+
+function hasValidCronSecret(request: NextRequest) {
+  const configuredSecret = process.env.CRON_SECRET;
+  const authorization = request.headers.get("authorization");
+  if (!configuredSecret || !authorization?.startsWith("Bearer ")) return false;
+
+  const configuredBuffer = Buffer.from(configuredSecret, "utf8");
+  const providedBuffer = Buffer.from(authorization.slice("Bearer ".length), "utf8");
+  return configuredBuffer.length === providedBuffer.length && timingSafeEqual(configuredBuffer, providedBuffer);
+}
+
+async function getSyncActor(request: NextRequest) {
+  if (hasValidCronSecret(request)) {
+    // Automated work still uses an active administrator as the accountable actor on tasks/audit rows.
+    return prisma.user.findFirst({
+      where: { role: "ADMIN", isActive: true },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, role: true },
+    });
+  }
+  return getCurrentUser();
+}
 
 type AttachmentPart = { filename: string; mimeType: string; attachmentId: string };
 
@@ -187,11 +213,11 @@ async function findOrCreateCustomer(parsed: ParsedDeclaration): Promise<string |
   return existing.id;
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   let ownsSyncLock = false;
   try {
-    const user = await getCurrentUser();
-    if (!user) return apiError("Chưa đăng nhập.", 401);
+    const user = await getSyncActor(request);
+    if (!user) return apiError("Chưa đăng nhập hoặc khóa tác vụ máy chủ không hợp lệ.", 401);
     if (user.role !== "ADMIN") return apiError("Chỉ Admin mới được đồng bộ Gmail.", 403);
 
     const gmail = await getAuthorizedGmailClient();
@@ -430,6 +456,15 @@ export async function POST() {
     } catch (invoiceError) {
       invoiceSummary.errors++;
       console.error("Gmail vendor-invoice sync failed:", invoiceError);
+    }
+
+    try {
+      // This reconciliation used to run every time every browser polled the notification bell.
+      // Running it once per scheduled sync keeps alerts within the same five-minute SLA without
+      // making ordinary notification reads scan every shipment and notification row.
+      await syncMissingActualCostAlerts();
+    } catch (notificationError) {
+      console.error("Missing-cost alert reconciliation failed:", notificationError);
     }
 
     return apiSuccess({

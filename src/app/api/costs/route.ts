@@ -8,7 +8,7 @@ import {
   isInvoiceCostCategory,
   isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
-import { logCostAudit } from "@/lib/cost-audit-log";
+import { syncShipmentDebts } from "@/lib/shipment-debt-sync";
 
 // Flat ledger across every shipment — ADMIN only, end to end (see CLAUDE.md "Profit visibility").
 // This is the ONLY place ShipmentCost is created/edited/deleted in the whole app; the shipment
@@ -83,33 +83,43 @@ export async function POST(request: NextRequest) {
       : null;
     if (vendorId && !vendor) return apiError("Nhà cung cấp không hợp lệ.", 400);
 
-    const cost = await prisma.shipmentCost.create({
-      data: {
-        shipmentId: body.shipmentId,
-        category: body.category,
-        unitPrice,
-        quantity,
-        costPrice: unitPrice * quantity,
-        sellPrice: Number(body.sellPrice) || 0,
-        isAdditional: !!body.isAdditional,
-        isActual: true,
-        invoiceNumber: isInvoiceCostCategory(body.category) ? body.invoiceNumber || null : null,
-        attachmentUrl: body.attachmentUrl || null,
-        note: body.note || null,
-        vendorId,
-      },
-      include: {
-        shipment: { select: { id: true, shipmentCode: true, customerName: true, goodsName: true, declarationNo: true, declarationDate: true, invoiceNo: true } },
-        vendor: { select: { id: true, name: true, type: true } },
-      },
-    });
-
-    await logCostAudit({
-      userId: user.id,
-      shipmentId: cost.shipmentId,
-      shipmentCostId: cost.id,
-      action: "CREATE",
-      detail: `Tạo chi phí ${COST_CATEGORY_LABELS[cost.category] ?? cost.category}: ${cost.costPrice.toLocaleString("vi-VN")} đ${isVendorlessCostCategory(cost.category) ? "" : vendor ? ` · Nhà cung cấp: ${vendor.name}` : " · Chưa gắn nhà cung cấp"}`,
+    const cost = await prisma.$transaction(async (tx) => {
+      const created = await tx.shipmentCost.create({
+        data: {
+          shipmentId: body.shipmentId,
+          category: body.category,
+          unitPrice,
+          quantity,
+          costPrice: unitPrice * quantity,
+          sellPrice: Number(body.sellPrice) || 0,
+          isAdditional: !!body.isAdditional,
+          isActual: true,
+          invoiceNumber: isInvoiceCostCategory(body.category) ? body.invoiceNumber || null : null,
+          attachmentUrl: body.attachmentUrl || null,
+          note: body.note || null,
+          vendorId,
+        },
+        include: {
+          shipment: { select: { id: true, shipmentCode: true, customerName: true, goodsName: true, declarationNo: true, declarationDate: true, invoiceNo: true } },
+          vendor: { select: { id: true, name: true, type: true } },
+        },
+      });
+      await tx.costAuditLog.create({
+        data: {
+          userId: user.id,
+          shipmentId: created.shipmentId,
+          shipmentCostId: created.id,
+          action: "CREATE",
+          detail: `Tạo chi phí ${COST_CATEGORY_LABELS[created.category] ?? created.category}: ${created.costPrice.toLocaleString("vi-VN")} đ${isVendorlessCostCategory(created.category) ? "" : vendor ? ` · Nhà cung cấp: ${vendor.name}` : " · Chưa gắn nhà cung cấp"}`,
+        },
+      });
+      if (created.isActual && created.costPrice > 0) {
+        await tx.notification.deleteMany({
+          where: { type: "COST_MISSING", relatedShipmentId: created.shipmentId },
+        });
+      }
+      await syncShipmentDebts(tx, created.shipmentId);
+      return created;
     });
 
     return apiSuccess(cost, 201);

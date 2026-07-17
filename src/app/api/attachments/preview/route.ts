@@ -1,9 +1,8 @@
 import { NextRequest } from "next/server";
-import { readFile, stat } from "fs/promises";
-import path from "path";
 import ExcelJS from "exceljs";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { privateObjectKeyFromUrl, readStoredFile } from "@/lib/private-storage";
 
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
 const MAX_PREVIEW_SHEETS = 20;
@@ -211,24 +210,15 @@ export async function GET(request: NextRequest) {
     if (!user) return apiError("Chưa đăng nhập.", 401);
 
     const url = request.nextUrl.searchParams.get("url");
-    if (!url || !url.startsWith("/uploads/") || url.includes("..") || !url.toLowerCase().endsWith(".xlsx")) {
+    const isLegacyUpload = url?.startsWith("/uploads/") && !url.includes("..");
+    const isPrivateUpload = url ? privateObjectKeyFromUrl(url) !== null : false;
+    if (!url || (!isLegacyUpload && !isPrivateUpload) || !url.toLowerCase().endsWith(".xlsx")) {
       return apiError("Đường dẫn tệp không hợp lệ.", 400);
-    }
-
-    const uploadRoot = path.resolve(process.cwd(), "public", "uploads");
-    const filePath = path.resolve(process.cwd(), "public", `.${url}`);
-    if (!filePath.startsWith(`${uploadRoot}${path.sep}`)) {
-      return apiError("Đường dẫn tệp không hợp lệ.", 400);
-    }
-
-    const fileStat = await stat(filePath);
-    if (!fileStat.isFile() || fileStat.size <= 0 || fileStat.size > MAX_PREVIEW_BYTES) {
-      return apiError("Tệp trống hoặc vượt quá 10MB.", 400);
     }
 
     const workbook = new ExcelJS.Workbook();
     // ExcelJS bundles Buffer typings from an older @types/node release; runtime accepts Node Buffer.
-    await workbook.xlsx.load((await readFile(filePath)) as never);
+    await workbook.xlsx.load((await readStoredFile(url, MAX_PREVIEW_BYTES)) as never);
     if (workbook.worksheets.length > MAX_PREVIEW_SHEETS) {
       return apiError("Tệp có quá nhiều trang tính.", 400);
     }

@@ -1,6 +1,7 @@
 import { getCurrentUser } from "@/lib/auth";
 import { getGmailAuthRecord } from "@/lib/google";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { prisma } from "@/lib/prisma";
 
 // ADMIN-only like the rest of /api/gmail/*. GmailSyncPanel handles the 403 gracefully for other
 // roles (it simply never renders), so no UI change is needed.
@@ -10,8 +11,21 @@ export async function GET() {
     if (!user) return apiError("Chưa đăng nhập.", 401);
     if (user.role !== "ADMIN") return apiError("Chỉ Admin mới được dùng đồng bộ Gmail.", 403);
 
-    const auth = await getGmailAuthRecord();
-    return apiSuccess({ connected: !!auth, email: auth?.email ?? null });
+    const [auth, lastDeclaration, lastInvoice] = await Promise.all([
+      getGmailAuthRecord(),
+      prisma.processedEmail.findFirst({ orderBy: { processedAt: "desc" }, select: { processedAt: true } }),
+      prisma.vendorInvoice.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+    ]);
+    const lastSyncedAt = [lastDeclaration?.processedAt, lastInvoice?.createdAt]
+      .filter((value): value is Date => value instanceof Date)
+      .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+
+    return apiSuccess({
+      connected: !!auth,
+      email: auth?.email ?? null,
+      lastSyncedAt,
+      serverSyncConfigured: Boolean(process.env.CRON_SECRET),
+    });
   } catch (error) {
     console.error("GET /api/gmail/status failed:", error);
     return apiError("Không thể kiểm tra trạng thái kết nối Gmail.", 500);

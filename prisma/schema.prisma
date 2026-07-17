@@ -61,6 +61,10 @@ model Shipment {
   debts               Debt[]
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
+
+  @@index([declarationDate, createdAt])
+  @@index([status])
+  @@index([channel])
 }
 
 enum CostCategory {
@@ -107,6 +111,42 @@ model ShipmentCost {
 
   @@unique([shipmentId, presetId])
   @@index([vendorId])
+  @@index([shipmentId, createdAt])
+}
+
+enum OtherExpenseCategory {
+  TIEP_KHACH
+  AN_UONG
+  VAN_PHONG_PHAM
+  DI_LAI
+  DIEN_NUOC_INTERNET
+  THUE_VAN_PHONG
+  SUA_CHUA_BAO_TRI
+  PHI_NGAN_HANG
+  KHAC
+}
+
+// Chi phí vận hành chung, hoàn toàn độc lập với ShipmentCost và tài chính/công nợ từng lô hàng.
+model OtherExpense {
+  id             String               @id @default(cuid())
+  category       OtherExpenseCategory
+  description    String
+  amount         Float
+  expenseDate    DateTime
+  payee          String?
+  paymentMethod  String?
+  invoiceNumber  String?
+  attachmentName String?
+  attachmentUrl  String?
+  note           String?
+  createdBy      User?                @relation("OtherExpenseCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById    String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([expenseDate])
+  @@index([category])
+  @@index([createdById])
 }
 
 // Bảng giá chi phí được thiết lập trước theo nhóm tên hàng. Khi lô có số tờ khai, các dòng đang
@@ -167,6 +207,8 @@ model Quote {
   note          String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  @@index([shipmentId, createdAt])
 }
 
 enum QuoteLineCategory {
@@ -218,8 +260,8 @@ enum InvoiceReconciliationStatus {
   NEEDS_REVIEW
 }
 
-// Hóa đơn đầu vào được đọc từ email gửi cho NQ Logistics. sourceKey là khóa Gmail + attachment
-// giúp đồng bộ lặp lại an toàn; shipmentCostId được tự động ghép theo số hóa đơn và nhà cung cấp.
+// Hóa đơn đầu vào/đầu ra được đọc từ Gmail của NQ Logistics. sourceKey là khóa Gmail + attachment
+// giúp đồng bộ lặp lại an toàn; hóa đơn đầu vào được ghép với chi phí theo số hóa đơn/nhà cung cấp.
 model VendorInvoice {
   id             String                      @id @default(cuid())
   sourceKey      String                      @unique
@@ -283,6 +325,8 @@ enum DebtStatus {
 model Debt {
   id          String     @id @default(cuid())
   type        DebtType
+  // Khóa chỉ có ở công nợ đồng bộ từ tài chính lô hàng; unique để mọi lần lưu sau chỉ upsert.
+  sourceKey   String?    @unique
   customer    Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
   customerId  String?
   vendor      Vendor?    @relation(fields: [vendorId], references: [id], onDelete: SetNull)
@@ -296,6 +340,9 @@ model Debt {
   payments    Payment[]
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
+
+  @@index([type, createdAt])
+  @@index([dueDate])
 }
 
 model Payment {
@@ -333,6 +380,7 @@ model User {
   customersAssigned       Customer[]           @relation("CustomerAssignments")
   notifications           Notification[]
   costAuditLogs           CostAuditLog[]
+  otherExpensesCreated    OtherExpense[]       @relation("OtherExpenseCreator")
   taskStatusLogs          TaskStatusLog[]
   conversationsCreated    Conversation[]       @relation("CreatedConversations")
   conversationMemberships ConversationMember[]
@@ -378,6 +426,10 @@ model Task {
   statusLogs        TaskStatusLog[]
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
+
+  @@index([relatedShipmentId, title])
+  @@index([assignedToUserId, createdAt])
+  @@index([createdAt])
 }
 
 // Lưu lịch sử tích/chuyển trạng thái tiến trình để biết ai thao tác và thời điểm nào.
@@ -416,6 +468,9 @@ model Notification {
   // Optional idempotency key for recurring system alerts; null for ordinary task/chat notifications.
   dedupeKey             String?          @unique
   createdAt             DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, isRead])
 }
 
 enum ConversationType {
@@ -470,6 +525,8 @@ model Message {
   attachments    MessageAttachment[]
   mentions       MessageMention[]
   createdAt      DateTime            @default(now())
+
+  @@index([conversationId, createdAt])
 }
 
 model MessageAttachment {

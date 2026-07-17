@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { syncShipmentDebts } from "@/lib/shipment-debt-sync";
 
 const UPDATABLE_FIELDS = ["quoteAmount", "quoteDate", "attachmentUrl", "note"] as const;
 
@@ -28,7 +29,11 @@ export async function PATCH(
       return apiError("Không có dữ liệu để cập nhật.", 400);
     }
 
-    const quote = await prisma.quote.update({ where: { id: quoteId }, data });
+    const quote = await prisma.$transaction(async (tx) => {
+      const updated = await tx.quote.update({ where: { id: quoteId }, data });
+      await syncShipmentDebts(tx, updated.shipmentId);
+      return updated;
+    });
     return apiSuccess(quote);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "P2025") {
@@ -49,7 +54,10 @@ export async function DELETE(
     if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền xóa báo giá.", 403);
 
     const { quoteId } = await params;
-    await prisma.quote.delete({ where: { id: quoteId } });
+    await prisma.$transaction(async (tx) => {
+      const deleted = await tx.quote.delete({ where: { id: quoteId } });
+      await syncShipmentDebts(tx, deleted.shipmentId);
+    });
     return apiSuccess({ ok: true });
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "P2025") {

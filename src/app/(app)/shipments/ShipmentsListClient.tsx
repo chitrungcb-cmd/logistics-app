@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import PaginationControls from "@/components/PaginationControls";
 import Badge from "@/components/shipments/Badge";
 import AttachmentsCell from "@/components/shipments/AttachmentsCell";
 import GmailSyncPanel from "@/components/shipments/GmailSyncPanel";
@@ -15,63 +16,85 @@ import {
   type Attachment,
 } from "@/lib/shipment-constants";
 import type { ShipmentDTO } from "@/lib/types";
+import type { PaginationMeta } from "@/lib/pagination";
 
 const ALL_FILTER = "__all__";
-const LIST_REFRESH_INTERVAL_MS = 60 * 1000;
+const PAGE_SIZE = 50;
+const LIST_REFRESH_INTERVAL_MS = 90 * 1000;
+const EMPTY_PAGINATION: PaginationMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 };
 
 export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
   const [shipments, setShipments] = useState<ShipmentDTO[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [taskStepsSummary, setTaskStepsSummary] = useState<Record<string, (string | null)[]>>({});
+  const [pagination, setPagination] = useState<PaginationMeta>(EMPTY_PAGINATION);
+  const [currentPage, setCurrentPage] = useState(1);
   const hasLoadedShipments = useRef(false);
+  const requestSequence = useRef(0);
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(ALL_FILTER);
   const [channelFilter, setChannelFilter] = useState(ALL_FILTER);
 
   const loadShipments = useCallback(async () => {
+    const sequence = ++requestSequence.current;
     try {
-      const res = await fetch("/api/shipments", { cache: "no-store" });
+      const params = new URLSearchParams({ page: String(currentPage), pageSize: String(PAGE_SIZE) });
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      if (statusFilter !== ALL_FILTER) params.set("status", statusFilter);
+      if (channelFilter !== ALL_FILTER) params.set("channel", channelFilter);
+      const res = await fetch(`/api/shipments?${params}`, { cache: "no-store" });
       const text = await res.text();
       const json = text ? JSON.parse(text) : null;
       if (!res.ok || !json?.success) {
         throw new Error(json?.error || "Không thể tải danh sách lô hàng.");
       }
-      setShipments(json.data);
+      if (sequence !== requestSequence.current) return;
+      setShipments(json.data.items);
+      setTaskStepsSummary(json.data.taskStepsSummary);
+      setPagination(json.data.pagination);
       hasLoadedShipments.current = true;
       setError(null);
     } catch (err) {
+      if (sequence !== requestSequence.current) return;
       if (!hasLoadedShipments.current) {
         setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
       }
     } finally {
-      setIsLoading(false);
+      if (sequence === requestSequence.current) setIsLoading(false);
     }
-  }, []);
-
-  const loadTaskSteps = useCallback(async () => {
-    try {
-      const res = await fetch("/api/shipments/task-steps-summary", { cache: "no-store" });
-      const json = await res.json();
-      if (json.success) setTaskStepsSummary(json.data);
-    } catch {
-      // The shipment list can still be used if task progress is temporarily unavailable.
-    }
-  }, []);
+  }, [channelFilter, currentPage, debouncedSearch, statusFilter]);
 
   const refreshList = useCallback(() => {
-    void Promise.all([loadShipments(), loadTaskSteps()]);
-  }, [loadShipments, loadTaskSteps]);
+    void loadShipments();
+  }, [loadShipments]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setCurrentPage(1);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     const initialRefresh = window.setTimeout(refreshList, 0);
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") refreshList();
     }, LIST_REFRESH_INTERVAL_MS);
+    const handleFocus = () => refreshList();
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") refreshList();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       window.clearTimeout(initialRefresh);
       window.clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [refreshList]);
 
@@ -81,18 +104,6 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
       prev.map((s) => (s.id === shipmentId ? { ...s, attachments } : s))
     );
   }
-
-  const filteredShipments = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return shipments.filter((s) => {
-      if (statusFilter !== ALL_FILTER && s.status !== statusFilter) return false;
-      if (channelFilter !== ALL_FILTER && s.channel !== channelFilter) return false;
-      if (!query) return true;
-      return [s.customerName, s.declarationNo, s.goodsName, s.invoiceNo]
-        .filter(Boolean)
-        .some((field) => field!.toLowerCase().includes(query));
-    });
-  }, [shipments, search, statusFilter, channelFilter]);
 
   return (
     <div className="p-8">
@@ -121,7 +132,7 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
           placeholder="Tìm khách hàng, số tờ khai, tên hàng, invoice..."
           className="input max-w-xs"
         />
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="input w-auto">
+        <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }} className="input w-auto">
           <option value={ALL_FILTER}>Tất cả trạng thái</option>
           {STATUS_OPTIONS.map((option) => (
             <option key={option} value={option}>
@@ -129,7 +140,7 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
             </option>
           ))}
         </select>
-        <select value={channelFilter} onChange={(e) => setChannelFilter(e.target.value)} className="input w-auto">
+        <select value={channelFilter} onChange={(e) => { setChannelFilter(e.target.value); setCurrentPage(1); }} className="input w-auto">
           <option value={ALL_FILTER}>Tất cả phân luồng</option>
           {CHANNEL_OPTIONS.map((option) => (
             <option key={option} value={option}>
@@ -142,8 +153,10 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
             type="button"
             onClick={() => {
               setSearch("");
+              setDebouncedSearch("");
               setStatusFilter(ALL_FILTER);
               setChannelFilter(ALL_FILTER);
+              setCurrentPage(1);
             }}
             className="text-sm text-gray-500 hover:underline"
           >
@@ -203,20 +216,24 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
                 </td>
               </tr>
             )}
-            {!isLoading && !error && filteredShipments.length === 0 && (
+            {!isLoading && !error && shipments.length === 0 && (
               <tr>
                 <td colSpan={14} className="px-4 py-6 text-center text-gray-400">
-                  {shipments.length === 0 ? "Chưa có lô hàng nào." : "Không có lô hàng khớp bộ lọc."}
+                  {debouncedSearch || statusFilter !== ALL_FILTER || channelFilter !== ALL_FILTER
+                    ? "Không có lô hàng khớp bộ lọc."
+                    : "Chưa có lô hàng nào."}
                 </td>
               </tr>
             )}
             {!isLoading &&
               !error &&
-              filteredShipments.map((shipment, index) => {
+              shipments.map((shipment, index) => {
                 const branches = getDeclarationBranches(shipment.declarationBranches);
                 return (
                   <tr key={shipment.id} className="align-top hover:bg-gray-50">
-                    <td className="px-3 py-3 text-center text-gray-500">{index + 1}</td>
+                    <td className="px-3 py-3 text-center text-gray-500">
+                      {(pagination.page - 1) * pagination.pageSize + index + 1}
+                    </td>
                     <td className="break-words px-3 py-3 font-medium leading-5 text-gray-900">
                       {shipment.customerName}
                     </td>
@@ -287,6 +304,7 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
           </tbody>
         </table>
       </div>
+      <PaginationControls pagination={pagination} onPageChange={(page) => { setCurrentPage(page); setIsLoading(true); }} />
     </div>
   );
 }

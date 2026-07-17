@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { notifyTaskAssigned } from "@/lib/notifications";
 import { adHocTaskWhere } from "@/lib/task-constants";
+import { paginationMeta, parsePagination } from "@/lib/pagination";
 
 const TASK_INCLUDE = {
   assignedTo: { select: { id: true, name: true, email: true } },
@@ -11,7 +12,7 @@ const TASK_INCLUDE = {
   relatedShipment: { select: { id: true, shipmentCode: true, customerName: true } },
 } as const;
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
 
@@ -21,12 +22,28 @@ export async function GET() {
     ? { AND: [adHocTaskWhere(), { assignedToUserId: user.id }] }
     : adHocTaskWhere();
 
-  const tasks = await prisma.task.findMany({
-    where,
-    include: TASK_INCLUDE,
-    orderBy: { createdAt: "desc" },
-  });
-  return apiSuccess(tasks);
+  const params = request.nextUrl.searchParams;
+  if (!params.has("page") && !params.has("pageSize")) {
+    const tasks = await prisma.task.findMany({
+      where,
+      include: TASK_INCLUDE,
+      orderBy: { createdAt: "desc" },
+    });
+    return apiSuccess(tasks);
+  }
+
+  const { page, pageSize, skip } = parsePagination(params);
+  const [tasks, total] = await Promise.all([
+    prisma.task.findMany({
+      where,
+      include: TASK_INCLUDE,
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: pageSize,
+    }),
+    prisma.task.count({ where }),
+  ]);
+  return apiSuccess({ items: tasks, pagination: paginationMeta(page, pageSize, total) });
 }
 
 export async function POST(request: NextRequest) {

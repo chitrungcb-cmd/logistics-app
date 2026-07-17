@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import CreateGroupModal from "./CreateGroupModal";
 
-const CONVERSATIONS_POLL_MS = 10000;
-const MESSAGES_POLL_MS = 5000;
+const CONVERSATIONS_POLL_MS = 30000;
+const MESSAGES_POLL_MS = 10000;
+const MESSAGE_PAGE_SIZE = 50;
 
 type MemberUser = { id: string; name: string; email: string; role: string };
 
@@ -54,6 +55,15 @@ function renderContentWithMentions(content: string, mentions: { mentionedUser: M
   );
 }
 
+function mergeMessages(current: Message[], incoming: Message[]) {
+  const byId = new Map(current.map((message) => [message.id, message]));
+  for (const message of incoming) byId.set(message.id, message);
+  return [...byId.values()].sort((a, b) => {
+    const timeDifference = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    return timeDifference || a.id.localeCompare(b.id);
+  });
+}
+
 export default function MessagesClient({ currentUserId }: { currentUserId: string }) {
   const searchParams = useSearchParams();
   const initialConversationId = searchParams.get("conversationId");
@@ -62,6 +72,8 @@ export default function MessagesClient({ currentUserId }: { currentUserId: strin
   const [activeId, setActiveId] = useState<string | null>(initialConversationId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [messageText, setMessageText] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [mentionedUserIds, setMentionedUserIds] = useState<string[]>([]);
@@ -70,6 +82,8 @@ export default function MessagesClient({ currentUserId }: { currentUserId: strin
   const [sendError, setSendError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const hasLoadedOlderRef = useRef(false);
+  const shouldScrollToBottomRef = useRef(false);
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
 
@@ -83,35 +97,67 @@ export default function MessagesClient({ currentUserId }: { currentUserId: strin
         .catch(() => {});
     }
     loadConversations();
-    const interval = setInterval(loadConversations, CONVERSATIONS_POLL_MS);
-    return () => clearInterval(interval);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") loadConversations();
+    };
+    const interval = setInterval(refreshWhenVisible, CONVERSATIONS_POLL_MS);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, []);
 
   useEffect(() => {
     if (!activeId) return;
 
+    let cancelled = false;
+    hasLoadedOlderRef.current = false;
+
     function loadMessages(isFirstLoad: boolean) {
       if (isFirstLoad) setIsLoadingMessages(true);
-      fetch(`/api/conversations/${activeId}/messages`)
+      fetch(`/api/conversations/${activeId}/messages?limit=${MESSAGE_PAGE_SIZE}`)
         .then((res) => res.json())
         .then((json) => {
-          if (json.success) setMessages(json.data);
+          if (cancelled || !json.success) return;
+          shouldScrollToBottomRef.current = isFirstLoad || !hasLoadedOlderRef.current;
+          if (isFirstLoad) {
+            setMessages(json.data.items);
+            setNextCursor(json.data.nextCursor);
+          } else {
+            setMessages((current) => mergeMessages(current, json.data.items));
+            if (!hasLoadedOlderRef.current) setNextCursor(json.data.nextCursor);
+          }
         })
         .catch(() => {})
         .finally(() => {
-          if (isFirstLoad) setIsLoadingMessages(false);
+          if (isFirstLoad && !cancelled) setIsLoadingMessages(false);
         });
     }
 
     loadMessages(true);
     fetch(`/api/conversations/${activeId}/read`, { method: "POST" }).catch(() => {});
 
-    const interval = setInterval(() => loadMessages(false), MESSAGES_POLL_MS);
-    return () => clearInterval(interval);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") loadMessages(false);
+    };
+    const interval = setInterval(refreshWhenVisible, MESSAGES_POLL_MS);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, [activeId]);
 
   useEffect(() => {
+    if (!shouldScrollToBottomRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    shouldScrollToBottomRef.current = false;
   }, [messages]);
 
   const mentionQuery = useMemo(() => {
@@ -131,9 +177,33 @@ export default function MessagesClient({ currentUserId }: { currentUserId: strin
   function selectConversation(id: string) {
     setActiveId(id);
     setMessages([]);
+    setNextCursor(null);
+    hasLoadedOlderRef.current = false;
     setMessageText("");
     setPendingAttachments([]);
     setMentionedUserIds([]);
+  }
+
+  async function loadOlderMessages() {
+    if (!activeId || !nextCursor || isLoadingOlder) return;
+    setIsLoadingOlder(true);
+    try {
+      const params = new URLSearchParams({
+        limit: String(MESSAGE_PAGE_SIZE),
+        before: nextCursor,
+      });
+      const response = await fetch(`/api/conversations/${activeId}/messages?${params}`);
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.error || "Không thể tải tin nhắn cũ.");
+      hasLoadedOlderRef.current = true;
+      shouldScrollToBottomRef.current = false;
+      setMessages((current) => mergeMessages(json.data.items, current));
+      setNextCursor(json.data.nextCursor);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : "Không thể tải tin nhắn cũ.");
+    } finally {
+      setIsLoadingOlder(false);
+    }
   }
 
   function handleSelectMention(u: MemberUser) {
@@ -180,6 +250,7 @@ export default function MessagesClient({ currentUserId }: { currentUserId: strin
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "Không thể gửi tin nhắn.");
+      shouldScrollToBottomRef.current = true;
       setMessages((prev) => [...prev, json.data]);
       setMessageText("");
       setPendingAttachments([]);
@@ -269,6 +340,18 @@ export default function MessagesClient({ currentUserId }: { currentUserId: strin
 
             <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
               {isLoadingMessages && <p className="text-center text-sm text-gray-400">Đang tải...</p>}
+              {!isLoadingMessages && nextCursor && (
+                <div className="text-center">
+                  <button
+                    type="button"
+                    disabled={isLoadingOlder}
+                    onClick={loadOlderMessages}
+                    className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {isLoadingOlder ? "Đang tải..." : "Tải tin nhắn cũ hơn"}
+                  </button>
+                </div>
+              )}
               {messages.map((m) => {
                 const isSelf = m.senderId === currentUserId;
                 return (

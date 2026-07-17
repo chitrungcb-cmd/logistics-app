@@ -2,6 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import PaginationControls from "@/components/PaginationControls";
+import type { PaginationMeta } from "@/lib/pagination";
+
+const PAGE_SIZE = 50;
+const EMPTY_PAGINATION: PaginationMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 };
 
 type Customer = {
   id: string;
@@ -17,15 +22,27 @@ export default function CustomersClient({ canManage }: { canManage: boolean }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginationMeta>(EMPTY_PAGINATION);
 
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(() => {
-      fetch(`/api/customers?search=${encodeURIComponent(search.trim())}`)
+      const params = new URLSearchParams({
+        search: search.trim(),
+        page: String(page),
+        pageSize: String(PAGE_SIZE),
+      });
+      setIsLoading(true);
+      fetch(`/api/customers?${params}`)
         .then((res) => res.json())
         .then((json) => {
           if (!json.success) throw new Error(json.error || "Không thể tải danh sách khách hàng.");
-          if (!cancelled) setCustomers(json.data);
+          if (!cancelled) {
+            setCustomers(json.data.items);
+            setPagination(json.data.pagination);
+            setError(null);
+          }
         })
         .catch((err) => {
           if (!cancelled) setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
@@ -38,7 +55,7 @@ export default function CustomersClient({ canManage }: { canManage: boolean }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [search]);
+  }, [page, search]);
 
   return (
     <div className="p-8">
@@ -61,7 +78,7 @@ export default function CustomersClient({ canManage }: { canManage: boolean }) {
         <input
           type="text"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           placeholder="Tìm theo tên công ty hoặc mã số thuế..."
           className="input max-w-xs"
         />
@@ -123,6 +140,7 @@ export default function CustomersClient({ canManage }: { canManage: boolean }) {
           </tbody>
         </table>
       </div>
+      <PaginationControls pagination={pagination} onPageChange={setPage} />
     </div>
   );
 }

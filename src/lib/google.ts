@@ -1,6 +1,6 @@
 import { google } from "googleapis";
 import { prisma } from "@/lib/prisma";
-import { decryptSecret } from "@/lib/secret-encryption";
+import { decryptSecret, encryptSecret, isEncryptedSecret } from "@/lib/secret-encryption";
 
 const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 export const GOOGLE_OAUTH_STATE_COOKIE = process.env.NODE_ENV === "production"
@@ -35,7 +35,17 @@ export async function getAuthorizedGmailClient() {
   const auth = await getGmailAuthRecord();
   if (!auth) return null;
 
+  const refreshToken = decryptSecret(auth.refreshToken);
+  // Transparently upgrade the one legacy plaintext token after TOKEN_ENCRYPTION_KEY is configured.
+  // The Gmail API call does not need to wait for a manual reconnect just to gain at-rest encryption.
+  if (!isEncryptedSecret(auth.refreshToken) && process.env.TOKEN_ENCRYPTION_KEY) {
+    await prisma.gmailAuth.update({
+      where: { id: auth.id },
+      data: { refreshToken: encryptSecret(refreshToken) },
+    });
+  }
+
   const client = createOAuth2Client();
-  client.setCredentials({ refresh_token: decryptSecret(auth.refreshToken) });
+  client.setCredentials({ refresh_token: refreshToken });
   return google.gmail({ version: "v1", auth: client });
 }

@@ -134,11 +134,13 @@ export async function syncVendorInvoices(gmail: gmail_v1.Gmail): Promise<VendorI
           }
           const reconciliation = await reconcileParsedVendorInvoice(parsed);
           const note =
-            parsed.isIssuedToNq === false
-              ? "Hóa đơn không xuất cho công ty NQ; cần kiểm tra trước khi ghi nhận."
-              : parsed.isIssuedToNq === null
-                ? "Chưa xác định được người mua là công ty NQ; cần kiểm tra mã số thuế/người mua."
-                : null;
+            parsed.invoiceDirection === "OUTPUT"
+              ? "Hóa đơn đầu ra do NQ Logistics xuất cho khách hàng."
+              : parsed.invoiceDirection === "UNRELATED"
+                ? "NQ Logistics không phải bên bán hoặc bên mua; cần kiểm tra hóa đơn."
+                : parsed.invoiceDirection === "UNKNOWN"
+                  ? "Chưa xác định được hóa đơn đầu vào hay đầu ra; cần kiểm tra MST bên bán và bên mua."
+                  : null;
 
           await prisma.vendorInvoice.create({
             data: {

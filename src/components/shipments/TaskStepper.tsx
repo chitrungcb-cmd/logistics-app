@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { SHIPMENT_TASK_STEPS, TASK_STATUS_LABELS } from "@/lib/task-constants";
 
-const POLL_MS = 15000;
+const POLL_MS = 30000;
 
 type StepTask = {
   id: string;
@@ -53,8 +53,17 @@ export default function TaskStepper({ shipmentId }: { shipmentId: string }) {
         .catch((error) => setLoadError(error instanceof Error ? error.message : "Không thể tải tiến trình."));
     }
     load();
-    const interval = setInterval(load, POLL_MS);
-    return () => clearInterval(interval);
+    const loadWhenVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    const interval = setInterval(loadWhenVisible, POLL_MS);
+    window.addEventListener("focus", loadWhenVisible);
+    document.addEventListener("visibilitychange", loadWhenVisible);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", loadWhenVisible);
+      document.removeEventListener("visibilitychange", loadWhenVisible);
+    };
   }, [shipmentId]);
 
   const selectedStep = selectedIndex === null ? null : steps[selectedIndex];

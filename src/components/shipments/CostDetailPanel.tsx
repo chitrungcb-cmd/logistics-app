@@ -8,6 +8,8 @@ import {
   INVOICE_COST_CATEGORIES,
   isInvoiceCostCategory,
 } from "@/lib/shipment-cost-constants";
+import AttachmentPreviewButton from "./AttachmentPreviewButton";
+import MoneyInput from "@/components/MoneyInput";
 
 type CostRow = {
   id: string;
@@ -194,12 +196,10 @@ export default function CostDetailPanel({
                           <span className="text-xs font-semibold text-blue-700">{formatVnd(row.chiPhiCoHoaDon)}</span>
                         </div>
                         <div className="mt-3 flex items-center gap-2">
-                          <input
-                            type="number"
-                            min="0"
+                          <MoneyInput
                             value={manualAmounts[category] ?? ""}
-                            onChange={(event) => {
-                              setManualAmounts((current) => ({ ...current, [category]: event.target.value }));
+                            onValueChange={(raw) => {
+                              setManualAmounts((current) => ({ ...current, [category]: raw }));
                               setManualError(null);
                             }}
                             onKeyDown={(event) => {
@@ -266,14 +266,13 @@ export default function CostDetailPanel({
                   <ul className="space-y-1">
                     {attachments.map((att, i) => (
                       <li key={i} className="flex items-center justify-between text-sm">
-                        <a
-                          href={att.url}
-                          target="_blank"
-                          rel="noreferrer"
+                        <AttachmentPreviewButton
+                          url={att.url}
+                          name={att.name}
                           className="inline-flex items-center gap-1.5 text-blue-600 hover:underline"
                         >
                           📎 {att.name}
-                        </a>
+                        </AttachmentPreviewButton>
                         <a href={att.url} download className="text-gray-500 hover:text-gray-700" aria-label="Tải về">
                           ⬇
                         </a>

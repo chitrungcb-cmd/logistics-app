@@ -7,6 +7,7 @@ import {
   isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
 import VendorCombobox from "@/components/vendors/VendorCombobox";
+import MoneyInput from "@/components/MoneyInput";
 
 type Preset = {
   id: string;
@@ -142,7 +143,7 @@ export default function CostPresetsClient() {
           </label>
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-gray-700">Đơn giá</span>
-            <input type="number" min="0" value={form.unitPrice} onChange={(event) => setForm((current) => ({ ...current, unitPrice: event.target.value }))} className="input" required />
+            <MoneyInput value={form.unitPrice} onValueChange={(raw) => setForm((current) => ({ ...current, unitPrice: raw }))} className="input" required />
           </label>
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-gray-700">Số lượng</span>

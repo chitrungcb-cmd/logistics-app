@@ -9,6 +9,8 @@ import {
   OTHER_EXPENSE_PAYMENT_METHODS,
   type OtherExpenseCategory,
 } from "@/lib/other-expense-constants";
+import AttachmentPreviewButton from "@/components/shipments/AttachmentPreviewButton";
+import MoneyInput from "@/components/MoneyInput";
 
 const PAGE_SIZE = 20;
 
@@ -396,9 +398,9 @@ export default function OtherExpensesClient() {
                     <p className="font-medium text-gray-900">{expense.description}</p>
                     {expense.note && <p className="mt-0.5 line-clamp-2 text-xs text-gray-400">{expense.note}</p>}
                     {expense.attachmentUrl && (
-                      <a href={expense.attachmentUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-blue-600 hover:underline">
+                      <AttachmentPreviewButton url={expense.attachmentUrl} name={expense.attachmentName} className="mt-1 inline-block text-xs text-blue-600 hover:underline">
                         📎 {expense.attachmentName || "Xem chứng từ"}
-                      </a>
+                      </AttachmentPreviewButton>
                     )}
                   </td>
                   <td className="max-w-xs px-3 py-3 text-gray-600">{expense.payee || "—"}</td>
@@ -470,7 +472,7 @@ export default function OtherExpensesClient() {
               </label>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Số tiền *</span>
-                <input type="number" min={1} step={1} value={form.amount} onChange={(event) => setForm((current) => ({ ...current, amount: event.target.value }))} className="input" placeholder="0" required />
+                <MoneyInput value={form.amount} onValueChange={(raw) => setForm((current) => ({ ...current, amount: raw }))} className="input" placeholder="0" required />
               </label>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Người/đơn vị nhận</span>
@@ -496,7 +498,7 @@ export default function OtherExpensesClient() {
                   <input ref={fileInputRef} type="file" accept=".pdf,.xls,.xlsx,.doc,.docx,.png,.jpg,.jpeg" onChange={handleAttachmentChange} className="hidden" />
                   {form.attachmentUrl && (
                     <>
-                      <a href={form.attachmentUrl} target="_blank" rel="noreferrer" className="max-w-xs truncate text-sm text-blue-600 hover:underline">{form.attachmentName || "Xem chứng từ"}</a>
+                      <AttachmentPreviewButton url={form.attachmentUrl} name={form.attachmentName} className="max-w-xs truncate text-sm text-blue-600 hover:underline">{form.attachmentName || "Xem chứng từ"}</AttachmentPreviewButton>
                       <button type="button" onClick={() => setForm((current) => ({ ...current, attachmentName: "", attachmentUrl: "" }))} className="text-sm text-red-600 hover:underline">Bỏ tệp</button>
                     </>
                   )}

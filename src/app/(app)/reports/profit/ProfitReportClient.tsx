@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import ShipmentLink from "@/components/shipments/ShipmentLink";
 import {
   Bar,
   BarChart,
   CartesianGrid,
+  LabelList,
   Legend,
   ResponsiveContainer,
   Tooltip,
@@ -104,6 +106,18 @@ export default function ProfitReportClient() {
 
   const selectedBucket = bucketSummaries.find((b) => b.key === selectedBucketKey) ?? null;
 
+  const kpiTotals = useMemo(() => {
+    const source = selectedBucket ? [selectedBucket] : bucketSummaries;
+    return {
+      totalRevenue: source.reduce((sum, b) => sum + b.totalRevenue, 0),
+      totalCost: source.reduce((sum, b) => sum + b.totalCost, 0),
+      profit: source.reduce((sum, b) => sum + b.profit, 0),
+      shipmentCount: source.reduce((sum, b) => sum + b.shipmentCount, 0),
+    };
+  }, [bucketSummaries, selectedBucket]);
+
+  const kpiScopeLabel = selectedBucket ? selectedBucket.label : period === "year" ? "Tất cả các năm" : `Năm ${year}`;
+
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
       if (selectedBucket) {
@@ -144,6 +158,24 @@ export default function ProfitReportClient() {
         <h1 className="mt-2 text-2xl font-semibold text-gray-900">Báo cáo lãi lỗ</h1>
         <p className="mt-1 text-sm text-gray-500">Tổng hợp thu, chi phí và lãi/lỗ theo lô hàng.</p>
       </div>
+
+      <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="rounded-lg border border-gray-200 bg-white p-5">
+          <p className="text-sm text-gray-500">Tổng thu ({kpiScopeLabel})</p>
+          <p className="mt-1 text-2xl font-semibold text-blue-600">{formatVnd(kpiTotals.totalRevenue)}</p>
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-5">
+          <p className="text-sm text-gray-500">Tổng chi phí ({kpiScopeLabel})</p>
+          <p className="mt-1 text-2xl font-semibold text-orange-600">{formatVnd(kpiTotals.totalCost)}</p>
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-5">
+          <p className="text-sm text-gray-500">Lãi/Lỗ ({kpiScopeLabel})</p>
+          <p className={`mt-1 text-2xl font-semibold ${kpiTotals.profit >= 0 ? "text-green-700" : "text-red-600"}`}>
+            {formatVnd(kpiTotals.profit)}
+          </p>
+          <p className="mt-1 text-xs text-gray-400">{kpiTotals.shipmentCount} lô hàng</p>
+        </div>
+      </section>
 
       <section className="mb-6 rounded-lg border border-gray-200 bg-white p-6">
         <h2 className="mb-4 text-base font-semibold text-gray-900">Tổng hợp theo thời gian</h2>
@@ -203,9 +235,33 @@ export default function ProfitReportClient() {
               <YAxis tickFormatter={(v) => (v / 1_000_000).toLocaleString("vi-VN")} tick={{ fontSize: 11 }} />
               <Tooltip formatter={(value) => formatVnd(Number(value))} />
               <Legend />
-              <Bar dataKey="totalRevenue" name="Tổng thu" fill="#2563eb" cursor="pointer" />
-              <Bar dataKey="totalCost" name="Tổng chi phí" fill="#f97316" cursor="pointer" />
-              <Bar dataKey="profit" name="Lãi/Lỗ" fill="#16a34a" cursor="pointer" />
+              <Bar dataKey="totalRevenue" name="Tổng thu" fill="#2563eb" cursor="pointer">
+                <LabelList
+                  dataKey="totalRevenue"
+                  position="top"
+                  fontSize={9}
+                  fill="#2563eb"
+                  formatter={(value: unknown) => (typeof value === "number" && value ? value.toLocaleString("vi-VN") : "")}
+                />
+              </Bar>
+              <Bar dataKey="totalCost" name="Tổng chi phí" fill="#f97316" cursor="pointer">
+                <LabelList
+                  dataKey="totalCost"
+                  position="top"
+                  fontSize={9}
+                  fill="#f97316"
+                  formatter={(value: unknown) => (typeof value === "number" && value ? value.toLocaleString("vi-VN") : "")}
+                />
+              </Bar>
+              <Bar dataKey="profit" name="Lãi/Lỗ" fill="#16a34a" cursor="pointer">
+                <LabelList
+                  dataKey="profit"
+                  position="top"
+                  fontSize={9}
+                  fill="#16a34a"
+                  formatter={(value: unknown) => (typeof value === "number" && value ? value.toLocaleString("vi-VN") : "")}
+                />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -294,9 +350,9 @@ export default function ProfitReportClient() {
               {filteredRows.map((row) => (
                 <tr key={row.id} className="hover:bg-gray-50">
                   <td className="px-3 py-2">
-                    <Link href={`/shipments/${row.id}`} className="font-medium text-blue-600 hover:underline">
+                    <ShipmentLink shipmentId={row.id} className="font-medium text-blue-600 hover:underline">
                       {row.customerName}
-                    </Link>
+                    </ShipmentLink>
                   </td>
                   <td className="px-3 py-2 text-gray-600">{row.declarationNo || "—"}</td>
                   <td className="px-3 py-2 text-gray-600">

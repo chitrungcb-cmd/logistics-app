@@ -1,25 +1,29 @@
 import Link from "next/link";
+import ShipmentLink from "@/components/shipments/ShipmentLink";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { statusBadgeClass, isDateApproaching } from "@/lib/shipment-constants";
 import { isOverdue, sumPayments } from "@/lib/debt-constants";
-import { computeProfit } from "@/lib/shipment-cost-constants";
-import { adHocTaskWhere } from "@/lib/task-constants";
+import { adHocTaskWhere, TASK_STATUS_LABELS, taskStatusBadgeClass } from "@/lib/task-constants";
 
 function formatVnd(amount: number) {
   return amount.toLocaleString("vi-VN") + " đ";
 }
 
-// Server Component: every figure is computed here and only the numbers a given role is allowed to see
-// are ever rendered — cost/profit is ADMIN-only, debt is manager-only (FIELD_STAFF sees neither), so
-// the sensitive aggregates aren't just hidden in the client, they're never sent to that role at all.
+const TASK_PROGRESS_PERCENT: Record<string, number> = {
+  TODO: 0,
+  IN_PROGRESS: 50,
+  DONE: 100,
+};
+
+// Server Component: every figure is computed here and only the numbers a given role is allowed to see.
+// FIELD_STAFF only receives their own tasks and never receives manager-only debt data.
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
   const isManager = user.role !== "FIELD_STAFF";
-  const isAdmin = user.role === "ADMIN";
 
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
@@ -27,12 +31,14 @@ export default async function DashboardPage() {
   const taskWhere = user.role === "FIELD_STAFF"
     ? { AND: [adHocTaskWhere(), { assignedToUserId: user.id }] }
     : adHocTaskWhere();
+  const activeTaskWhere = { AND: [taskWhere, { status: { not: "DONE" as const } }] };
 
   const [
     shipmentTotal,
     statusGroups,
     customerCount,
     taskGroups,
+    taskAssignees,
     recentShipments,
     upcomingConsultations,
   ] = await Promise.all([
@@ -40,6 +46,28 @@ export default async function DashboardPage() {
     prisma.shipment.groupBy({ by: ["status"], _count: { _all: true } }),
     prisma.customer.count(),
     prisma.task.groupBy({ by: ["status"], where: taskWhere, _count: { _all: true } }),
+    prisma.user.findMany({
+      where: { tasksAssigned: { some: activeTaskWhere } },
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        isActive: true,
+        _count: { select: { tasksAssigned: { where: activeTaskWhere } } },
+        tasksAssigned: {
+          where: activeTaskWhere,
+          orderBy: [{ dueDate: "asc" }, { updatedAt: "desc" }],
+          take: 4,
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            dueDate: true,
+            relatedShipment: { select: { id: true, shipmentCode: true, customerName: true } },
+          },
+        },
+      },
+    }),
     prisma.shipment.findMany({
       orderBy: { createdAt: "desc" },
       take: 6,
@@ -48,8 +76,15 @@ export default async function DashboardPage() {
     prisma.shipment.findMany({
       where: { consultationDate: { gte: startOfToday } },
       orderBy: { consultationDate: "asc" },
-      take: 5,
-      select: { id: true, goodsName: true, customerName: true, consultationDate: true },
+      select: {
+        id: true,
+        goodsName: true,
+        customerName: true,
+        consultationDate: true,
+        declarationNo: true,
+        status: true,
+        port: true,
+      },
     }),
   ]);
 
@@ -67,41 +102,17 @@ export default async function DashboardPage() {
   const taskCompletionPercent = taskTotal > 0 ? Math.round((tasksDone / taskTotal) * 100) : 0;
 
   // --- Manager-only: công nợ ---
-  let debtStats: { receivable: number; payable: number; overdue: number } | null = null;
+  let overdueDebt: number | null = null;
   if (isManager) {
     const debts = await prisma.debt.findMany({
-      select: { type: true, totalAmount: true, dueDate: true, status: true, payments: { select: { amount: true } } },
+      select: { totalAmount: true, dueDate: true, status: true, payments: { select: { amount: true } } },
     });
-    let receivable = 0;
-    let payable = 0;
-    let overdue = 0;
+    overdueDebt = 0;
     for (const d of debts) {
-      const remaining = d.totalAmount - sumPayments(d.payments);
-      if (d.type === "RECEIVABLE") receivable += remaining;
-      else payable += remaining;
-      if (isOverdue(d.status, d.dueDate)) overdue += remaining;
+      if (isOverdue(d.status, d.dueDate)) {
+        overdueDebt += d.totalAmount - sumPayments(d.payments);
+      }
     }
-    debtStats = { receivable, payable, overdue };
-  }
-
-  // --- Admin-only: chi phí / lợi nhuận (cùng công thức /reports/profit) ---
-  let profitStats: { revenue: number; cost: number; profit: number } | null = null;
-  if (isAdmin) {
-    const shipmentsForProfit = await prisma.shipment.findMany({
-      where: { declarationDate: { not: null } },
-      select: {
-        costs: { select: { costPrice: true, sellPrice: true, isAdditional: true } },
-        quotes: { select: { quoteAmount: true, createdAt: true } },
-      },
-    });
-    let revenue = 0;
-    let cost = 0;
-    for (const s of shipmentsForProfit) {
-      const p = computeProfit(s.costs, s.quotes);
-      revenue += p.totalRevenue;
-      cost += p.totalCost;
-    }
-    profitStats = { revenue, cost, profit: revenue - cost };
   }
 
   return (
@@ -150,62 +161,82 @@ export default async function DashboardPage() {
               label="Lịch tham vấn sắp tới"
               value={String(upcomingConsultations.length)}
               hint="Theo ngày tham vấn đã nhập"
-              href="/shipments"
+              href="#upcoming-consultations"
               tone={upcomingConsultations.some((shipment) => isDateApproaching(shipment.consultationDate)) ? "amber" : "neutral"}
             />
-            {debtStats && (
+            {overdueDebt !== null && (
               <ActionItem
                 icon="⚠️"
                 label="Công nợ quá hạn"
-                value={formatVnd(debtStats.overdue)}
-                hint={debtStats.overdue > 0 ? "Cần ưu tiên xử lý" : "Không có khoản quá hạn"}
+                value={formatVnd(overdueDebt)}
+                hint={overdueDebt > 0 ? "Cần ưu tiên xử lý" : "Không có khoản quá hạn"}
                 href="/debts"
-                tone={debtStats.overdue > 0 ? "red" : "neutral"}
+                tone={overdueDebt > 0 ? "red" : "neutral"}
               />
             )}
           </div>
         </section>
       </div>
 
-      {(profitStats || debtStats) && (
-        <section className="mt-6 rounded-xl border border-gray-200 bg-white p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="font-semibold text-gray-900">Tài chính</h2>
-              <p className="mt-0.5 text-xs text-gray-500">Tổng hợp số đã ghi nhận trên hệ thống</p>
-            </div>
-            <Link href="/reports" className="text-xs font-medium text-blue-600 hover:underline">Xem báo cáo →</Link>
+      <section className="mt-6">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
+              Tiến độ nhiệm vụ theo người phụ trách
+            </h2>
+            <p className="mt-1 text-xs text-gray-400">
+              {isManager
+                ? "Mỗi người hiển thị tối đa 4 nhiệm vụ đang mở, ưu tiên hạn gần nhất."
+                : "Các nhiệm vụ đang mở được giao cho bạn, ưu tiên hạn gần nhất."}
+            </p>
           </div>
+          <Link href="/tasks" className="text-xs font-medium text-blue-600 hover:underline">Xem tất cả →</Link>
+        </div>
 
-          {profitStats && profitStats.revenue === 0 && profitStats.cost > 0 && (
-            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
-              Chưa ghi nhận tổng thu cho các lô đang có chi phí. Lợi nhuận tạm tính hiện chưa phản ánh đầy đủ.
-            </div>
-          )}
+        {taskAssignees.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-gray-300 bg-white px-5 py-10 text-center">
+            <p className="text-sm font-medium text-gray-600">Không có nhiệm vụ nào đang mở.</p>
+            <p className="mt-1 text-xs text-gray-400">Các nhiệm vụ đã hoàn thành vẫn được lưu trong danh sách Nhiệm vụ.</p>
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+            {taskAssignees.map((assignee) => (
+              <article key={assignee.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+                <div className="flex items-center gap-3 border-b border-gray-100 bg-gray-50/70 px-4 py-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
+                    {assignee.name.trim().charAt(0).toLocaleUpperCase("vi-VN") || "?"}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="truncate text-sm font-semibold text-gray-900">{assignee.name}</h3>
+                      {!assignee.isActive && (
+                        <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700">
+                          Đã khóa
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-400">{assignee._count.tasksAssigned} nhiệm vụ đang mở</p>
+                  </div>
+                </div>
 
-          {profitStats && (
-            <div className="mt-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Kết quả kinh doanh</p>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <FinanceMetric icon="💵" label="Tổng thu đã ghi nhận" value={formatVnd(profitStats.revenue)} href="/reports/profit" tone="blue" />
-                <FinanceMetric icon="💰" label="Tổng chi phí" value={formatVnd(profitStats.cost)} href="/costs" tone="amber" />
-                <FinanceMetric icon="📈" label="Lợi nhuận tạm tính" value={formatVnd(profitStats.profit)} href="/reports/profit" tone={profitStats.profit >= 0 ? "green" : "red"} />
-              </div>
-            </div>
-          )}
+                <div className="divide-y divide-gray-100 px-4">
+                  {assignee.tasksAssigned.map((task) => (
+                    <TaskProgressItem key={task.id} task={task} startOfToday={startOfToday} />
+                  ))}
+                </div>
 
-          {debtStats && (
-            <div className={profitStats ? "mt-5 border-t border-gray-100 pt-4" : "mt-4"}>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Công nợ</p>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <FinanceMetric icon="📥" label="Còn phải thu" value={formatVnd(debtStats.receivable)} href="/debts" tone="blue" />
-                <FinanceMetric icon="📤" label="Còn phải trả" value={formatVnd(debtStats.payable)} href="/debts" tone="amber" />
-                <FinanceMetric icon="⚠️" label="Quá hạn" value={formatVnd(debtStats.overdue)} href="/debts" tone={debtStats.overdue > 0 ? "red" : "neutral"} />
-              </div>
-            </div>
-          )}
-        </section>
-      )}
+                {assignee._count.tasksAssigned > assignee.tasksAssigned.length && (
+                  <div className="border-t border-gray-100 bg-gray-50/50 px-4 py-2.5 text-center">
+                    <Link href="/tasks" className="text-xs font-medium text-blue-600 hover:underline">
+                      Xem thêm {assignee._count.tasksAssigned - assignee.tasksAssigned.length} nhiệm vụ →
+                    </Link>
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
       <div className="mt-6 grid grid-cols-1 gap-5 lg:grid-cols-2">
         <section className="rounded-xl border border-gray-200 bg-white p-5">
@@ -220,9 +251,9 @@ export default async function DashboardPage() {
               {recentShipments.map((s) => (
                 <li key={s.id} className="flex items-center justify-between gap-3 py-2.5">
                   <div className="min-w-0">
-                    <Link href={`/shipments/${s.id}`} className="block truncate font-medium text-gray-900 hover:underline">
+                    <ShipmentLink shipmentId={s.id} className="block truncate font-medium text-gray-900 hover:underline">
                       {s.goodsName || "Chưa có tên hàng"}
-                    </Link>
+                    </ShipmentLink>
                     <p className="truncate text-xs text-gray-400">
                       {s.customerName} · TK {s.declarationNo || "—"}
                     </p>
@@ -236,7 +267,7 @@ export default async function DashboardPage() {
           )}
         </section>
 
-        <section className="rounded-xl border border-gray-200 bg-white p-5">
+        <section id="upcoming-consultations" className="scroll-mt-6 rounded-xl border border-gray-200 bg-white p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-base font-semibold text-gray-900">Ngày tham vấn sắp tới</h2>
             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">{upcomingConsultations.length}</span>
@@ -244,25 +275,45 @@ export default async function DashboardPage() {
           {upcomingConsultations.length === 0 ? (
             <p className="text-sm text-gray-400">Không có lịch tham vấn nào sắp tới.</p>
           ) : (
-            <ul className="divide-y divide-gray-100">
-              {upcomingConsultations.map((s) => {
-                const warn = isDateApproaching(s.consultationDate);
-                return (
-                  <li key={s.id} className="flex items-center justify-between gap-3 py-2.5">
-                    <div className="min-w-0">
-                      <Link href={`/shipments/${s.id}`} className="block truncate font-medium text-gray-900 hover:underline">
-                        {s.goodsName || "Chưa có tên hàng"}
-                      </Link>
-                      <p className="truncate text-xs text-gray-400">{s.customerName}</p>
-                    </div>
-                    <span className={`shrink-0 text-sm font-medium ${warn ? "text-red-600" : "text-gray-600"}`}>
-                      {warn ? "⚠ " : ""}
-                      {s.consultationDate ? new Date(s.consultationDate).toLocaleDateString("vi-VN") : "—"}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead>
+                  <tr>
+                    <th className="py-2 pr-3 text-left text-xs font-medium text-gray-500">Tên hàng</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Khách hàng</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Số tờ khai</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Trạng thái</th>
+                    <th className="py-2 pl-3 text-right text-xs font-medium text-gray-500">Ngày tham vấn</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {upcomingConsultations.map((s) => {
+                    const warn = isDateApproaching(s.consultationDate);
+                    return (
+                      <tr key={s.id} className="hover:bg-gray-50">
+                        <td className="max-w-[14rem] py-2.5 pr-3">
+                          <ShipmentLink shipmentId={s.id} className="block truncate text-left font-medium text-gray-900 hover:underline">
+                            {s.goodsName || "Chưa có tên hàng"}
+                          </ShipmentLink>
+                          {s.port && <p className="truncate text-xs text-gray-400">{s.port}</p>}
+                        </td>
+                        <td className="max-w-[10rem] truncate px-3 py-2.5 text-gray-600">{s.customerName}</td>
+                        <td className="px-3 py-2.5 text-gray-600">{s.declarationNo || "—"}</td>
+                        <td className="px-3 py-2.5">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusBadgeClass(s.status)}`}>
+                            {s.status}
+                          </span>
+                        </td>
+                        <td className={`whitespace-nowrap py-2.5 pl-3 text-right font-medium ${warn ? "text-red-600" : "text-gray-600"}`}>
+                          {warn ? "⚠ " : ""}
+                          {s.consultationDate ? new Date(s.consultationDate).toLocaleDateString("vi-VN") : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
       </div>
@@ -336,34 +387,54 @@ function ActionItem({
   );
 }
 
-function FinanceMetric({
-  icon,
-  label,
-  value,
-  href,
-  tone,
+function TaskProgressItem({
+  task,
+  startOfToday,
 }: {
-  icon: string;
-  label: string;
-  value: string;
-  href: string;
-  tone: "neutral" | "blue" | "amber" | "green" | "red";
+  task: {
+    id: string;
+    title: string;
+    status: string;
+    dueDate: Date | null;
+    relatedShipment: { id: string; shipmentCode: string; customerName: string } | null;
+  };
+  startOfToday: Date;
 }) {
-  const styles = {
-    neutral: "border-gray-200 bg-gray-50 text-gray-900",
-    blue: "border-blue-100 bg-blue-50/70 text-blue-800",
-    amber: "border-amber-100 bg-amber-50/70 text-amber-800",
-    green: "border-emerald-100 bg-emerald-50/70 text-emerald-800",
-    red: "border-red-100 bg-red-50/70 text-red-700",
-  }[tone];
+  const progress = TASK_PROGRESS_PERCENT[task.status] ?? 0;
+  const overdue = Boolean(task.dueDate && task.dueDate < startOfToday && task.status !== "DONE");
+  const progressColor = task.status === "DONE" ? "bg-emerald-500" : task.status === "IN_PROGRESS" ? "bg-blue-500" : "bg-gray-300";
 
   return (
-    <Link href={href} className={`flex items-center gap-3 rounded-lg border px-4 py-3 transition hover:shadow-sm ${styles}`}>
-      <span className="text-lg">{icon}</span>
-      <div className="min-w-0">
-        <p className="truncate text-[11px] font-medium opacity-70">{label}</p>
-        <p className="truncate text-lg font-bold">{value}</p>
+    <div className="py-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <Link href={`/tasks/${task.id}`} className="block truncate text-sm font-medium text-gray-900 hover:text-blue-700 hover:underline">
+            {task.title}
+          </Link>
+          <p className={`mt-1 truncate text-[11px] ${overdue ? "font-medium text-red-600" : "text-gray-400"}`}>
+            {overdue ? "Quá hạn · " : ""}
+            {task.dueDate ? `Hạn ${task.dueDate.toLocaleDateString("vi-VN")}` : "Chưa đặt hạn"}
+            {task.relatedShipment ? ` · ${task.relatedShipment.shipmentCode}` : ""}
+          </p>
+        </div>
+        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${taskStatusBadgeClass(task.status)}`}>
+          {TASK_STATUS_LABELS[task.status] ?? task.status}
+        </span>
       </div>
-    </Link>
+
+      <div className="mt-2.5 flex items-center gap-2">
+        <div
+          className="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-100"
+          role="progressbar"
+          aria-label={`Tiến độ nhiệm vụ ${task.title}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+        >
+          <div className={`h-full rounded-full ${progressColor}`} style={{ width: `${progress}%` }} />
+        </div>
+        <span className="w-8 text-right text-[11px] font-semibold text-gray-500">{progress}%</span>
+      </div>
+    </div>
   );
 }

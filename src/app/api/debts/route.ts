@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
-import { computeDebtStatus, sumPayments } from "@/lib/debt-constants";
+import { computeDebtStatus, computeInvoiceSplitBreakdown, sumPayments } from "@/lib/debt-constants";
 import { AUTOMATIC_PAYABLE_DEBT_PREFIX } from "@/lib/shipment-debt-sync";
 
 const SHIPMENT_SELECT = {
@@ -36,14 +36,21 @@ export async function GET() {
       customer: { select: { id: true, companyName: true, taxCode: true } },
       vendor: { select: { id: true, name: true } },
       shipment: { select: SHIPMENT_SELECT },
-      payments: { select: { amount: true } },
+      payments: { select: { amount: true, portion: true } },
     },
     orderBy: { createdAt: "desc" },
   });
 
+  // `splitBreakdown` (null khi công nợ không tách hóa đơn) được tính sẵn ở server vì danh sách không trả
+  // về từng Payment — trang /debts cần đã thu/còn lại của từng phần để hiển thị ngay trên bảng.
   const result = debts.map(({ payments, ...debt }) => {
     const paidAmount = sumPayments(payments);
-    return { ...debt, paidAmount, remainingAmount: debt.totalAmount - paidAmount };
+    return {
+      ...debt,
+      paidAmount,
+      remainingAmount: debt.totalAmount - paidAmount,
+      splitBreakdown: computeInvoiceSplitBreakdown({ ...debt, payments }),
+    };
   });
 
   return apiSuccess(result);
@@ -89,7 +96,8 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return apiSuccess({ ...debt, paidAmount: 0, remainingAmount: debt.totalAmount }, 201);
+    // Công nợ nhập tay không bao giờ tách hóa đơn — split chỉ đến từ báo giá đồng bộ (syncShipmentDebts).
+    return apiSuccess({ ...debt, paidAmount: 0, remainingAmount: debt.totalAmount, splitBreakdown: null }, 201);
   } catch (error) {
     console.error("POST /api/debts failed:", error);
     return apiError("Không thể tạo công nợ.", 500);

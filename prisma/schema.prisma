@@ -52,6 +52,10 @@ model Shipment {
   note                String?
   consultationDate    DateTime?
   declarationBranches Json?
+  // Phân bổ báo giá nhập tay: khi một trong hai giá trị khác null thì Tổng báo giá = tổng hai
+  // giá trị này (thay cho tổng bảng chi tiết). Null = chưa nhập tay, dùng tổng dòng như cũ.
+  quoteInvoiceAmount   Float?
+  quoteNoInvoiceAmount Float?
   tasks               Task[]
   notifications       Notification[]
   costs               ShipmentCost[]
@@ -59,6 +63,8 @@ model Shipment {
   quoteLines          ShipmentQuoteLine[]
   conversations       Conversation[]
   debts               Debt[]
+  vendorInvoices      VendorInvoice[]
+  personalAccountEntry PersonalAccountEntry?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -236,6 +242,28 @@ model ShipmentQuoteLine {
   updatedAt   DateTime           @updatedAt
 }
 
+// "Tài khoản cá nhân" — theo dõi phần báo giá KHÔNG hóa đơn của từng lô hàng (mỗi lô tối đa một
+// dòng, `shipmentId` unique). `amount` luôn được đồng bộ từ báo giá (syncPersonalAccountEntry,
+// src/lib/personal-account-sync.ts) — không sửa tay; các trường còn lại (ngày thanh toán, số TK
+// nhận tiền, người phụ trách, ghi chú) điền tay trong mô-đun /personal-account. Số tờ khai/ngày
+// tờ khai/tên hàng đọc từ quan hệ Shipment, không sao chép sang đây.
+model PersonalAccountEntry {
+  id               String    @id @default(cuid())
+  shipment         Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  shipmentId       String    @unique
+  amount           Float     @default(0)
+  paymentDate      DateTime?
+  receivingAccount String?
+  assignedUser     User?     @relation("PersonalAccountAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedUserId   String?
+  note             String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([paymentDate])
+  @@index([assignedUserId])
+}
+
 // Đối tác NQ Logistics trả tiền cho (hãng vận tải/kho bãi/đại lý hải quan/khác) — free-text `type`
 // rather than an enum since this list isn't as fixed as CostCategory.
 model Vendor {
@@ -273,6 +301,8 @@ model VendorInvoice {
   vendorId       String?
   shipmentCost   ShipmentCost?               @relation(fields: [shipmentCostId], references: [id], onDelete: SetNull)
   shipmentCostId String?
+  shipment       Shipment?                   @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  shipmentId     String?
   sellerName     String?
   sellerTaxCode  String?
   buyerName      String?
@@ -297,6 +327,7 @@ model VendorInvoice {
   @@index([gmailMessageId])
   @@index([vendorId])
   @@index([shipmentCostId])
+  @@index([shipmentId])
   @@index([status])
   @@index([invoiceDate])
   @@index([sellerTaxCode])
@@ -319,6 +350,13 @@ enum DebtStatus {
   PAID
 }
 
+// Một khoản thanh toán của công nợ phải thu có tách hóa đơn trỏ về đúng phần nào. Null với công nợ
+// không tách (trả vào tổng chung như trước).
+enum DebtPortion {
+  INVOICE
+  NO_INVOICE
+}
+
 // type=RECEIVABLE uses customerId (tiền khách hàng nợ NQ Logistics); type=PAYABLE uses vendorId (tiền
 // NQ Logistics nợ nhà cung cấp/đối tác) — the two id fields are mutually exclusive by convention of
 // `type`, not enforced at the DB level (see validation in POST /api/debts).
@@ -334,6 +372,11 @@ model Debt {
   shipment    Shipment?  @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
   shipmentId  String?
   totalAmount Float
+  // Tách phần có hóa đơn (chưa VAT) / không hóa đơn của công nợ phải thu đồng bộ từ báo giá. Cả hai
+  // null = công nợ KHÔNG tách (mặc định, mọi công nợ phải trả và công nợ nhập tay) — thanh toán trừ
+  // vào tổng chung. Khi tách, invoiceAmount + noInvoiceAmount = totalAmount và mỗi Payment gắn portion.
+  invoiceAmount   Float?
+  noInvoiceAmount Float?
   dueDate     DateTime?
   status      DebtStatus @default(UNPAID)
   note        String?
@@ -346,15 +389,17 @@ model Debt {
 }
 
 model Payment {
-  id            String   @id @default(cuid())
-  debt          Debt     @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  id            String       @id @default(cuid())
+  debt          Debt         @relation(fields: [debtId], references: [id], onDelete: Cascade)
   debtId        String
   amount        Float
   paymentDate   DateTime
   method        String?
+  // Phần được trả (chỉ dùng cho công nợ phải thu tách hóa đơn); null với công nợ không tách.
+  portion       DebtPortion?
   attachmentUrl String?
   note          String?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime     @default(now())
 }
 
 enum UserRole {
@@ -386,6 +431,7 @@ model User {
   conversationMemberships ConversationMember[]
   sentMessages            Message[]            @relation("SentMessages")
   mentions                MessageMention[]     @relation("MentionedInMessages")
+  personalAccountEntries  PersonalAccountEntry[] @relation("PersonalAccountAssignee")
   passwordResetsReceived  PasswordResetLog[]   @relation("ResetTarget")
   passwordResetsPerformed PasswordResetLog[]   @relation("ResetBy")
   createdAt               DateTime             @default(now())

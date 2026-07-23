@@ -8,5 +8,5 @@ export default async function DebtDetailPage({ params }: { params: Promise<{ id:
   if (user.role === "FIELD_STAFF") redirect("/");
 
   const { id } = await params;
-  return <DebtDetailClient debtId={id} />;
+  return <DebtDetailClient debtId={id} isAdmin={user.role === "ADMIN"} />;
 }

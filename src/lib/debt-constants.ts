@@ -47,3 +47,98 @@ export function debtStatusBadge(status: string, dueDate: string | Date | null | 
 export function sumPayments(payments: { amount: number }[]) {
   return payments.reduce((sum, p) => sum + p.amount, 0);
 }
+
+export const DEBT_PORTION_OPTIONS = ["INVOICE", "NO_INVOICE"] as const;
+export type DebtPortionValue = (typeof DEBT_PORTION_OPTIONS)[number];
+
+export const DEBT_PORTION_LABELS: Record<string, string> = {
+  INVOICE: "Có hóa đơn",
+  NO_INVOICE: "Không hóa đơn",
+};
+
+/** Công nợ có tách hóa đơn khi ít nhất một trong hai phần được đặt (đồng bộ từ báo giá có split). */
+export function hasInvoiceSplit(debt: { invoiceAmount: number | null; noInvoiceAmount: number | null }) {
+  return debt.invoiceAmount != null || debt.noInvoiceAmount != null;
+}
+
+export function sumPaymentsByPortion(
+  payments: { amount: number; portion?: string | null }[],
+  portion: DebtPortionValue
+) {
+  return payments
+    .filter((payment) => payment.portion === portion)
+    .reduce((sum, payment) => sum + payment.amount, 0);
+}
+
+/**
+ * Đã trả / còn lại theo từng phần cho công nợ tách hóa đơn. Trả về null nếu công nợ không tách —
+ * gọi bên phải kiểm tra hasInvoiceSplit trước hoặc dùng null để hiển thị công nợ tổng như cũ.
+ */
+export function computeInvoiceSplitBreakdown(debt: {
+  invoiceAmount: number | null;
+  noInvoiceAmount: number | null;
+  payments: { amount: number; portion?: string | null }[];
+}) {
+  if (!hasInvoiceSplit(debt)) return null;
+  const invoiceAmount = debt.invoiceAmount ?? 0;
+  const noInvoiceAmount = debt.noInvoiceAmount ?? 0;
+  const paidInvoice = sumPaymentsByPortion(debt.payments, "INVOICE");
+  const paidNoInvoice = sumPaymentsByPortion(debt.payments, "NO_INVOICE");
+  return {
+    invoiceAmount,
+    noInvoiceAmount,
+    paidInvoice,
+    paidNoInvoice,
+    remainingInvoice: invoiceAmount - paidInvoice,
+    remainingNoInvoice: noInvoiceAmount - paidNoInvoice,
+  };
+}
+
+type PaymentRow = { id?: string; amount: number; portion?: string | null };
+
+type DebtForPaymentCheck = {
+  totalAmount: number;
+  invoiceAmount: number | null;
+  noInvoiceAmount: number | null;
+  payments: PaymentRow[];
+};
+
+/**
+ * Kiểm tra một khoản thanh toán (tạo mới hoặc sửa) có vượt số còn lại không, và trả về `portion`
+ * đã chuẩn hóa. Công nợ tách hóa đơn phải chỉ rõ phần và chỉ được vượt tối đa số còn lại của CHÍNH
+ * phần đó; công nợ không tách trừ vào tổng chung (portion null). Khi sửa, truyền `excludePaymentId`
+ * để chính khoản đang sửa không bị tính vào "đã trả" — nếu không, sửa 30tr thành 31tr sẽ bị chặn oan.
+ * Trả về `{ error }` để route trả nguyên văn cho người dùng, hoặc `{ portion }` khi hợp lệ.
+ */
+export function validatePaymentAmount(
+  debt: DebtForPaymentCheck,
+  amount: number,
+  requestedPortion: unknown,
+  excludePaymentId?: string
+): { error: string } | { portion: DebtPortionValue | null } {
+  const others = excludePaymentId
+    ? debt.payments.filter((payment) => payment.id !== excludePaymentId)
+    : debt.payments;
+
+  if (hasInvoiceSplit(debt)) {
+    if (!DEBT_PORTION_OPTIONS.includes(requestedPortion as DebtPortionValue)) {
+      return { error: "Vui lòng chọn phần thanh toán (có hóa đơn / không hóa đơn)." };
+    }
+    const portion = requestedPortion as DebtPortionValue;
+    const portionTotal = (portion === "INVOICE" ? debt.invoiceAmount : debt.noInvoiceAmount) ?? 0;
+    const portionRemaining = portionTotal - sumPaymentsByPortion(others, portion);
+    if (amount > portionRemaining) {
+      return {
+        error: `Số tiền vượt quá số còn lại của phần "${DEBT_PORTION_LABELS[portion]}" (${portionRemaining.toLocaleString("vi-VN")} đ).`,
+      };
+    }
+    return { portion };
+  }
+
+  // Block over-payment (audit 3.4) so "Còn lại" can never go negative.
+  const remaining = debt.totalAmount - sumPayments(others);
+  if (amount > remaining) {
+    return { error: `Số tiền vượt quá số còn lại (${remaining.toLocaleString("vi-VN")} đ).` };
+  }
+  return { portion: null };
+}

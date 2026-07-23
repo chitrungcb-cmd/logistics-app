@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   COST_CATEGORY_LABELS,
   COST_CATEGORY_OPTIONS,
@@ -8,6 +9,9 @@ import {
   isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
 import { QUOTE_LINE_LABELS, QUOTE_LINE_OPTIONS } from "@/lib/quote-line-constants";
+import AttachmentPreviewButton from "./AttachmentPreviewButton";
+import MoneyInput from "@/components/MoneyInput";
+import { INVOICE_VAT_RATE, computeInvoiceVat, resolveInvoiceAmountWithVat } from "@/lib/personal-account-sync";
 
 type CostDraft = {
   clientKey: string;
@@ -25,6 +29,25 @@ type CostDraft = {
 type CostSaveStatus = "idle" | "saving" | "saved" | "error";
 
 type VendorOption = { id: string; name: string; type: string | null };
+
+type FinanceLinks = {
+  debts: Array<{
+    id: string;
+    type: "RECEIVABLE" | "PAYABLE";
+    totalAmount: number;
+    status: string;
+  }>;
+  invoices: Array<{
+    id: string;
+    invoiceDirection: "INPUT" | "OUTPUT" | "UNRELATED" | "UNKNOWN";
+    invoiceNumber: string | null;
+    totalAmount: number | null;
+    attachmentName: string;
+    attachmentUrl: string;
+    xmlUrl: string | null;
+    pdfUrl: string | null;
+  }>;
+};
 
 type QuoteDraft = {
   id: string;
@@ -83,7 +106,13 @@ export default function ShipmentFinanceEditorModal({
 }) {
   const [costs, setCosts] = useState<CostDraft[]>([]);
   const [quotes, setQuotes] = useState<QuoteDraft[]>(defaultQuotes);
+  // Phân bổ báo giá nhập tay. `invoiceAmountInput` rỗng = chưa nhập tay (tổng lấy từ bảng chi tiết).
+  // `noInvoiceOverride` null = tự tính = phần còn lại của bảng chi tiết sau khi trừ ô có hóa đơn;
+  // khác null = người dùng (hoặc dữ liệu đã lưu) tự đặt.
+  const [invoiceAmountInput, setInvoiceAmountInput] = useState("");
+  const [noInvoiceOverride, setNoInvoiceOverride] = useState<string | null>(null);
   const [vendors, setVendors] = useState<VendorOption[]>([]);
+  const [financeLinks, setFinanceLinks] = useState<FinanceLinks>({ debts: [], invoices: [] });
   const [activeTab, setActiveTab] = useState<"quote" | "cost">("cost");
   const [isLoading, setIsLoading] = useState(true);
   const [costSaveStatus, setCostSaveStatus] = useState<Record<string, CostSaveStatus>>({});
@@ -95,13 +124,23 @@ export default function ShipmentFinanceEditorModal({
   const queuedCostDrafts = useRef(new Map<string, CostDraft>());
   const savedIds = useRef(new Map<string, string>());
 
+  const refreshFinanceLinks = useCallback(async () => {
+    try {
+      const json = await fetch(`/api/shipments/${shipment.id}/finance-links`).then(readApiJson);
+      if (json.success) setFinanceLinks(json.data);
+    } catch {
+      // Liên kết là thông tin bổ sung; lỗi tải không được làm gián đoạn việc nhập chi phí.
+    }
+  }, [shipment.id]);
+
   useEffect(() => {
     Promise.all([
       fetch(`/api/costs?shipmentId=${shipment.id}`).then(readApiJson),
       fetch(`/api/shipments/${shipment.id}/quote-lines`).then(readApiJson),
       fetch("/api/vendors").then(readApiJson),
+      fetch(`/api/shipments/${shipment.id}/finance-links`).then(readApiJson),
     ])
-      .then(([costJson, quoteJson, vendorJson]) => {
+      .then(([costJson, quoteJson, vendorJson, financeJson]) => {
         if (!costJson.success) throw new Error(costJson.error || "Không thể tải chi phí.");
         const loadedCosts: CostDraft[] = costJson.data.map((cost: { id: string; category: string; unitPrice: number; quantity: number; invoiceNumber: string | null; note: string | null; presetId?: string | null; vendorId?: string | null; isActual?: boolean }) => ({
           clientKey: `cost-${cost.id}`,
@@ -124,7 +163,11 @@ export default function ShipmentFinanceEditorModal({
           })
         );
         if (!quoteJson.success) throw new Error(quoteJson.error || "Không thể tải báo giá.");
-        const loadedQuotes = (quoteJson.data as Array<{
+        setInvoiceAmountInput(quoteJson.data.invoiceAmount != null ? String(quoteJson.data.invoiceAmount) : "");
+        // Giá trị đã lưu là authoritative — giữ nguyên (override) thay vì tự tính lại khi mở modal.
+        const savedManual = quoteJson.data.invoiceAmount != null || quoteJson.data.noInvoiceAmount != null;
+        setNoInvoiceOverride(savedManual ? String(quoteJson.data.noInvoiceAmount ?? 0) : null);
+        const loadedQuotes = (quoteJson.data.lines as Array<{
           id: string;
           description: string;
           quantity: number;
@@ -143,6 +186,7 @@ export default function ShipmentFinanceEditorModal({
         }));
         setQuotes(loadedQuotes.length > 0 ? loadedQuotes : defaultQuotes());
         if (vendorJson.success) setVendors(vendorJson.data);
+        if (financeJson.success) setFinanceLinks(financeJson.data);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra."))
       .finally(() => setIsLoading(false));
@@ -153,18 +197,29 @@ export default function ShipmentFinanceEditorModal({
     return () => timers.forEach((timer) => clearTimeout(timer));
   }, []);
 
-  const quoteTotals = useMemo(() => {
-    return quotes.reduce(
-      (totals, line) => {
-        const amount = (Number(line.quantity) || 0) * (Number(line.unitPrice) || 0);
-        totals.total += amount;
-        if (line.hasInvoice) totals.withInvoice += amount;
-        else totals.withoutInvoice += amount;
-        return totals;
-      },
-      { total: 0, withInvoice: 0, withoutInvoice: 0 }
-    );
-  }, [quotes]);
+  const quoteLineTotal = useMemo(
+    () => quotes.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.unitPrice) || 0), 0),
+    [quotes]
+  );
+  // Ô "Không hóa đơn": nếu người dùng chưa tự sửa (override null) và đã nhập ô "Có hóa đơn" thì
+  // luôn bằng phần còn lại của bảng chi tiết — tự cập nhật ngay khi đơn giá trong bảng đổi, không
+  // cần xóa/gõ lại ô có hóa đơn. Tính khi render nên không cần effect đồng bộ.
+  const noInvoiceAmountInput =
+    noInvoiceOverride !== null
+      ? noInvoiceOverride
+      : invoiceAmountInput.trim() !== ""
+        ? String(Math.max(0, quoteLineTotal - (Number(invoiceAmountInput) || 0)))
+        : "";
+  // Khi đã nhập tay một trong hai ô phân bổ, Tổng báo giá = có hóa đơn ĐÃ CỘNG VAT 8% + không hóa
+  // đơn; ô còn trống được hiểu là 0. Chưa nhập tay thì dùng tổng từ bảng chi tiết như cũ.
+  // Dùng chung công thức với server (resolveQuoteTotal) để số trên màn hình và số lưu luôn khớp.
+  const manualSplitActive = invoiceAmountInput.trim() !== "" || noInvoiceAmountInput.trim() !== "";
+  const invoiceBeforeVat = Number(invoiceAmountInput) || 0;
+  const invoiceVat = computeInvoiceVat(invoiceBeforeVat);
+  const invoiceAfterVat = resolveInvoiceAmountWithVat(invoiceBeforeVat);
+  const quoteTotal = manualSplitActive
+    ? invoiceAfterVat + (Number(noInvoiceAmountInput) || 0)
+    : quoteLineTotal;
   const totalCost = useMemo(
     () => costs.reduce((sum, cost) => sum + (Number(cost.unitPrice) || 0) * (Number(cost.quantity) || 0), 0),
     [costs]
@@ -189,11 +244,16 @@ export default function ShipmentFinanceEditorModal({
       const response = await fetch(`/api/shipments/${shipment.id}/quote-lines`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lines: quotes }),
+        body: JSON.stringify({
+          lines: quotes,
+          invoiceAmount: invoiceAmountInput.trim() === "" ? null : Number(invoiceAmountInput),
+          noInvoiceAmount: noInvoiceAmountInput.trim() === "" ? null : Number(noInvoiceAmountInput),
+        }),
       });
       const json = await readApiJson(response);
       if (!response.ok || !json.success) throw new Error(json.error || "Không thể lưu báo giá.");
       onCostsChanged();
+      void refreshFinanceLinks();
       setMessage("Đã lưu bảng báo giá và đồng bộ công nợ khi đủ dữ liệu.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
@@ -248,6 +308,7 @@ export default function ShipmentFinanceEditorModal({
       setCosts((current) => current.map((row) => row.clientKey === key ? { ...row, id: saved.id, presetId: saved.presetId, isActual: saved.isActual } : row));
       setCostSaveStatus((current) => ({ ...current, [key]: "saved" }));
       onCostsChanged();
+      void refreshFinanceLinks();
     } catch (err) {
       setCostSaveStatus((current) => ({ ...current, [key]: "error" }));
       setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
@@ -277,6 +338,7 @@ export default function ShipmentFinanceEditorModal({
     if (json.success) {
       setCosts((current) => current.filter((_, i) => i !== index));
       onCostsChanged();
+      void refreshFinanceLinks();
     }
   }
 
@@ -295,7 +357,7 @@ export default function ShipmentFinanceEditorModal({
           </div>
           <div className="mt-4 flex gap-6">
             <button type="button" onClick={() => setActiveTab("quote")} className={`border-b-2 px-1 pb-3 text-sm font-semibold ${activeTab === "quote" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-800"}`}>
-              Báo giá <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">{formatVnd(quoteTotals.total)}</span>
+              Báo giá <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">{formatVnd(quoteTotal)}</span>
             </button>
             <button type="button" onClick={() => setActiveTab("cost")} className={`border-b-2 px-1 pb-3 text-sm font-semibold ${activeTab === "cost" ? "border-emerald-600 text-emerald-700" : "border-transparent text-gray-500 hover:text-gray-800"}`}>
               Chi phí <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">{formatVnd(totalCost)}</span>
@@ -309,15 +371,81 @@ export default function ShipmentFinanceEditorModal({
               <p className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-2.5 text-xs text-blue-700">
                 Khi báo giá và toàn bộ chi phí thực tế đã được nhập đầy đủ, hệ thống tự động đồng bộ phải thu và phải trả sang Công nợ.
               </p>
+              <section className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Liên kết tài chính</span>
+                  {financeLinks.debts.map((debt) => (
+                    <Link
+                      key={debt.id}
+                      href={`/debts/${debt.id}`}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium ${debt.type === "RECEIVABLE" ? "bg-blue-100 text-blue-700 hover:bg-blue-200" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"}`}
+                    >
+                      {debt.type === "RECEIVABLE" ? "Mở phải thu" : "Mở phải trả"} · {formatVnd(debt.totalAmount)}
+                    </Link>
+                  ))}
+                  {financeLinks.invoices.map((invoice) => {
+                    const fileUrl = invoice.pdfUrl || invoice.xmlUrl || invoice.attachmentUrl;
+                    return (
+                      <AttachmentPreviewButton
+                        key={invoice.id}
+                        url={fileUrl}
+                        name={invoice.attachmentName}
+                        className="rounded-md bg-violet-100 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-200"
+                      >
+                        {invoice.invoiceDirection === "OUTPUT" ? "HĐ bán ra" : "HĐ đầu vào"} {invoice.invoiceNumber || "chưa rõ số"}
+                      </AttachmentPreviewButton>
+                    );
+                  })}
+                  {financeLinks.debts.length === 0 && financeLinks.invoices.length === 0 && (
+                    <span className="text-xs text-gray-400">Chưa có công nợ hoặc hóa đơn được liên kết.</span>
+                  )}
+                </div>
+              </section>
               {activeTab === "quote" && <section className="rounded-xl border border-blue-200 bg-blue-50/30 p-5">
                 <div className="mb-3">
                   <h3 className="font-semibold text-gray-900">Bảng báo giá</h3>
-                  <p className="text-xs text-gray-500">Thêm dòng tùy ý và phân bổ theo loại hóa đơn</p>
+                  <p className="text-xs text-gray-500">
+                    Nhập ô Có hóa đơn — phần còn lại của bảng chi tiết tự chuyển sang ô Không hóa đơn (sửa tay được).
+                    Phần Có hóa đơn tự cộng VAT {Math.round(INVOICE_VAT_RATE * 100)}%; Tổng báo giá = Có hóa đơn sau
+                    VAT + Không hóa đơn. Để trống cả hai thì tổng lấy từ bảng chi tiết bên dưới. Phần Không
+                    hóa đơn tự liên kết sang mô-đun Tài khoản cá nhân.
+                  </p>
                   <div className="mt-3 grid grid-cols-3 gap-2">
-                    <div className="rounded-md bg-blue-100 px-3 py-2"><p className="text-[10px] text-blue-600">Tổng báo giá</p><p className="font-bold text-blue-800">{formatVnd(quoteTotals.total)}</p></div>
-                    <div className="rounded-md bg-green-100 px-3 py-2"><p className="text-[10px] text-green-700">Có hóa đơn</p><p className="font-bold text-green-800">{formatVnd(quoteTotals.withInvoice)}</p></div>
-                    <div className="rounded-md bg-orange-100 px-3 py-2"><p className="text-[10px] text-orange-700">Không hóa đơn</p><p className="font-bold text-orange-800">{formatVnd(quoteTotals.withoutInvoice)}</p></div>
+                    <div className="rounded-md bg-blue-100 px-3 py-2"><p className="text-[10px] text-blue-600">Tổng báo giá</p><p className="font-bold text-blue-800">{formatVnd(quoteTotal)}</p></div>
+                    <div className="rounded-md bg-green-100 px-3 py-2">
+                      <p className="text-[10px] text-green-700">Có hóa đơn (chưa VAT) — điền tay</p>
+                      <MoneyInput
+                        value={invoiceAmountInput}
+                        onValueChange={(raw) => {
+                          // Gõ ô có hóa đơn → trả ô không hóa đơn về chế độ tự tính (phần còn lại).
+                          setNoInvoiceOverride(null);
+                          setInvoiceAmountInput(raw);
+                        }}
+                        className="input mt-1 w-full bg-white font-bold text-green-800"
+                        placeholder="0"
+                      />
+                      <p className="mt-1 text-[10px] leading-4 text-green-700">
+                        VAT {Math.round(INVOICE_VAT_RATE * 100)}%: {formatVnd(invoiceVat)}
+                        <br />
+                        <span className="font-semibold">Sau VAT: {formatVnd(invoiceAfterVat)}</span>
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-orange-100 px-3 py-2">
+                      <p className="text-[10px] text-orange-700">Không hóa đơn — điền tay</p>
+                      <MoneyInput
+                        value={noInvoiceAmountInput}
+                        onValueChange={(raw) => setNoInvoiceOverride(raw)}
+                        className="input mt-1 w-full bg-white font-bold text-orange-800"
+                        placeholder="0"
+                      />
+                    </div>
                   </div>
+                  {manualSplitActive && (
+                    <p className="mt-2 text-[11px] text-orange-700">
+                      Số tiền không hóa đơn {formatVnd(Number(noInvoiceAmountInput) || 0)} sẽ được theo dõi trong mô-đun{" "}
+                      <span className="font-semibold">Tài khoản cá nhân</span> sau khi lưu báo giá.
+                    </p>
+                  )}
                 </div>
                 <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
                   <table className="min-w-[980px] divide-y divide-gray-200 text-sm">
@@ -327,7 +455,6 @@ export default function ShipmentFinanceEditorModal({
                       <th className="px-2 py-2 text-left text-gray-500">ĐVT</th>
                       <th className="px-2 py-2 text-left text-gray-500">Đơn giá</th>
                       <th className="px-2 py-2 text-left text-gray-500">Thành tiền</th>
-                      <th className="px-2 py-2 text-left text-gray-500">Hóa đơn</th>
                       <th className="px-2 py-2 text-left text-gray-500">Ghi chú</th>
                       <th></th>
                     </tr></thead>
@@ -337,9 +464,8 @@ export default function ShipmentFinanceEditorModal({
                         <td className="px-2 py-2"><input value={line.description} onChange={(event) => updateQuote(index, { description: event.target.value })} className="input min-w-44" placeholder="Nội dung báo giá" /></td>
                         <td className="px-2 py-2"><input type="number" min="0" step="any" value={line.quantity} onChange={(event) => updateQuote(index, { quantity: event.target.value })} className="input w-16" /></td>
                         <td className="px-2 py-2"><input value={line.unit} onChange={(event) => updateQuote(index, { unit: event.target.value })} className="input w-20" placeholder="Lần, xe..." /></td>
-                        <td className="px-2 py-2"><input type="number" min="0" value={line.unitPrice} onChange={(event) => updateQuote(index, { unitPrice: event.target.value })} className="input w-28" /></td>
+                        <td className="px-2 py-2"><MoneyInput value={line.unitPrice} onValueChange={(raw) => updateQuote(index, { unitPrice: raw })} className="input w-32" /></td>
                         <td className="whitespace-nowrap px-2 py-2 font-medium text-gray-900">{formatVnd(amount)}</td>
-                        <td className="px-2 py-2"><select value={line.hasInvoice ? "yes" : "no"} onChange={(event) => updateQuote(index, { hasInvoice: event.target.value === "yes" })} className="input min-w-32"><option value="yes">Có hóa đơn</option><option value="no">Không hóa đơn</option></select></td>
                         <td className="px-2 py-2"><input value={line.note} onChange={(event) => updateQuote(index, { note: event.target.value })} className="input min-w-36" placeholder="Ghi chú" /></td>
                         <td className="px-2 py-2"><button type="button" onClick={() => setQuotes((current) => current.filter((_, i) => i !== index))} className="text-red-600 hover:underline">Xóa</button></td>
                       </tr>;
@@ -363,7 +489,7 @@ export default function ShipmentFinanceEditorModal({
                     <tbody className="divide-y divide-gray-100">{costs.map((cost, index) => <tr key={cost.clientKey}>
                       <td className="px-2 py-2"><select value={cost.category} onChange={(event) => { const category = event.target.value; updateCost(index, { category, invoiceNumber: isInvoiceCostCategory(category) ? cost.invoiceNumber : "", vendorId: isVendorlessCostCategory(category) ? "" : cost.vendorId }, true); }} className="input min-w-32">{COST_CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{COST_CATEGORY_LABELS[category]}</option>)}</select>{cost.presetId && !cost.isActual && <span className="mt-1 block text-[10px] font-medium text-amber-700">Dự kiến tự động</span>}{cost.isActual && cost.id && <span className="mt-1 block text-[10px] font-medium text-emerald-700">✓ Chi phí thực tế</span>}</td>
                       <td className="px-2 py-2">{isVendorlessCostCategory(cost.category) ? <div className="flex min-h-10 min-w-48 items-center rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-gray-500">Không áp dụng</div> : <select value={cost.vendorId} onChange={(event) => updateCost(index, { vendorId: event.target.value }, true)} className={`input min-w-48 ${cost.vendorId ? "" : "border-amber-300 bg-amber-50"}`}><option value="">Chưa gắn nhà cung cấp</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}{vendor.type ? ` · ${vendor.type}` : ""}</option>)}</select>}</td>
-                      <td className="px-2 py-2"><input type="number" min="0" value={cost.unitPrice} onChange={(event) => updateCost(index, { unitPrice: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-32" /></td>
+                      <td className="px-2 py-2"><MoneyInput value={cost.unitPrice} onValueChange={(raw) => updateCost(index, { unitPrice: raw }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-32" /></td>
                       <td className="px-2 py-2"><input type="number" min="0" step="any" value={cost.quantity} onChange={(event) => updateCost(index, { quantity: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-20" /></td>
                       <td className="px-2 py-2"><input value={cost.invoiceNumber} onChange={(event) => updateCost(index, { invoiceNumber: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} disabled={!isInvoiceCostCategory(cost.category)} className="input w-32" placeholder={isInvoiceCostCategory(cost.category) ? "Số HĐ" : "—"} /></td>
                       <td className="px-2 py-2"><input value={cost.note} onChange={(event) => updateCost(index, { note: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input min-w-52" placeholder="Ghi chú" /></td>

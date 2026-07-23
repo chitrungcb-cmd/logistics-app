@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
-import { sumPayments } from "@/lib/debt-constants";
+import { validatePaymentAmount } from "@/lib/debt-constants";
 import { recomputeDebtStatus } from "@/lib/debt";
 import { isAutomaticPayableDebt } from "@/lib/shipment-debt-sync";
 
@@ -19,17 +19,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!amount || Number(amount) <= 0) return apiError("Vui lòng nhập số tiền hợp lệ.", 400);
     if (!paymentDate) return apiError("Vui lòng chọn ngày thanh toán.", 400);
 
-    const debt = await prisma.debt.findUnique({ where: { id }, include: { payments: { select: { amount: true } } } });
+    const debt = await prisma.debt.findUnique({
+      where: { id },
+      include: { payments: { select: { amount: true, portion: true } } },
+    });
     if (!debt) return apiError("Không tìm thấy công nợ.", 404);
     if (user.role !== "ADMIN" && isAutomaticPayableDebt(debt.sourceKey)) {
       return apiError("Bạn không có quyền ghi nhận thanh toán cho công nợ chi phí tự động.", 403);
     }
 
-    // Block over-payment (audit 3.4) so "Còn lại" can never go negative.
-    const remaining = debt.totalAmount - sumPayments(debt.payments);
-    if (Number(amount) > remaining) {
-      return apiError(`Số tiền vượt quá số còn lại (${remaining.toLocaleString("vi-VN")} đ).`, 400);
-    }
+    const checked = validatePaymentAmount(debt, Number(amount), body.portion);
+    if ("error" in checked) return apiError(checked.error, 400);
+    const portion = checked.portion;
 
     const payment = await prisma.payment.create({
       data: {
@@ -37,6 +38,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         amount: Number(amount),
         paymentDate: new Date(paymentDate),
         method: method || null,
+        portion,
         attachmentUrl: attachmentUrl || null,
         note: note || null,
       },

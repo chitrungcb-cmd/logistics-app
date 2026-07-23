@@ -1,12 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  DEBT_PORTION_LABELS,
   DEBT_TYPE_LABELS,
+  computeInvoiceSplitBreakdown,
   debtStatusBadge,
+  hasInvoiceSplit,
+  type DebtPortionValue,
 } from "@/lib/debt-constants";
+import AttachmentPreviewButton from "@/components/shipments/AttachmentPreviewButton";
+import ShipmentFinanceEditorModal from "@/components/shipments/ShipmentFinanceEditorModal";
+import MoneyInput from "@/components/MoneyInput";
+import ShipmentLink from "@/components/shipments/ShipmentLink";
 
 type DebtStats = { paidAmount: number; remainingAmount: number; status: string };
 
@@ -15,6 +23,7 @@ type Payment = {
   amount: number;
   paymentDate: string;
   method: string | null;
+  portion: DebtPortionValue | null;
   attachmentUrl: string | null;
   note: string | null;
   createdAt: string;
@@ -25,6 +34,8 @@ type DebtDetail = {
   sourceKey: string | null;
   type: "RECEIVABLE" | "PAYABLE";
   totalAmount: number;
+  invoiceAmount: number | null;
+  noInvoiceAmount: number | null;
   dueDate: string | null;
   status: string;
   note: string | null;
@@ -41,6 +52,18 @@ type DebtDetail = {
     invoiceNo: string | null;
   } | null;
   payments: Payment[];
+  linkedInvoices: Array<{
+    id: string;
+    invoiceDirection: "INPUT" | "OUTPUT" | "UNRELATED" | "UNKNOWN";
+    invoiceNumber: string | null;
+    invoiceDate: string | null;
+    totalAmount: number | null;
+    currency: string;
+    attachmentName: string;
+    attachmentUrl: string;
+    xmlUrl: string | null;
+    pdfUrl: string | null;
+  }>;
   paidAmount: number;
   remainingAmount: number;
 };
@@ -53,21 +76,27 @@ const emptyPaymentForm = {
   amount: "",
   paymentDate: new Date().toISOString().slice(0, 10),
   method: "",
+  portion: "INVOICE" as DebtPortionValue,
   note: "",
   attachmentUrl: null as string | null,
 };
 
-export default function DebtDetailClient({ debtId }: { debtId: string }) {
+export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; isAdmin: boolean }) {
   const router = useRouter();
   const [debt, setDebt] = useState<DebtDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [isFormOpen, setIsFormOpen] = useState(false);
+  // null = đang thêm mới; có id = đang sửa khoản thanh toán đó (dùng chung một form).
+  const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyPaymentForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Cửa sổ "Báo giá & chi phí" của lô hàng liên quan — ADMIN-only, vì chi phí là dữ liệu chỉ ADMIN xem được.
+  const [isFinanceOpen, setIsFinanceOpen] = useState(false);
 
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editForm, setEditForm] = useState({ totalAmount: "", dueDate: "", note: "" });
@@ -79,8 +108,8 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
     setDebt((prev) => (prev ? { ...prev, ...stats } : prev));
   }
 
-  useEffect(() => {
-    fetch(`/api/debts/${debtId}`)
+  const loadDebt = useCallback(() => {
+    return fetch(`/api/debts/${debtId}`)
       .then((res) => res.json())
       .then((json) => {
         if (!json.success) throw new Error(json.error || "Không thể tải công nợ.");
@@ -89,6 +118,10 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
       .catch((err) => setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra."))
       .finally(() => setIsLoading(false));
   }, [debtId]);
+
+  useEffect(() => {
+    loadDebt();
+  }, [loadDebt]);
 
   async function handleAttachmentChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -120,22 +153,38 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
     }
 
     try {
-      const res = await fetch(`/api/debts/${debtId}/payments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: form.amount,
-          paymentDate: form.paymentDate,
-          method: form.method,
-          attachmentUrl: form.attachmentUrl,
-          note: form.note,
-        }),
-      });
+      const res = await fetch(
+        editingPaymentId ? `/api/debts/${debtId}/payments/${editingPaymentId}` : `/api/debts/${debtId}/payments`,
+        {
+          method: editingPaymentId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: form.amount,
+            paymentDate: form.paymentDate,
+            method: form.method,
+            portion: debt && hasInvoiceSplit(debt) ? form.portion : undefined,
+            attachmentUrl: form.attachmentUrl,
+            note: form.note,
+          }),
+        }
+      );
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || "Không thể ghi nhận thanh toán.");
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || (editingPaymentId ? "Không thể sửa thanh toán." : "Không thể ghi nhận thanh toán."));
+      }
 
-      setDebt((prev) => (prev ? { ...prev, payments: [json.data.payment, ...prev.payments] } : prev));
+      setDebt((prev) =>
+        prev
+          ? {
+              ...prev,
+              payments: editingPaymentId
+                ? prev.payments.map((p) => (p.id === editingPaymentId ? json.data.payment : p))
+                : [json.data.payment, ...prev.payments],
+            }
+          : prev
+      );
       applyStats(json.data);
+      setEditingPaymentId(null);
       setForm(emptyPaymentForm);
       setIsFormOpen(false);
     } catch (err) {
@@ -164,6 +213,32 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
       return;
     }
     router.push("/debts");
+  }
+
+  function openPaymentForm() {
+    // Mặc định chọn phần còn nợ: nếu phần có hóa đơn đã trả đủ thì nhảy sang không hóa đơn.
+    const bd = debt ? computeInvoiceSplitBreakdown(debt) : null;
+    const defaultPortion: DebtPortionValue =
+      bd && bd.remainingInvoice <= 0 && bd.remainingNoInvoice > 0 ? "NO_INVOICE" : "INVOICE";
+    setEditingPaymentId(null);
+    setForm({ ...emptyPaymentForm, portion: defaultPortion });
+    setFormError(null);
+    setIsFormOpen(true);
+  }
+
+  /** Cùng form với "Ghi nhận thanh toán"; `editingPaymentId` khác null nghĩa là đang sửa. */
+  function openEditPayment(payment: Payment) {
+    setEditingPaymentId(payment.id);
+    setForm({
+      amount: String(payment.amount),
+      paymentDate: payment.paymentDate.slice(0, 10),
+      method: payment.method || "",
+      portion: payment.portion ?? "INVOICE",
+      note: payment.note || "",
+      attachmentUrl: payment.attachmentUrl,
+    });
+    setFormError(null);
+    setIsFormOpen(true);
   }
 
   function openEdit() {
@@ -218,6 +293,7 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
   }
 
   const badge = debtStatusBadge(debt.status, debt.dueDate);
+  const breakdown = computeInvoiceSplitBreakdown(debt);
   const partnerName =
     debt.customer?.companyName ||
     debt.vendor?.name ||
@@ -282,9 +358,9 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
               <dt className="text-xs font-medium uppercase tracking-wide text-gray-400">Lô hàng liên quan</dt>
               <dd className="mt-0.5 text-sm text-gray-900">
                 {debt.shipment ? (
-                  <Link href={`/shipments/${debt.shipment.id}`} className="text-blue-600 hover:underline">
+                  <ShipmentLink shipmentId={debt.shipment.id} className="text-blue-600 hover:underline">
                     {debt.shipment.goodsName || debt.shipment.shipmentCode}
-                  </Link>
+                  </ShipmentLink>
                 ) : (
                   "—"
                 )}
@@ -294,12 +370,81 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
             {debt.sourceKey && <Info label="Nguồn" value="Đồng bộ tự động từ tài chính lô hàng" />}
           </dl>
 
+          {breakdown && (
+            <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <PortionCard
+                label="Có hóa đơn (đã gồm VAT 8%)"
+                total={breakdown.invoiceAmount}
+                paid={breakdown.paidInvoice}
+                remaining={breakdown.remainingInvoice}
+                className="border-green-200 bg-green-50/60"
+                accent="text-green-800"
+              />
+              <PortionCard
+                label="Không hóa đơn"
+                total={breakdown.noInvoiceAmount}
+                paid={breakdown.paidNoInvoice}
+                remaining={breakdown.remainingNoInvoice}
+                className="border-orange-200 bg-orange-50/60"
+                accent="text-orange-800"
+              />
+            </div>
+          )}
+
+          {debt.shipment && (
+            <div className="mt-6 rounded-lg border border-blue-100 bg-blue-50/50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-gray-900">Chi phí và hóa đơn liên kết</h3>
+                {isAdmin && (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsFinanceOpen(true)}
+                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700"
+                    >
+                      Xem báo giá &amp; chi phí
+                    </button>
+                    <Link
+                      href={`/costs?shipmentId=${debt.shipment.id}`}
+                      className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-blue-700 shadow-sm ring-1 ring-blue-200 hover:bg-blue-50"
+                    >
+                      Mở chi phí lô hàng
+                    </Link>
+                  </div>
+                )}
+              </div>
+              {debt.linkedInvoices.length === 0 ? (
+                <p className="mt-3 text-sm text-gray-400">Chưa có hóa đơn được xác định thuộc lô hàng này.</p>
+              ) : (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {debt.linkedInvoices.map((invoice) => {
+                    const fileUrl = invoice.pdfUrl || invoice.xmlUrl || invoice.attachmentUrl;
+                    return (
+                      <AttachmentPreviewButton
+                        key={invoice.id}
+                        url={fileUrl}
+                        name={invoice.attachmentName}
+                        className="rounded-md bg-white px-3 py-2 text-xs text-gray-700 shadow-sm ring-1 ring-gray-200 hover:ring-blue-300"
+                      >
+                        <span className={`mr-1.5 font-semibold ${invoice.invoiceDirection === "OUTPUT" ? "text-blue-700" : "text-emerald-700"}`}>
+                          {invoice.invoiceDirection === "OUTPUT" ? "Bán ra" : "Đầu vào"}
+                        </span>
+                        HĐ {invoice.invoiceNumber || "chưa rõ số"}
+                        {invoice.totalAmount !== null && ` · ${formatVnd(invoice.totalAmount)}`}
+                      </AttachmentPreviewButton>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="mt-6">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-900">Lịch sử thanh toán</h3>
               <button
                 type="button"
-                onClick={() => setIsFormOpen(true)}
+                onClick={openPaymentForm}
                 className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
               >
                 + Ghi nhận thanh toán
@@ -315,6 +460,7 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
                     <tr>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Ngày</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Số tiền</th>
+                      {breakdown && <th className="px-3 py-2 text-left font-medium text-gray-500">Phần</th>}
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Phương thức</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Ghi chú</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Biên lai</th>
@@ -328,27 +474,43 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
                           {new Date(p.paymentDate).toLocaleDateString("vi-VN")}
                         </td>
                         <td className="px-3 py-2 font-medium text-gray-900">{formatVnd(p.amount)}</td>
+                        {breakdown && (
+                          <td className="px-3 py-2">
+                            {p.portion ? (
+                              <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${p.portion === "INVOICE" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}>
+                                {DEBT_PORTION_LABELS[p.portion]}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                          </td>
+                        )}
                         <td className="px-3 py-2 text-gray-600">{p.method || "—"}</td>
                         <td className="px-3 py-2 text-gray-600">{p.note || "—"}</td>
                         <td className="px-3 py-2">
                           {p.attachmentUrl ? (
-                            <a
-                              href={p.attachmentUrl}
-                              target="_blank"
-                              rel="noreferrer"
+                            <AttachmentPreviewButton
+                              url={p.attachmentUrl}
                               className="text-blue-600 hover:underline"
                             >
                               📎 Xem
-                            </a>
+                            </AttachmentPreviewButton>
                           ) : (
                             "—"
                           )}
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="whitespace-nowrap px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => openEditPayment(p)}
+                            className="text-xs font-medium text-blue-600 hover:underline"
+                          >
+                            ✏️ Sửa
+                          </button>
                           <button
                             type="button"
                             onClick={() => handleDeletePayment(p.id)}
-                            className="text-xs font-medium text-red-600 hover:underline"
+                            className="ml-3 text-xs font-medium text-red-600 hover:underline"
                           >
                             🗑 Xóa
                           </button>
@@ -390,17 +552,40 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
             className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="mb-4 text-base font-semibold text-gray-900">Ghi nhận thanh toán</h2>
+            <h2 className="mb-4 text-base font-semibold text-gray-900">
+              {editingPaymentId ? "Sửa thanh toán" : "Ghi nhận thanh toán"}
+            </h2>
             <form onSubmit={handleSubmitPayment} className="space-y-4">
+              {breakdown && (
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-gray-700">Thanh toán cho phần</span>
+                  <select
+                    value={form.portion}
+                    onChange={(e) => setForm((prev) => ({ ...prev, portion: e.target.value as DebtPortionValue }))}
+                    className="input"
+                  >
+                    <option value="INVOICE">
+                      {DEBT_PORTION_LABELS.INVOICE} · còn {formatVnd(breakdown.remainingInvoice)}
+                    </option>
+                    <option value="NO_INVOICE">
+                      {DEBT_PORTION_LABELS.NO_INVOICE} · còn {formatVnd(breakdown.remainingNoInvoice)}
+                    </option>
+                  </select>
+                </label>
+              )}
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Số tiền</span>
-                <input
-                  type="number"
+                <MoneyInput
                   value={form.amount}
-                  onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))}
+                  onValueChange={(raw) => setForm((prev) => ({ ...prev, amount: raw }))}
                   className="input"
-                  min={0}
                 />
+                {breakdown && (
+                  <span className="mt-1 block text-xs text-gray-400">
+                    Còn lại phần {DEBT_PORTION_LABELS[form.portion].toLowerCase()}:{" "}
+                    {formatVnd(form.portion === "INVOICE" ? breakdown.remainingInvoice : breakdown.remainingNoInvoice)}
+                  </span>
+                )}
               </label>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Ngày thanh toán</span>
@@ -450,11 +635,12 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
                   type="submit"
                   className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
                 >
-                  Lưu thanh toán
+                  {editingPaymentId ? "Lưu thay đổi" : "Lưu thanh toán"}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
+                    setEditingPaymentId(null);
                     setForm(emptyPaymentForm);
                     setIsFormOpen(false);
                   }}
@@ -478,12 +664,10 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
             <form onSubmit={handleEditSave} className="space-y-4">
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Tổng tiền</span>
-                <input
-                  type="number"
+                <MoneyInput
                   value={editForm.totalAmount}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, totalAmount: e.target.value }))}
+                  onValueChange={(raw) => setEditForm((prev) => ({ ...prev, totalAmount: raw }))}
                   className={`input ${debt.sourceKey ? "cursor-not-allowed bg-gray-100 text-gray-500" : ""}`}
-                  min={0}
                   disabled={Boolean(debt.sourceKey)}
                 />
                 <span className="mt-1 block text-xs text-gray-400">
@@ -529,6 +713,15 @@ export default function DebtDetailClient({ debtId }: { debtId: string }) {
           </div>
         </div>
       )}
+
+      {/* Sửa báo giá trong cửa sổ này sẽ đồng bộ lại công nợ (syncShipmentDebts) → tải lại công nợ. */}
+      {isFinanceOpen && debt.shipment && (
+        <ShipmentFinanceEditorModal
+          shipment={debt.shipment}
+          onClose={() => setIsFinanceOpen(false)}
+          onCostsChanged={loadDebt}
+        />
+      )}
     </div>
   );
 }
@@ -538,6 +731,49 @@ function Info({ label, value }: { label: string; value: string | null | undefine
     <div>
       <dt className="text-xs font-medium uppercase tracking-wide text-gray-400">{label}</dt>
       <dd className="mt-0.5 text-sm text-gray-900">{value || "—"}</dd>
+    </div>
+  );
+}
+
+function PortionCard({
+  label,
+  total,
+  paid,
+  remaining,
+  className,
+  accent,
+}: {
+  label: string;
+  total: number;
+  paid: number;
+  remaining: number;
+  className: string;
+  accent: string;
+}) {
+  return (
+    <div className={`rounded-lg border p-4 ${className}`}>
+      <div className="flex items-center justify-between">
+        <span className={`text-sm font-semibold ${accent}`}>{label}</span>
+        {remaining <= 0 && total > 0 && (
+          <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+            Đã thu đủ
+          </span>
+        )}
+      </div>
+      <dl className="mt-2 space-y-1 text-sm">
+        <div className="flex justify-between">
+          <dt className="text-gray-500">Tổng</dt>
+          <dd className="font-medium text-gray-900">{formatVnd(total)}</dd>
+        </div>
+        <div className="flex justify-between">
+          <dt className="text-gray-500">Đã thu</dt>
+          <dd className="font-medium text-green-700">{formatVnd(paid)}</dd>
+        </div>
+        <div className="flex justify-between border-t border-gray-200/70 pt-1">
+          <dt className="text-gray-600">Còn lại</dt>
+          <dd className={`font-semibold ${remaining > 0 ? accent : "text-gray-400"}`}>{formatVnd(remaining)}</dd>
+        </div>
+      </dl>
     </div>
   );
 }

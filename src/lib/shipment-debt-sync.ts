@@ -1,5 +1,6 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { computeDebtStatus, sumPayments } from "@/lib/debt-constants";
+import { resolveInvoiceAmountWithVat } from "@/lib/personal-account-sync";
 
 export const AUTOMATIC_RECEIVABLE_DEBT_PREFIX = "SHIPMENT_RECEIVABLE:";
 export const AUTOMATIC_PAYABLE_DEBT_PREFIX = "SHIPMENT_PAYABLE:";
@@ -60,6 +61,9 @@ async function syncOneDebt(params: {
   amount: number;
   customerId: string | null;
   canCreate: boolean;
+  // Tách hóa đơn cho công nợ phải thu (null = không tách; luôn null với công nợ phải trả).
+  invoiceAmount?: number | null;
+  noInvoiceAmount?: number | null;
 }) {
   const sourceKey = debtKey(params.type, params.shipmentId);
   let existing = await findAutomaticDebt(params.tx, sourceKey);
@@ -85,6 +89,8 @@ async function syncOneDebt(params: {
   // Không hạ tổng nợ xuống dưới số đã thanh toán vì sẽ tạo số dư âm và làm sai lịch sử thanh toán.
   const totalAmount = Math.max(params.amount, paidAmount);
   const status = computeDebtStatus(totalAmount, paidAmount);
+  const invoiceAmount = params.invoiceAmount ?? null;
+  const noInvoiceAmount = params.noInvoiceAmount ?? null;
 
   return params.tx.debt.upsert({
     where: { sourceKey },
@@ -95,6 +101,8 @@ async function syncOneDebt(params: {
       customerId: params.type === "RECEIVABLE" ? params.customerId : null,
       vendorId: null,
       totalAmount,
+      invoiceAmount,
+      noInvoiceAmount,
       status,
       note: params.type === "RECEIVABLE"
         ? "Tự động đồng bộ từ báo giá lô hàng."
@@ -105,6 +113,8 @@ async function syncOneDebt(params: {
       customerId: params.type === "RECEIVABLE" ? params.customerId : null,
       vendorId: null,
       totalAmount,
+      invoiceAmount,
+      noInvoiceAmount,
       status,
     },
   });
@@ -129,6 +139,8 @@ export async function syncShipmentDebts(tx: Prisma.TransactionClient, shipmentId
     select: {
       id: true,
       customerId: true,
+      quoteInvoiceAmount: true,
+      quoteNoInvoiceAmount: true,
       costs: { select: { costPrice: true, isActual: true } },
       quoteLines: { select: { amount: true } },
       quotes: {
@@ -140,6 +152,13 @@ export async function syncShipmentDebts(tx: Prisma.TransactionClient, shipmentId
   });
   if (!shipment) return { ready: false, receivable: null, payable: null };
 
+  // Công nợ phải thu chỉ tách hóa đơn khi báo giá đã nhập tay phần Có/Không hóa đơn; ngược lại
+  // để null (công nợ tổng như cũ). Phần có hóa đơn lưu số ĐÃ CỘNG VAT 8% vì đó là số khách thực
+  // trả — cùng công thức với quoteAmount nên tổng hai phần vẫn khớp totalAmount.
+  const manualSplit = shipment.quoteInvoiceAmount != null || shipment.quoteNoInvoiceAmount != null;
+  const receivableInvoiceAmount = manualSplit ? resolveInvoiceAmountWithVat(shipment.quoteInvoiceAmount) : null;
+  const receivableNoInvoiceAmount = manualSplit ? shipment.quoteNoInvoiceAmount ?? 0 : null;
+
   const latestQuoteAmount = shipment.quotes[0]?.quoteAmount ?? 0;
   const quoteLinesComplete = shipment.quoteLines.length === 0 ||
     shipment.quoteLines.every((line) => line.amount > 0);
@@ -150,13 +169,22 @@ export async function syncShipmentDebts(tx: Prisma.TransactionClient, shipmentId
     .filter((cost) => cost.isActual && cost.costPrice > 0)
     .reduce((sum, cost) => sum + cost.costPrice, 0);
 
+  // Khi có phân bổ nhập tay, tổng phải thu được tính lại từ chính hai ô đó (đã gồm VAT) thay vì tin
+  // vào Quote gần nhất — bản ghi Quote cũ có thể được tạo trước khi bật VAT, tính lại ở đây bảo đảm
+  // invoiceAmount + noInvoiceAmount luôn đúng bằng totalAmount.
+  const receivableAmount = manualSplit
+    ? (receivableInvoiceAmount ?? 0) + (receivableNoInvoiceAmount ?? 0)
+    : latestQuoteAmount;
+
   const receivable = await syncOneDebt({
     tx,
     shipmentId,
     type: "RECEIVABLE",
-    amount: latestQuoteAmount,
+    amount: receivableAmount,
     customerId: shipment.customerId,
     canCreate: ready,
+    invoiceAmount: receivableInvoiceAmount,
+    noInvoiceAmount: receivableNoInvoiceAmount,
   });
   const payable = await syncOneDebt({
     tx,

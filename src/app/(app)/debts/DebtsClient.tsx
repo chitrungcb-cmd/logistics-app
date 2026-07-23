@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ShipmentLink from "@/components/shipments/ShipmentLink";
 import { useRouter } from "next/navigation";
 import CustomerCombobox from "@/components/customers/CustomerCombobox";
 import VendorCombobox from "@/components/vendors/VendorCombobox";
+import ShipmentFinanceEditorModal from "@/components/shipments/ShipmentFinanceEditorModal";
+import MoneyInput from "@/components/MoneyInput";
 import { InvoiceManagementPanel } from "@/app/(app)/partners/PartnersClient";
 import {
   DEBT_TYPE_LABELS,
@@ -44,6 +46,15 @@ type DebtRow = {
   shipment: ShipmentOption | null;
   paidAmount: number;
   remainingAmount: number;
+  /** null = công nợ không tách hóa đơn (hiển thị như cũ, chỉ một tổng chung). */
+  splitBreakdown: {
+    invoiceAmount: number;
+    noInvoiceAmount: number;
+    paidInvoice: number;
+    paidNoInvoice: number;
+    remainingInvoice: number;
+    remainingNoInvoice: number;
+  } | null;
 };
 
 function formatVnd(amount: number) {
@@ -104,6 +115,9 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
     dueTo: "",
   });
 
+  // Lô hàng đang mở cửa sổ "Báo giá & chi phí" (ADMIN-only, vì dữ liệu chi phí chỉ ADMIN được xem).
+  const [financeShipment, setFinanceShipment] = useState<ShipmentOption | null>(null);
+
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
@@ -111,8 +125,8 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
   const [isShipmentDropdownOpen, setIsShipmentDropdownOpen] = useState(false);
   const shipmentFieldRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    fetch("/api/debts")
+  const loadDebts = useCallback(() => {
+    return fetch("/api/debts")
       .then((res) => res.json())
       .then((json) => {
         if (!json.success) throw new Error(json.error || "Không thể tải danh sách công nợ.");
@@ -121,6 +135,10 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
       .catch((err) => setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra."))
       .finally(() => setIsLoading(false));
   }, []);
+
+  useEffect(() => {
+    loadDebts();
+  }, [loadDebts]);
 
   useEffect(() => {
     fetch("/api/shipments")
@@ -202,7 +220,18 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
     const tongQuaHan = debts
       .filter((d) => isOverdue(d.status, d.dueDate))
       .reduce((sum, d) => sum + d.remainingAmount, 0);
-    return { tongPhaiThu, tongPhaiTra, tongQuaHan };
+    // Chỉ cộng các công nợ phải thu CÓ tách hóa đơn — công nợ không tách không thuộc phần nào cả.
+    const split = debts.filter((d) => d.type === "RECEIVABLE" && d.splitBreakdown);
+    const conLaiCoHoaDon = split.reduce((sum, d) => sum + d.splitBreakdown!.remainingInvoice, 0);
+    const conLaiKhongHoaDon = split.reduce((sum, d) => sum + d.splitBreakdown!.remainingNoInvoice, 0);
+    return {
+      tongPhaiThu,
+      tongPhaiTra,
+      tongQuaHan,
+      hasSplit: split.length > 0,
+      conLaiCoHoaDon,
+      conLaiKhongHoaDon,
+    };
   }, [debts]);
 
   const agingReport = useMemo(() => {
@@ -296,7 +325,21 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
         <InvoiceManagementPanel isAdmin={isAdmin} embedded />
       ) : <>
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <KpiCard icon="📥" label="Tổng phải thu" value={formatVnd(kpi.tongPhaiThu)} valueClassName="text-blue-700" />
+        <KpiCard
+          icon="📥"
+          label="Tổng phải thu"
+          value={formatVnd(kpi.tongPhaiThu)}
+          valueClassName="text-blue-700"
+          sub={
+            kpi.hasSplit ? (
+              <>
+                <span className="text-green-700">Có HĐ: {formatVnd(kpi.conLaiCoHoaDon)}</span>
+                <span className="mx-1.5 text-gray-300">·</span>
+                <span className="text-orange-700">Không HĐ: {formatVnd(kpi.conLaiKhongHoaDon)}</span>
+              </>
+            ) : null
+          }
+        />
         <KpiCard icon="📤" label="Tổng phải trả" value={formatVnd(kpi.tongPhaiTra)} valueClassName="text-orange-700" />
         <KpiCard icon="⚠️" label="Tổng quá hạn" value={formatVnd(kpi.tongQuaHan)} valueClassName="text-red-600" />
       </div>
@@ -421,20 +464,48 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
                     </td>
                     <td className="px-4 py-3 text-gray-600">
                       {debt.shipment ? (
-                        <Link
-                          href={`/shipments/${debt.shipment.id}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="hover:underline"
-                        >
-                          {debt.shipment.goodsName || debt.shipment.shipmentCode}
-                        </Link>
+                        <>
+                          <ShipmentLink shipmentId={debt.shipment.id} className="hover:underline">
+                            {debt.shipment.goodsName || debt.shipment.shipmentCode}
+                          </ShipmentLink>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setFinanceShipment(debt.shipment);
+                              }}
+                              className="mt-1 block text-[11px] font-medium text-blue-600 hover:underline"
+                            >
+                              Xem báo giá &amp; chi phí
+                            </button>
+                          )}
+                        </>
                       ) : (
                         "—"
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{formatVnd(debt.totalAmount)}</td>
-                    <td className="px-4 py-3 text-gray-600">{formatVnd(debt.paidAmount)}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{formatVnd(debt.remainingAmount)}</td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {formatVnd(debt.totalAmount)}
+                      <SplitLines
+                        invoice={debt.splitBreakdown?.invoiceAmount}
+                        noInvoice={debt.splitBreakdown?.noInvoiceAmount}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {formatVnd(debt.paidAmount)}
+                      <SplitLines
+                        invoice={debt.splitBreakdown?.paidInvoice}
+                        noInvoice={debt.splitBreakdown?.paidNoInvoice}
+                      />
+                    </td>
+                    <td className="px-4 py-3 font-medium text-gray-900">
+                      {formatVnd(debt.remainingAmount)}
+                      <SplitLines
+                        invoice={debt.splitBreakdown?.remainingInvoice}
+                        noInvoice={debt.splitBreakdown?.remainingNoInvoice}
+                      />
+                    </td>
                     <td className="px-4 py-3 text-gray-600">
                       {debt.dueDate ? new Date(debt.dueDate).toLocaleDateString("vi-VN") : "—"}
                     </td>
@@ -537,12 +608,10 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
 
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Tổng tiền</span>
-                <input
-                  type="number"
+                <MoneyInput
                   value={form.totalAmount}
-                  onChange={(e) => setForm((prev) => ({ ...prev, totalAmount: e.target.value }))}
+                  onValueChange={(raw) => setForm((prev) => ({ ...prev, totalAmount: raw }))}
                   className="input"
-                  min={0}
                 />
                 {suggestedAmount !== null && (
                   <button
@@ -599,7 +668,27 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
           </div>
         </div>
       )}
+
+      {/* Sửa báo giá ở đây sẽ đồng bộ lại công nợ phải thu (syncShipmentDebts) → tải lại danh sách. */}
+      {financeShipment && (
+        <ShipmentFinanceEditorModal
+          shipment={financeShipment}
+          onClose={() => setFinanceShipment(null)}
+          onCostsChanged={loadDebts}
+        />
+      )}
       </>}
+    </div>
+  );
+}
+
+/** Hai dòng phụ "Có HĐ / Không HĐ" dưới một ô tiền; không render gì với công nợ không tách hóa đơn. */
+function SplitLines({ invoice, noInvoice }: { invoice?: number; noInvoice?: number }) {
+  if (invoice === undefined || noInvoice === undefined) return null;
+  return (
+    <div className="mt-1 space-y-0.5 text-[11px] font-normal">
+      <div className="text-green-700">Có HĐ: {formatVnd(invoice)}</div>
+      <div className="text-orange-700">Không HĐ: {formatVnd(noInvoice)}</div>
     </div>
   );
 }
@@ -609,11 +698,13 @@ function KpiCard({
   label,
   value,
   valueClassName,
+  sub,
 }: {
   icon: string;
   label: string;
   value: string;
   valueClassName?: string;
+  sub?: React.ReactNode;
 }) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4">
@@ -622,6 +713,7 @@ function KpiCard({
         {label}
       </div>
       <p className={`mt-2 text-2xl font-bold text-gray-900 ${valueClassName ?? ""}`}>{value}</p>
+      {sub && <p className="mt-1 text-xs">{sub}</p>}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { computeDebtStatus, sumPayments } from "@/lib/debt-constants";
 import { isAutomaticDebt, isAutomaticPayableDebt } from "@/lib/shipment-debt-sync";
+import { getShipmentFinanceLinks } from "@/lib/shipment-invoice-links";
 
 const UPDATABLE_FIELDS = ["totalAmount", "dueDate", "note", "shipmentId"] as const;
 
@@ -38,7 +39,13 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   }
 
   const paidAmount = sumPayments(debt.payments);
-  return apiSuccess({ ...debt, paidAmount, remainingAmount: debt.totalAmount - paidAmount });
+  const financeLinks = debt.shipmentId ? await getShipmentFinanceLinks(debt.shipmentId) : null;
+  return apiSuccess({
+    ...debt,
+    paidAmount,
+    remainingAmount: debt.totalAmount - paidAmount,
+    linkedInvoices: financeLinks?.invoices ?? [],
+  });
 }
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

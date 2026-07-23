@@ -8,6 +8,7 @@ import {
   normalizeModulePermissions,
 } from "@/lib/module-permissions";
 import type { UserRole } from "@/generated/prisma/enums";
+import { invalidateAuthUser } from "@/lib/auth-user-cache";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -67,6 +68,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         createdAt: true,
       },
     });
+    invalidateAuthUser(id);
     return apiSuccess(updated);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "P2025") {
@@ -89,6 +91,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     }
 
     await prisma.user.delete({ where: { id } });
+    invalidateAuthUser(id);
     return apiSuccess({ ok: true });
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "P2025") {

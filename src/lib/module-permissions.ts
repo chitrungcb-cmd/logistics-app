@@ -8,7 +8,7 @@ export const APP_MODULES = [
   { key: "COSTS", label: "Chi phí lô hàng", href: "/costs", icon: "💰" },
   { key: "OTHER_EXPENSES", label: "Chi phí khác", href: "/other-expenses", icon: "🧾" },
   { key: "DEBTS", label: "Công nợ", href: "/debts", icon: "📒" },
-  { key: "DOCUMENTS", label: "Kho chứng từ", href: "/documents", icon: "🗂️" },
+  { key: "PERSONAL_ACCOUNT", label: "Tài khoản cá nhân", href: "/personal-account", icon: "💼" },
   { key: "REPORTS", label: "Báo cáo", href: "/reports", icon: "📊" },
   { key: "PARTNERS", label: "Đối tác", href: "/partners", icon: "🤝" },
   { key: "SETTINGS", label: "Cài đặt", href: "/settings", icon: "⚙️" },
@@ -28,11 +28,10 @@ const ROLE_MODULES: Record<UserRole, readonly AppModule[]> = {
     "MESSAGES",
     "OTHER_EXPENSES",
     "DEBTS",
-    "DOCUMENTS",
     "REPORTS",
     "PARTNERS",
   ],
-  FIELD_STAFF: ["CUSTOMERS", "SHIPMENTS", "TASKS", "MESSAGES", "DOCUMENTS", "REPORTS"],
+  FIELD_STAFF: ["CUSTOMERS", "SHIPMENTS", "TASKS", "MESSAGES", "REPORTS"],
 };
 
 type ModuleUser = {
@@ -87,6 +86,7 @@ export function getApiModules(pathname: string, method: string): AppModule[] | n
   if (pathname.startsWith("/api/cost-presets")) return ["COSTS", "SETTINGS"];
   if (pathname.startsWith("/api/customers")) return ["CUSTOMERS", "SHIPMENTS"];
   if (pathname.startsWith("/api/debts")) return ["DEBTS"];
+  if (pathname.startsWith("/api/personal-account")) return ["PERSONAL_ACCOUNT"];
   if (pathname.startsWith("/api/gmail")) return ["SHIPMENTS"];
   if (pathname.startsWith("/api/reports")) return ["REPORTS"];
   if (pathname.startsWith("/api/shipments")) return ["SHIPMENTS", "TASKS", "MESSAGES", "DEBTS"];
@@ -94,10 +94,12 @@ export function getApiModules(pathname: string, method: string): AppModule[] | n
   if (pathname.startsWith("/api/vendor-invoices")) return ["DEBTS", "PARTNERS", "REPORTS"];
   if (pathname.startsWith("/api/vendors")) return ["PARTNERS", "SETTINGS", "COSTS"];
   if (pathname.startsWith("/api/attachments") || pathname.startsWith("/api/upload")) {
-    return ["SHIPMENTS", "TASKS", "MESSAGES", "DEBTS", "DOCUMENTS", "PARTNERS", "OTHER_EXPENSES"];
+    return ["SHIPMENTS", "TASKS", "MESSAGES", "DEBTS", "PARTNERS", "OTHER_EXPENSES"];
   }
   if (pathname.startsWith("/api/users")) {
-    return method === "GET" ? ["USERS", "TASKS", "MESSAGES", "CUSTOMERS"] : ["USERS"];
+    return method === "GET"
+      ? ["USERS", "TASKS", "MESSAGES", "CUSTOMERS", "PERSONAL_ACCOUNT"]
+      : ["USERS"];
   }
   return null;
 }

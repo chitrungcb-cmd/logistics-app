@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 import { createHash } from "crypto";
-import { prisma } from "@/lib/prisma";
+import { getCachedAuthUser } from "@/lib/auth-user-cache";
 import type { UserRole } from "@/generated/prisma/enums";
 
 export const SESSION_COOKIE = process.env.NODE_ENV === "production"
@@ -39,7 +39,7 @@ export function validateNewPassword(password: unknown): string | null {
   return null;
 }
 
-function credentialVersion(passwordHash: string) {
+export function credentialVersion(passwordHash: string) {
   return createHash("sha256").update(passwordHash).digest("base64url");
 }
 
@@ -76,7 +76,7 @@ export type CurrentUser = {
   modulePermissions: string[];
 };
 
-/** Reads the session cookie and re-fetches the user fresh from the DB (so role changes take effect immediately). */
+/** Reads the session cookie and resolves the user through the short-lived, mutation-aware auth cache. */
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
@@ -85,7 +85,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   const session = await verifySessionToken(token);
   if (!session) return null;
 
-  const user = await prisma.user.findUnique({ where: { id: session.userId } });
+  const user = await getCachedAuthUser(session.userId);
   if (!user) return null;
   // A locked account is treated as unauthenticated even if its session JWT is still valid, so
   // locking someone (see /api/users) cuts off any live session on their next request.

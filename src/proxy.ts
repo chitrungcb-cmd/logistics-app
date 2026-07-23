@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
-import { SESSION_COOKIE } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { credentialVersion, SESSION_COOKIE } from "@/lib/auth";
+import { getCachedAuthUser } from "@/lib/auth-user-cache";
 import {
   getApiModules,
   getPageModule,
@@ -12,7 +12,9 @@ import {
 const PUBLIC_PATHS = ["/login"];
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-async function readSession(request: NextRequest): Promise<{ userId: string } | null> {
+async function readSession(
+  request: NextRequest
+): Promise<{ userId: string; credentialVersion: string } | null> {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   try {
@@ -21,18 +23,26 @@ async function readSession(request: NextRequest): Promise<{ userId: string } | n
       audience: "nq-logistics-web",
       algorithms: ["HS256"],
     });
-    return typeof payload.userId === "string" ? { userId: payload.userId } : null;
+    return typeof payload.userId === "string" && typeof payload.credentialVersion === "string"
+      ? { userId: payload.userId, credentialVersion: payload.credentialVersion }
+      : null;
   } catch {
     return null;
   }
 }
 
-async function checkModuleAccess(userId: string, modules: readonly AppModule[]) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { role: true, modulePermissions: true, isActive: true },
-  });
-  if (!user?.isActive) return "unauthenticated" as const;
+async function checkModuleAccess(
+  userId: string,
+  sessionCredentialVersion: string,
+  modules: readonly AppModule[]
+) {
+  const user = await getCachedAuthUser(userId);
+  if (
+    !user?.isActive ||
+    credentialVersion(user.passwordHash) !== sessionCredentialVersion
+  ) {
+    return "unauthenticated" as const;
+  }
   return modules.some((module) => hasModuleAccess(user, module))
     ? ("allowed" as const)
     : ("forbidden" as const);
@@ -87,7 +97,11 @@ export default async function proxy(request: NextRequest) {
       // Route Handlers still perform the authoritative authentication check. When the token is
       // valid enough to identify a user, reject a missing module permission before the handler runs.
       if (session) {
-        const access = await checkModuleAccess(session.userId, requiredModules);
+        const access = await checkModuleAccess(
+          session.userId,
+          session.credentialVersion,
+          requiredModules
+        );
         if (access !== "allowed") {
           return NextResponse.json(
             {
@@ -110,7 +124,11 @@ export default async function proxy(request: NextRequest) {
   if (session) {
     const pageModule = getPageModule(pathname);
     if (pageModule) {
-      const access = await checkModuleAccess(session.userId, [pageModule]);
+      const access = await checkModuleAccess(
+        session.userId,
+        session.credentialVersion,
+        [pageModule]
+      );
       if (access === "forbidden") {
         return NextResponse.redirect(new URL("/forbidden", request.url));
       }

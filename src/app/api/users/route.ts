@@ -28,7 +28,11 @@ export async function GET() {
     },
     orderBy: { createdAt: "asc" },
   });
-  return apiSuccess(users);
+  // Strip retired/unknown permission keys from legacy rows before they reach the user-management UI.
+  return apiSuccess(users.map((listedUser) => ({
+    ...listedUser,
+    modulePermissions: normalizeModulePermissions(listedUser.modulePermissions, listedUser.role),
+  })));
 }
 
 export async function POST(request: NextRequest) {

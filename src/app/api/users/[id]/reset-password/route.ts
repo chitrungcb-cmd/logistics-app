@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser, hashPassword, validateNewPassword } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { invalidateAuthUser } from "@/lib/auth-user-cache";
 
 // BƯỚC 3 — admin resets an employee's password. The new plaintext is generated/typed in the
 // browser and sent here once; the server only ever stores the bcrypt hash and a PasswordResetLog
@@ -24,6 +25,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     await prisma.passwordResetLog.create({
       data: { targetUserId: id, resetByUserId: currentUser.id },
     });
+    invalidateAuthUser(id);
 
     return apiSuccess({ ok: true });
   } catch (error) {

@@ -59,10 +59,6 @@ async function loadAttachment(
   return Buffer.from(response.data.data ?? "", "base64url");
 }
 
-function sourceKey(messageId: string, part: AttachmentPart, index: number) {
-  return `${messageId}:${part.attachmentId || `${index}:${part.filename}`}`;
-}
-
 export type VendorInvoiceSyncSummary = {
   scanned: number;
   created: number;
@@ -111,18 +107,33 @@ export async function syncVendorInvoices(gmail: gmail_v1.Gmail): Promise<VendorI
         const pdfParts = parts.filter(isPdf);
         let savedPdf: { name: string; url: string } | null = null;
 
-        for (const [index, xmlPart] of xmlParts.entries()) {
+        for (const xmlPart of xmlParts) {
           if (summary.created >= NEW_INVOICES_PER_SYNC) break;
-          const key = sourceKey(messageId, xmlPart, index);
-          const exists = await prisma.vendorInvoice.findUnique({ where: { sourceKey: key }, select: { id: true } });
-          if (exists) {
-            summary.skipped++;
-            continue;
-          }
 
           const xmlBuffer = await loadAttachment(gmail, messageId, xmlPart);
           const parsed = parseVendorInvoiceXml(xmlBuffer);
           if (!parsed) {
+            summary.skipped++;
+            continue;
+          }
+
+          // Chống trùng theo DANH TÍNH hóa đơn (MST người bán + ký hiệu + số HĐ), KHÔNG theo
+          // attachmentId của Gmail — ID này đổi mỗi lần gọi API nên khóa cũ (messageId:attachmentId)
+          // khiến mỗi lần sync tạo lại toàn bộ hóa đơn (đã gây ra hàng nghìn bản trùng).
+          const key = parsed.invoiceNumber
+            ? `INV:${parsed.sellerTaxCode || "?"}:${parsed.invoiceSymbol || "?"}:${parsed.invoiceNumber}`
+            : `MSGXML:${messageId}:${xmlPart.filename}`;
+          const exists = parsed.invoiceNumber
+            ? await prisma.vendorInvoice.findFirst({
+                where: {
+                  invoiceNumber: parsed.invoiceNumber,
+                  invoiceSymbol: parsed.invoiceSymbol,
+                  sellerTaxCode: parsed.sellerTaxCode,
+                },
+                select: { id: true },
+              })
+            : await prisma.vendorInvoice.findUnique({ where: { sourceKey: key }, select: { id: true } });
+          if (exists) {
             summary.skipped++;
             continue;
           }
@@ -181,10 +192,11 @@ export async function syncVendorInvoices(gmail: gmail_v1.Gmail): Promise<VendorI
         // A PDF without machine-readable XML cannot be safely OCR'd into accounting data here.
         // Keep it in the reconciliation inbox so accounting can inspect it instead of losing it.
         if (xmlParts.length === 0) {
-          for (const [index, pdfPart] of pdfParts.entries()) {
+          for (const pdfPart of pdfParts) {
             if (summary.created >= NEW_INVOICES_PER_SYNC) break;
             if (!looksLikeInvoiceEmail(subject, pdfPart.filename)) continue;
-            const key = sourceKey(messageId, pdfPart, index);
+            // messageId + tên file (đều ổn định) — không dùng attachmentId dễ đổi.
+            const key = `MSGPDF:${messageId}:${pdfPart.filename}`;
             const exists = await prisma.vendorInvoice.findUnique({ where: { sourceKey: key }, select: { id: true } });
             if (exists) {
               summary.skipped++;

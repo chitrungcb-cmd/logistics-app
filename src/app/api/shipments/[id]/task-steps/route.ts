@@ -9,12 +9,15 @@ import { ensureShipmentWorkflowTasks } from "@/lib/shipment-workflow";
 // GET /api/tasks, which restricts FIELD_STAFF to only their own assigned tasks). This is a workflow
 // *progress overview* for whoever is looking at the shipment, not a task list — it only exposes
 // status/assignee/updatedAt per step, not full task detail (description, attachmentUrl, etc.).
-export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(
+  _request: NextRequest,
+  context: RouteContext<"/api/shipments/[id]/task-steps">
+) {
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
 
-    const { id } = await params;
+    const { id } = await context.params;
     await ensureShipmentWorkflowTasks({ shipmentId: id, createdByUserId: user.id });
     const tasks = await prisma.task.findMany({
       where: { relatedShipmentId: id, title: { in: [...SHIPMENT_TASK_STEPS] } },

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { readApiResponse } from "@/lib/client-api";
 import { SHIPMENT_TASK_STEPS, TASK_STATUS_LABELS } from "@/lib/task-constants";
 
 const POLL_MS = 30000;
@@ -23,6 +24,12 @@ type StepTask = {
 
 type Step = { title: string; task: StepTask };
 
+type TaskStepsResponse = {
+  success: boolean;
+  data?: Step[];
+  error?: string;
+};
+
 function circleClassFor(status: string) {
   switch (status) {
     case "DONE":
@@ -43,10 +50,16 @@ export default function TaskStepper({ shipmentId }: { shipmentId: string }) {
 
   useEffect(() => {
     function load() {
-      fetch(`/api/shipments/${shipmentId}/task-steps`)
-        .then((res) => res.json())
+      fetch(`/api/shipments/${shipmentId}/task-steps`, {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      })
+        .then((response) =>
+          readApiResponse<TaskStepsResponse>(response, "Không thể tải tiến trình.")
+        )
         .then((json) => {
           if (!json.success) throw new Error(json.error || "Không thể tải tiến trình.");
+          if (!json.data) throw new Error("Máy chủ không trả về dữ liệu tiến trình.");
           setSteps(json.data);
           setLoadError(null);
         })

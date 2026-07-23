@@ -9,6 +9,31 @@ type WorkflowBackfillResult = {
 
 let activeBackfill: Promise<WorkflowBackfillResult> | null = null;
 
+/**
+ * Steps always handled by one designated person company-wide, regardless of which manager owns
+ * the customer. Looked up by email (stable across environments, unlike user ids); when the
+ * designated account is missing or locked the step falls back to the normal assignee.
+ */
+const STEP_ASSIGNEE_EMAIL_OVERRIDES: Partial<Record<(typeof SHIPMENT_TASK_STEPS)[number], string>> = {
+  "Xuất hóa đơn VAT": "quynhquynh91sm@gmail.com",
+};
+
+async function resolveStepAssigneeOverrides(): Promise<Map<string, string>> {
+  const emails = [...new Set(Object.values(STEP_ASSIGNEE_EMAIL_OVERRIDES))];
+  if (emails.length === 0) return new Map();
+  const users = await prisma.user.findMany({
+    where: { email: { in: emails }, isActive: true },
+    select: { id: true, email: true },
+  });
+  const idByEmail = new Map(users.map((user) => [user.email, user.id]));
+  const byTitle = new Map<string, string>();
+  for (const [title, email] of Object.entries(STEP_ASSIGNEE_EMAIL_OVERRIDES)) {
+    const userId = idByEmail.get(email);
+    if (userId) byTitle.set(title, userId);
+  }
+  return byTitle;
+}
+
 function workflowTaskStatus(shipmentStatus: string, stepIndex: number) {
   const completedSteps = (() => {
     switch (shipmentStatus) {
@@ -66,6 +91,7 @@ async function runWorkflowBackfill(createdByUserId: string): Promise<WorkflowBac
     },
   });
 
+  const stepAssigneeOverrides = await resolveStepAssigneeOverrides();
   const taskRows = shipments.flatMap((shipment) => {
     const existingTitles = new Set(shipment.tasks.map((task) => task.title));
     const assignedUser = shipment.customer?.assignedUser;
@@ -77,7 +103,7 @@ async function runWorkflowBackfill(createdByUserId: string): Promise<WorkflowBac
             title,
             description: `Bước ${stepIndex + 1}/${SHIPMENT_TASK_STEPS.length} của lô TK ${shipment.declarationNo || shipment.shipmentCode}.`,
             status: workflowTaskStatus(shipment.status, stepIndex),
-            assignedToUserId,
+            assignedToUserId: stepAssigneeOverrides.get(title) ?? assignedToUserId,
             relatedShipmentId: shipment.id,
             createdByUserId,
           }]
@@ -176,6 +202,7 @@ export async function ensureShipmentWorkflowTasks({
   const missingSteps = SHIPMENT_TASK_STEPS.filter((title) => !existingTitles.has(title));
   if (missingSteps.length === 0) return 0;
 
+  const stepAssigneeOverrides = await resolveStepAssigneeOverrides();
   const customerAssignee = shipment.customer?.assignedUser;
   const assignedToUserId = customerAssignee?.isActive ? customerAssignee.id : createdByUserId;
 
@@ -189,7 +216,7 @@ export async function ensureShipmentWorkflowTasks({
           title,
           description: `Bước ${stepIndex + 1}/${SHIPMENT_TASK_STEPS.length} của lô TK ${shipment.declarationNo || shipment.shipmentCode}.`,
           status,
-          assignedToUserId,
+          assignedToUserId: stepAssigneeOverrides.get(title) ?? assignedToUserId,
           relatedShipmentId: shipment.id,
           createdByUserId,
         },
@@ -225,10 +252,15 @@ export async function reassignOpenShipmentWorkflowTasks({
   assignedToUserId: string;
   actorUserId: string;
 }) {
+  // Steps with a designated company-wide assignee stay with that person when the
+  // customer's manager changes; only the remaining steps follow the new manager.
+  const stepAssigneeOverrides = await resolveStepAssigneeOverrides();
+  const reassignableTitles = SHIPMENT_TASK_STEPS.filter((title) => !stepAssigneeOverrides.has(title));
+
   const tasks = await prisma.task.findMany({
     where: {
       relatedShipment: { customerId },
-      title: { in: [...SHIPMENT_TASK_STEPS] },
+      title: { in: reassignableTitles },
       status: { not: "DONE" },
       assignedToUserId: { not: assignedToUserId },
     },

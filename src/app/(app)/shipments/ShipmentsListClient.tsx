@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import PaginationControls from "@/components/PaginationControls";
 import Badge from "@/components/shipments/Badge";
@@ -24,6 +25,7 @@ const LIST_REFRESH_INTERVAL_MS = 90 * 1000;
 const EMPTY_PAGINATION: PaginationMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 };
 
 export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
+  const router = useRouter();
   const [shipments, setShipments] = useState<ShipmentDTO[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -230,7 +232,17 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
               shipments.map((shipment, index) => {
                 const branches = getDeclarationBranches(shipment.declarationBranches);
                 return (
-                  <tr key={shipment.id} className="align-top hover:bg-gray-50">
+                  <tr
+                    key={shipment.id}
+                    className="cursor-pointer align-top hover:bg-gray-50"
+                    onClick={(event) => {
+                      // Clicks on the row's own controls (attachment buttons/preview, links,
+                      // the hidden file input) must not also open the detail page.
+                      const target = event.target as HTMLElement;
+                      if (target.closest("a, button, input, select, textarea, label, [role='dialog']")) return;
+                      router.push(`/shipments/${shipment.id}`);
+                    }}
+                  >
                     <td className="px-3 py-3 text-center text-gray-500">
                       {(pagination.page - 1) * pagination.pageSize + index + 1}
                     </td>
@@ -281,22 +293,14 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
                       <TaskStepperCompact statuses={taskStepsSummary[shipment.id] ?? []} />
                     </td>
                     <td className="px-3 py-3">
-                      <div className="flex flex-col gap-1">
+                      {isAdmin && (
                         <Link
-                          href={`/shipments/${shipment.id}`}
-                          className="whitespace-nowrap text-sm font-medium text-blue-600 hover:underline"
+                          href={`/costs?shipmentId=${shipment.id}`}
+                          className="whitespace-nowrap text-sm text-blue-600 hover:underline"
                         >
-                          Xem chi tiết
+                          Chi phí
                         </Link>
-                        {isAdmin && (
-                          <Link
-                            href={`/costs?shipmentId=${shipment.id}`}
-                            className="whitespace-nowrap text-sm text-blue-600 hover:underline"
-                          >
-                            Chi phí
-                          </Link>
-                        )}
-                      </div>
+                      )}
                     </td>
                   </tr>
                 );

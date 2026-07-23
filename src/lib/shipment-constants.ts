@@ -55,14 +55,46 @@ export type Attachment = {
   uploadedAt: string;
 };
 
+function declarationFamily(number: string) {
+  return number.length >= 11 ? number.slice(0, 11) : number;
+}
+
+/**
+ * Collapses legacy amendment numbers that were previously stored as separate branches. VNACCS uses
+ * the same first 11 digits for revisions of one declaration; only unrelated prefixes are real
+ * branches. The latest number seen for each family is retained for future sync updates.
+ */
+export function normalizeDeclarationBranches(branches: string[]) {
+  const normalized: string[] = [];
+  const familyIndexes = new Map<string, number>();
+
+  for (const rawNumber of branches) {
+    const number = rawNumber.trim();
+    if (!number) continue;
+
+    const family = declarationFamily(number);
+    const existingIndex = familyIndexes.get(family);
+    if (existingIndex === undefined) {
+      familyIndexes.set(family, normalized.length);
+      normalized.push(number);
+    } else {
+      normalized[existingIndex] = number;
+    }
+  }
+
+  return normalized;
+}
+
 /**
  * Declarations amended/split via Gmail sync keep their full number history in `declarationBranches`,
  * in the order each was first seen. Returns null when there's only one (i.e. nothing to label as a
  * branch) so callers can fall back to plain `declarationNo` display.
  */
 export function getDeclarationBranches(branches: string[] | null | undefined) {
-  if (!branches || branches.length <= 1) return null;
-  return branches.map((number, index) => ({ label: `Nhánh ${index + 1}`, number }));
+  if (!branches) return null;
+  const normalized = normalizeDeclarationBranches(branches);
+  if (normalized.length <= 1) return null;
+  return normalized.map((number, index) => ({ label: `Nhánh ${index + 1}`, number }));
 }
 
 /**
@@ -73,15 +105,16 @@ export function getDeclarationBranches(branches: string[] | null | undefined) {
  * or a >50-line split referencing a different original) has an unrelated prefix and gets appended.
  */
 export function mergeDeclarationBranch(branches: string[], newDeclarationNo: string): string[] {
+  const normalized = normalizeDeclarationBranches(branches);
   const prefix = newDeclarationNo.length >= 11 ? newDeclarationNo.slice(0, 11) : newDeclarationNo;
-  const sameFamilyIndex = branches.findIndex(
+  const sameFamilyIndex = normalized.findIndex(
     (b) => b.length >= 11 && b.slice(0, 11) === prefix
   );
 
-  if (sameFamilyIndex === -1) return [...branches, newDeclarationNo];
-  if (branches[sameFamilyIndex] === newDeclarationNo) return branches;
+  if (sameFamilyIndex === -1) return [...normalized, newDeclarationNo];
+  if (normalized[sameFamilyIndex] === newDeclarationNo) return normalized;
 
-  const updated = [...branches];
+  const updated = [...normalized];
   updated[sameFamilyIndex] = newDeclarationNo;
   return updated;
 }

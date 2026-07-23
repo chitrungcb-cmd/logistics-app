@@ -12,6 +12,12 @@ const MAX_PREVIEW_COLUMNS = 128;
 export const runtime = "nodejs";
 
 type MergeCell = { covered: boolean; rowSpan: number; colSpan: number };
+type PreviewBounds = {
+  startRow: number;
+  endRow: number;
+  startColumn: number;
+  endColumn: number;
+};
 
 function cellText(cell: ExcelJS.Cell) {
   if (cell.isMerged && cell.master !== cell) return "";
@@ -52,6 +58,19 @@ function colorToCss(color?: Partial<ExcelJS.Color>) {
   return `#${argb.slice(2)}`;
 }
 
+function fontFamilyToCss(name?: string) {
+  const normalized = name?.trim().toLowerCase();
+  const knownFamilies: Record<string, string> = {
+    arial: "Arial, sans-serif",
+    calibri: "Calibri, Arial, sans-serif",
+    "courier new": "\"Courier New\", monospace",
+    "free 3 of 9": "\"Times New Roman\", serif",
+    tahoma: "Tahoma, Arial, sans-serif",
+    "times new roman": "\"Times New Roman\", serif",
+  };
+  return normalized ? knownFamilies[normalized] ?? null : null;
+}
+
 function borderToCss(border?: Partial<ExcelJS.Border>) {
   if (!border?.style) return null;
 
@@ -67,7 +86,7 @@ function borderToCss(border?: Partial<ExcelJS.Border>) {
       : border.style === "double"
         ? "double"
         : "solid";
-  return `${width}px ${lineStyle} ${colorToCss(border.color) ?? "#d1d5db"}`;
+  return `${width}px ${lineStyle} ${colorToCss(border.color) ?? "#111827"}`;
 }
 
 function cellStyle(cell: ExcelJS.Cell) {
@@ -75,12 +94,17 @@ function cellStyle(cell: ExcelJS.Cell) {
   const font = cell.font;
   const alignment = cell.alignment;
   const borders = cell.border;
+  const isBarcodeFont = font?.name?.trim().toLowerCase() === "free 3 of 9";
 
+  const fontFamily = fontFamilyToCss(font?.name);
+  if (fontFamily) styles.push(`font-family:${fontFamily}`);
   if (font?.bold) styles.push("font-weight:700");
   if (font?.italic) styles.push("font-style:italic");
   if (font?.size && Number.isFinite(font.size)) {
-    styles.push(`font-size:${Math.max(6, Math.min(48, font.size))}pt`);
+    const fontSize = isBarcodeFont ? font.size * 0.75 : font.size;
+    styles.push(`font-size:${Math.max(6, Math.min(48, fontSize))}pt`);
   }
+  if (isBarcodeFont) styles.push("letter-spacing:-0.5px", "overflow:hidden");
   const fontColor = colorToCss(font?.color);
   if (fontColor) styles.push(`color:${fontColor}`);
 
@@ -105,6 +129,7 @@ function cellStyle(cell: ExcelJS.Cell) {
   if (alignment?.indent && Number.isFinite(alignment.indent)) {
     styles.push(`padding-left:${Math.max(0, Math.min(20, alignment.indent)) * 10 + 6}px`);
   }
+  styles.push("line-height:1.15");
 
   const borderEntries: Array<[string, Partial<ExcelJS.Border> | undefined]> = [
     ["top", borders?.top],
@@ -134,7 +159,35 @@ function parseAddress(address: string) {
   return { column: columnNumber(match[1]), row: Number(match[2]) };
 }
 
-function buildMergeMap(sheet: ExcelJS.Worksheet) {
+function previewBounds(sheet: ExcelJS.Worksheet): PreviewBounds {
+  const fallback = {
+    startRow: 1,
+    endRow: Math.max(sheet.rowCount, 1),
+    startColumn: 1,
+    endColumn: Math.max(sheet.columnCount, 1),
+  };
+  const firstPrintArea = sheet.pageSetup.printArea?.split("&&")[0];
+  if (!firstPrintArea) return fallback;
+
+  const cellRange = firstPrintArea.slice(firstPrintArea.lastIndexOf("!") + 1);
+  const [startRaw, endRaw] = cellRange.split(":");
+  const start = parseAddress(startRaw);
+  const end = parseAddress(endRaw ?? startRaw);
+  if (!start || !end || end.row < start.row || end.column < start.column) return fallback;
+
+  const endRow = Math.min(end.row, Math.max(sheet.rowCount, 1));
+  const endColumn = Math.min(end.column, Math.max(sheet.columnCount, 1));
+  if (endRow < start.row || endColumn < start.column) return fallback;
+
+  return {
+    startRow: start.row,
+    endRow,
+    startColumn: start.column,
+    endColumn,
+  };
+}
+
+function buildMergeMap(sheet: ExcelJS.Worksheet, bounds: PreviewBounds) {
   const map = new Map<string, MergeCell>();
   for (const range of sheet.model.merges ?? []) {
     const [startRaw, endRaw] = range.split(":");
@@ -142,13 +195,17 @@ function buildMergeMap(sheet: ExcelJS.Worksheet) {
     const end = parseAddress(endRaw ?? startRaw);
     if (!start || !end) continue;
 
-    const rowSpan = end.row - start.row + 1;
-    const colSpan = end.column - start.column + 1;
+    const clippedStartRow = Math.max(start.row, bounds.startRow);
+    const clippedEndRow = Math.min(end.row, bounds.endRow);
+    const clippedStartColumn = Math.max(start.column, bounds.startColumn);
+    const clippedEndColumn = Math.min(end.column, bounds.endColumn);
+    const rowSpan = clippedEndRow - clippedStartRow + 1;
+    const colSpan = clippedEndColumn - clippedStartColumn + 1;
     if (rowSpan <= 0 || colSpan <= 0) continue;
 
-    for (let row = start.row; row <= end.row; row++) {
-      for (let column = start.column; column <= end.column; column++) {
-        const isMaster = row === start.row && column === start.column;
+    for (let row = clippedStartRow; row <= clippedEndRow; row++) {
+      for (let column = clippedStartColumn; column <= clippedEndColumn; column++) {
+        const isMaster = row === clippedStartRow && column === clippedStartColumn;
         map.set(`${row}:${column}`, {
           covered: !isMaster,
           rowSpan: isMaster ? rowSpan : 1,
@@ -160,24 +217,35 @@ function buildMergeMap(sheet: ExcelJS.Worksheet) {
   return map;
 }
 
+function excelColumnWidthToPixels(width: number) {
+  // Excel stores column widths as character units. Seven pixels per unit matches its
+  // default font metric and, importantly, keeps the form's narrow spacer columns narrow.
+  return Math.max(1, Math.min(280, Math.round(width * 7)));
+}
+
 function worksheetToSafeHtml(sheet: ExcelJS.Worksheet) {
-  if (sheet.rowCount > MAX_PREVIEW_ROWS || sheet.columnCount > MAX_PREVIEW_COLUMNS) {
+  const bounds = previewBounds(sheet);
+  const rowCount = bounds.endRow - bounds.startRow + 1;
+  const columnCount = bounds.endColumn - bounds.startColumn + 1;
+  if (rowCount > MAX_PREVIEW_ROWS || columnCount > MAX_PREVIEW_COLUMNS) {
     throw new Error("Bảng tính vượt quá giới hạn xem trước an toàn.");
   }
 
-  const rowCount = Math.max(sheet.rowCount, 1);
-  const columnCount = Math.max(sheet.columnCount, 1);
-  const mergeMap = buildMergeMap(sheet);
-  const columns = Array.from({ length: columnCount }, (_, index) => {
-    const width = sheet.getColumn(index + 1).width ?? 7;
-    const pixelWidth = Math.max(36, Math.min(280, Math.round(width * 7)));
-    return `<col style="width:${pixelWidth}px">`;
+  const mergeMap = buildMergeMap(sheet, bounds);
+  const columnWidths = Array.from({ length: columnCount }, (_, index) => {
+    const column = sheet.getColumn(bounds.startColumn + index);
+    const width = column.width ?? sheet.properties.defaultColWidth ?? 8.43;
+    return column.hidden ? 0 : excelColumnWidthToPixels(width);
+  });
+  const columns = columnWidths.map((pixelWidth) => {
+    return `<col style="width:${pixelWidth}px;min-width:${pixelWidth}px;max-width:${pixelWidth}px">`;
   }).join("");
+  const tableWidth = columnWidths.reduce((total, width) => total + width, 0);
 
   const rows: string[] = [];
-  for (let rowNumber = 1; rowNumber <= rowCount; rowNumber++) {
+  for (let rowNumber = bounds.startRow; rowNumber <= bounds.endRow; rowNumber++) {
     const cells: string[] = [];
-    for (let columnNumber = 1; columnNumber <= columnCount; columnNumber++) {
+    for (let columnNumber = bounds.startColumn; columnNumber <= bounds.endColumn; columnNumber++) {
       const merge = mergeMap.get(`${rowNumber}:${columnNumber}`);
       if (merge?.covered) continue;
 
@@ -197,7 +265,25 @@ function worksheetToSafeHtml(sheet: ExcelJS.Worksheet) {
     rows.push(`<tr${rowStyle}>${cells.join("")}</tr>`);
   }
 
-  return `<table style="table-layout:fixed;border-collapse:collapse"><colgroup>${columns}</colgroup><tbody>${rows.join("")}</tbody></table>`;
+  return `<table style="width:${tableWidth}px;table-layout:fixed;border-collapse:collapse"><colgroup>${columns}</colgroup><tbody>${rows.join("")}</tbody></table>`;
+}
+
+function worksheetToPlainText(sheet: ExcelJS.Worksheet) {
+  const bounds = previewBounds(sheet);
+  const rows: string[] = [];
+
+  for (let rowNumber = bounds.startRow; rowNumber <= bounds.endRow; rowNumber++) {
+    const cells: string[] = [];
+    for (let columnNumber = bounds.startColumn; columnNumber <= bounds.endColumn; columnNumber++) {
+      cells.push(cellText(sheet.getCell(rowNumber, columnNumber)));
+    }
+    while (cells.at(-1) === "") cells.pop();
+    rows.push(cells.join("\t"));
+  }
+
+  while (rows[0] === "") rows.shift();
+  while (rows.at(-1) === "") rows.pop();
+  return rows.join("\n");
 }
 
 /**
@@ -226,6 +312,8 @@ export async function GET(request: NextRequest) {
     const sheets = workbook.worksheets.map((sheet) => ({
       name: sheet.name,
       html: worksheetToSafeHtml(sheet),
+      text: worksheetToPlainText(sheet),
+      showGridLines: sheet.views[0]?.showGridLines !== false,
     }));
 
     return apiSuccess({ sheets });

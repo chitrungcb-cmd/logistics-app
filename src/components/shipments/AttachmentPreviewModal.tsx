@@ -1,9 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import type { Attachment } from "@/lib/shipment-constants";
 
-type SheetPreview = { name: string; html: string };
+const PdfPreview = dynamic(() => import("./PdfPreview"), {
+  ssr: false,
+  loading: () => <p className="text-sm text-white/65">Đang tải trình xem PDF...</p>,
+});
+
+type SheetPreview = { name: string; html: string; text: string; showGridLines: boolean };
 
 function getExtension(name: string) {
   return name.split(".").pop()?.toLowerCase() ?? "";
@@ -15,6 +21,32 @@ function DownloadIcon() {
       <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
+}
+
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current" strokeWidth="1.8">
+      <rect x="8" y="8" width="11" height="11" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+async function copyToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.style.position = "fixed";
+  textArea.style.opacity = "0";
+  document.body.appendChild(textArea);
+  textArea.select();
+  const copied = document.execCommand("copy");
+  textArea.remove();
+  if (!copied) throw new Error("Không thể sao chép nội dung.");
 }
 
 function CloseIcon() {
@@ -55,14 +87,14 @@ export default function AttachmentPreviewModal({
   const isPreviewable = isPdf || isImage || isSpreadsheet;
 
   const dialogRef = useRef<HTMLDivElement>(null);
+  const sheetPreviewRef = useRef<HTMLDivElement>(null);
+  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sheets, setSheets] = useState<SheetPreview[] | null>(null);
   const [activeSheet, setActiveSheet] = useState(0);
   // Callers remount the modal with an attachment URL key, keeping file-specific state isolated.
   const [isLoading, setIsLoading] = useState(isSpreadsheet);
   const [error, setError] = useState<string | null>(null);
-  const [pdfObjectUrl, setPdfObjectUrl] = useState<string | null>(null);
-  const [isPdfLoading, setIsPdfLoading] = useState(isPdf);
-  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
 
   useEffect(() => {
     if (!attachment) return;
@@ -79,51 +111,11 @@ export default function AttachmentPreviewModal({
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
+      if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
       document.body.style.overflow = previousOverflow;
       previousFocus?.focus();
     };
   }, [attachment, onClose]);
-
-  useEffect(() => {
-    if (!attachment || !isPdf) return;
-
-    const controller = new AbortController();
-    let objectUrl: string | null = null;
-    let cancelled = false;
-
-    fetch(attachment.url, { credentials: "same-origin", signal: controller.signal })
-      .then(async (res) => {
-        if (!res.ok) throw new Error("Không thể tải nội dung PDF.");
-        const sourceBlob = await res.blob();
-        if ((await sourceBlob.slice(0, 5).text()) !== "%PDF-") {
-          throw new Error("Tệp trả về không phải định dạng PDF hợp lệ.");
-        }
-        const blob = sourceBlob.type.toLowerCase().includes("pdf")
-          ? sourceBlob
-          : new Blob([sourceBlob], { type: "application/pdf" });
-
-        const nextObjectUrl = URL.createObjectURL(blob);
-        if (cancelled) {
-          URL.revokeObjectURL(nextObjectUrl);
-          return;
-        }
-        objectUrl = nextObjectUrl;
-        setPdfObjectUrl(nextObjectUrl);
-      })
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setPdfError(err instanceof Error ? err.message : "Không thể xem trước tệp PDF.");
-      })
-      .finally(() => {
-        if (!cancelled) setIsPdfLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [attachment, isPdf]);
 
   useEffect(() => {
     if (!attachment || !isSpreadsheet) return;
@@ -157,6 +149,26 @@ export default function AttachmentPreviewModal({
 
   const activeSheetData = sheets?.[activeSheet] ?? sheets?.[0];
 
+  async function handleCopy() {
+    if (!activeSheetData) return;
+
+    const selection = window.getSelection();
+    const selectionNode = selection?.anchorNode;
+    const selectedText = selectionNode && sheetPreviewRef.current?.contains(selectionNode)
+      ? selection?.toString().trim()
+      : "";
+
+    try {
+      await copyToClipboard(selectedText || activeSheetData.text);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("error");
+    }
+
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+    copyResetTimerRef.current = setTimeout(() => setCopyStatus("idle"), 2_000);
+  }
+
   return (
     <div
       ref={dialogRef}
@@ -179,6 +191,20 @@ export default function AttachmentPreviewModal({
         </div>
 
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+          {isSpreadsheet && activeSheetData && (
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm font-medium text-white/90 hover:bg-white/10 hover:text-white"
+              aria-label="Sao chép nội dung trang tính"
+              title="Bôi đen để sao chép một phần, hoặc bấm để sao chép toàn bộ trang"
+            >
+              <CopyIcon />
+              <span className="hidden sm:inline" aria-live="polite">
+                {copyStatus === "copied" ? "Đã sao chép" : copyStatus === "error" ? "Không thể sao chép" : "Sao chép"}
+              </span>
+            </button>
+          )}
           <a
             href={attachment.url}
             download={attachment.name}
@@ -201,15 +227,7 @@ export default function AttachmentPreviewModal({
       </header>
 
       <main className="flex min-h-0 flex-1 items-center justify-center p-2 sm:p-5">
-        {isPdf && isPdfLoading && <p className="text-sm text-white/65">Đang tải PDF...</p>}
-        {isPdf && pdfError && <p className="rounded-lg bg-red-950/70 px-4 py-3 text-sm text-red-100">{pdfError}</p>}
-        {isPdf && pdfObjectUrl && (
-          <iframe
-            src={pdfObjectUrl}
-            className="h-full w-full max-w-[1440px] rounded-lg bg-white shadow-2xl"
-            title={attachment.name}
-          />
-        )}
+        {isPdf && <PdfPreview url={attachment.url} name={attachment.name} />}
 
         {isImage && (
           // Arbitrary uploaded dimensions cannot be known ahead of time for next/image.
@@ -243,7 +261,10 @@ export default function AttachmentPreviewModal({
                     <button
                       key={`${sheet.name}-${index}`}
                       type="button"
-                      onClick={() => setActiveSheet(index)}
+                      onClick={() => {
+                        setActiveSheet(index);
+                        setCopyStatus("idle");
+                      }}
                       className={`h-12 shrink-0 border-b-2 px-3 text-sm font-medium transition-colors ${
                         index === activeSheet
                           ? "border-blue-600 text-blue-600"
@@ -258,7 +279,10 @@ export default function AttachmentPreviewModal({
                 <div className="min-h-0 flex-1 overflow-auto bg-[#f8fafd] p-3 sm:p-5">
                   {/* Cell text is escaped by the authenticated Excel preview endpoint. */}
                   <div
-                    className="w-max min-w-full rounded-sm bg-white text-xs shadow-sm [&_table]:min-w-full [&_td]:border [&_td]:border-gray-200 [&_td]:px-1.5 [&_td]:py-1 [&_td]:align-middle"
+                    ref={sheetPreviewRef}
+                    className={`mx-auto w-fit max-w-none select-text rounded-sm bg-white text-xs shadow-sm [&_table]:max-w-none [&_td]:px-0.5 [&_td]:py-0 [&_td]:align-middle ${
+                      activeSheetData.showGridLines ? "[&_td]:border [&_td]:border-gray-200" : ""
+                    }`}
                     dangerouslySetInnerHTML={{ __html: activeSheetData.html }}
                   />
                 </div>

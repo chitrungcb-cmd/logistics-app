@@ -19,6 +19,8 @@ const UPDATABLE_FIELDS = [
   "isAdditional",
   "invoiceNumber",
   "attachmentUrl",
+  "unit",
+  "customLabel",
   "note",
   "vendorId",
   "isActual",
@@ -45,6 +47,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const data: Record<string, unknown> = {};
     for (const field of UPDATABLE_FIELDS) {
       if (field in body) data[field] = body[field];
+    }
+    // Đơn vị tính / tên hạng mục tùy chỉnh: cắt khoảng trắng, rỗng thì lưu null.
+    for (const field of ["unit", "customLabel"] as const) {
+      if (field in data) data[field] = typeof data[field] === "string" ? (data[field] as string).trim() || null : null;
     }
 
     const nextCategory = typeof data.category === "string" ? data.category : existing.category;

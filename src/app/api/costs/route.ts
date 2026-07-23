@@ -96,6 +96,8 @@ export async function POST(request: NextRequest) {
           isActual: true,
           invoiceNumber: isInvoiceCostCategory(body.category) ? body.invoiceNumber || null : null,
           attachmentUrl: body.attachmentUrl || null,
+          unit: typeof body.unit === "string" ? body.unit.trim() || null : null,
+          customLabel: typeof body.customLabel === "string" ? body.customLabel.trim() || null : null,
           note: body.note || null,
           vendorId,
         },

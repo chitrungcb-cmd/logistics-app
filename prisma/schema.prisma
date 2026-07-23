@@ -105,6 +105,10 @@ model ShipmentCost {
   isActual       Boolean         @default(true)
   invoiceNumber  String?
   attachmentUrl  String?
+  // Đơn vị tính (lần, xe, chuyến...) và tên hạng mục tùy chỉnh do người dùng gõ — category enum vẫn
+  // giữ nguyên cho màu sắc/so sánh/cảnh báo; customLabel chỉ là nhãn hiển thị thêm cho từng dòng.
+  unit           String?
+  customLabel    String?
   note           String?
   vendor         Vendor?         @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   vendorId       String?

@@ -127,8 +127,8 @@ convention — see `AGENTS.md`).
   user/role). `src/app/login/` sits outside that group so it does *not* get the sidebar — both share the
   bare root `src/app/layout.tsx` (fonts + `<html>/<body>` only). When adding a new page, decide which side
   of that split it belongs on; don't add sidebar-requiring UI directly under `src/app/`.
-- Nav items are hardcoded in `Sidebar.tsx`; `PlaceholderPage` (`src/components/PlaceholderPage.tsx`) is
-  the stub used by every module that isn't built yet (`/costs`, `/debts`, `/documents`, `/reports`).
+- Nav items come from `src/lib/module-permissions.ts`; `PlaceholderPage`
+  (`src/components/PlaceholderPage.tsx`) is the shared stub for modules that are not built yet.
 - `CustomerCombobox` (`src/components/customers/CustomerCombobox.tsx`) is a fully-controlled autocomplete
   (no internal echo of its `customerName` prop, so it never needed a prop-sync effect) used on both the
   shipment create and edit forms — typing free text clears `customerId` back to `null`, picking a suggestion
@@ -148,6 +148,10 @@ convention — see `AGENTS.md`).
 - Tailwind v4 (`@tailwindcss/postcss`, zero-config) is wired in via `postcss.config.mjs` and
   `@import "tailwindcss"` in `src/app/globals.css`; there is no `tailwind.config.*` file. A shared `.input`
   utility class (form fields) is defined in `globals.css` via `@layer components`.
+- **`MoneyInput` (`src/components/MoneyInput.tsx`) is the only way money is typed in** — a text input that
+  renders `42.000.000` while keeping the surrounding state a bare digit string (`"42000000"`), so existing
+  `Number(...)` call sites didn't change. Use it instead of `<input type="number">` for every VND field;
+  `type="number"` is now only for quantities (which can be fractional).
 
 ### Gmail declaration sync (auto-creates/updates shipments from customs declaration emails)
 
@@ -437,6 +441,28 @@ rather than the email subject/body.
 - **`Debt.type`** (`RECEIVABLE` from a `Customer`, `PAYABLE` to a `Vendor`) determines which of
   `customerId`/`vendorId` is populated — the other stays `null`; this isn't enforced at the DB level, only
   validated in `POST /api/debts`.
+- **Invoice split on a receivable (`Debt.invoiceAmount`/`noInvoiceAmount` + `Payment.portion`)**: when a
+  shipment's báo giá was entered with the manual có-hóa-đơn/không-hóa-đơn split (see
+  `Shipment.quoteInvoiceAmount`), `syncShipmentDebts` stores those two amounts on the auto RECEIVABLE debt
+  (they sum to `totalAmount`) — `invoiceAmount` holds the **VAT-inclusive** figure (what the customer
+  actually pays), since the hand-typed quote field is chưa VAT. For a split receivable the debt's
+  `totalAmount` is recomputed from those two fields rather than the latest `Quote.quoteAmount`, so a `Quote`
+  row written before VAT existed can't leave `invoiceAmount + noInvoiceAmount ≠ totalAmount`. Both null = **un-split** debt (every PAYABLE, every manual debt, and any
+  receivable whose quote wasn't split) — behaves exactly as before, one total balance. When split, each
+  `Payment` carries a `portion` (`INVOICE`/`NO_INVOICE`, enum `DebtPortion`) and is validated/over-payment-
+  checked against **that portion's own remaining** in `POST /api/debts/[id]/payments`, not the grand total —
+  so "còn lại" is tracked independently per part (khách trả phần có hóa đơn và không hóa đơn ở các đợt khác
+  nhau). `Payment.portion` is null for un-split debts. The per-portion paid/remaining math lives in
+  `computeInvoiceSplitBreakdown()`/`hasInvoiceSplit()`/`sumPaymentsByPortion()` (`debt-constants.ts`,
+  unit-tested) and is computed **client-side** in `DebtDetailClient` from the debt's amounts + payments, so
+  it stays correct after add/delete without the mutation endpoints returning a breakdown. The
+  over-payment/portion check itself is `validatePaymentAmount()` (also `debt-constants.ts`, unit-tested),
+  shared by `POST /api/debts/[id]/payments` and `PATCH /api/debts/[id]/payments/[paymentId]` — the PATCH
+  passes the edited payment's own id as `excludePaymentId`, otherwise raising an existing payment would be
+  rejected against its own old amount. "+ Ghi nhận thanh toán" doubles as the edit form
+  (`editingPaymentId` non-null = editing), the same single-form pattern as `/costs`. `Debt.status`
+  (`computeDebtStatus`) still derives from the grand total — PAID only once both portions are fully paid,
+  since their sum equals `totalAmount`.
 - **`Debt.status` only ever stores `UNPAID`/`PARTIAL`/`PAID`** — always server-recomputed via
   `computeDebtStatus(totalAmount, paidAmount)` (`src/lib/debt-constants.ts`) after every `Payment`
   create (`POST /api/debts/[id]/payments`) or `totalAmount` edit (`PATCH /api/debts/[id]`), never accepted
@@ -450,7 +476,15 @@ rather than the email subject/body.
 - **`GET /api/debts` fetches every debt unfiltered, once** (mirrors the `/costs` "fetch all, filter
   client-side" pattern) — `/debts`' 3 KPI cards (Tổng phải thu / Tổng phải trả / Tổng quá hạn) need totals
   spanning both RECEIVABLE and PAYABLE at once, so the 2-tab UI (`DebtsClient.tsx`) filters this same
-  unfiltered list client-side per tab rather than re-querying per filter/tab change. "Tổng quá hạn"
+  unfiltered list client-side per tab rather than re-querying per filter/tab change. It's the one place
+  the per-portion breakdown is computed **server-side** (`splitBreakdown`, null when un-split) rather than
+  client-side as on the detail page — the list doesn't return individual `Payment` rows, so the table's
+  "Có HĐ / Không HĐ" sub-lines under Tổng tiền / Đã thanh toán / Còn lại have nothing to derive it from.
+  Both `/debts` (link "Xem báo giá & chi phí" trong ô Lô hàng liên quan) and `/debts/[id]` open the same
+  `ShipmentFinanceEditorModal` as `/costs` rather than a debt-specific viewer — ADMIN-only on both
+  surfaces (cost data is ADMIN-only at the API layer, so an ACCOUNTANT would just get 403s inside it),
+  and `onCostsChanged` re-fetches the debt(s) because saving a quote re-runs `syncShipmentDebts`.
+  "Tổng quá hạn"
   combines both types into one figure (not split RECEIVABLE-quá-hạn vs. PAYABLE-quá-hạn) — a reasonable
   default picked where the original spec left this ambiguous.
 - **`GET /api/debts/suggest-amount?shipmentId=X&type=RECEIVABLE|PAYABLE`** prefills (never auto-creates) a
@@ -467,6 +501,47 @@ rather than the email subject/body.
   pushed onto the nav list for `ADMIN`/`ACCOUNTANT` (`Sidebar.tsx`).
 - The aging report (0-30/31-60/61-90/>90 ngày quá hạn buckets) on `/debts` is computed client-side from
   the same already-fetched unfiltered debt list, scoped to the active tab — no separate endpoint.
+
+### Tài khoản cá nhân (`PersonalAccountEntry` / `/personal-account`) & manual quote split
+
+- **The quote tab of `ShipmentFinanceEditorModal` has a manual invoice split**: `Shipment.quoteInvoiceAmount`
+  (có hóa đơn, chưa VAT) and `Shipment.quoteNoInvoiceAmount` (không hóa đơn) are typed in directly. The
+  semantics live in `src/lib/personal-account-sync.ts` (`isManualQuoteSplit`/`resolveQuoteTotal`, unit-tested
+  in `tests/personal-account-sync.test.ts`): when **either** field is non-null, manual mode is active — Tổng
+  báo giá = `resolveInvoiceAmountWithVat(quoteInvoiceAmount) + quoteNoInvoiceAmount`, i.e. the invoiced part
+  carries **VAT 8%** (`INVOICE_VAT_RATE`, rounded to whole đồng) and the non-invoiced part never does (a blank
+  field counts as 0, it does NOT fall back to the line table),
+  and that total is what `PUT /api/shipments/[id]/quote-lines` writes into the `Quote` row that
+  `syncShipmentDebts` reads. When both are null (never typed), the total falls back to the sum of the
+  `ShipmentQuoteLine` rows. **The per-line "Hóa đơn" column was removed from the UI on request** —
+  `ShipmentQuoteLine.hasInvoice` still exists in the schema and round-trips through the API (legacy rows
+  keep their values; new rows default false), but nothing derives the invoice split from it anymore; don't
+  resurrect the column or the derived split.
+- **`PersonalAccountEntry`** (one per shipment, `shipmentId` unique) tracks the "không hóa đơn" money —
+  sourced **exclusively from the hand-typed `quoteNoInvoiceAmount`**, never inferred from quote lines
+  (all new lines are `hasInvoice: false`, so inference would wrongly flag every un-split shipment).
+  `amount` is server-synced only (`syncPersonalAccountEntry`, called inside the quote-save transaction) and
+  is never client-writable; the hand-filled fields are `paymentDate`, `receivingAccount` (số TK nhận tiền),
+  `assignedUserId` (defaulted from the customer's "người phụ trách" on create, editable after), `note`.
+  Số tờ khai / ngày tờ khai / tên hàng are read via the `shipment` relation, never copied. When the
+  không-hóa-đơn amount drops to 0: an unpaid entry is deleted, but an entry with a `paymentDate` is kept at
+  `amount: 0` so the record of money already transferred survives.
+- **Payment status is derived from the linked debt, not the hand-typed `paymentDate`**: the không-hóa-đơn
+  money is collected through the Công nợ module as `Payment.portion = NO_INVOICE` rows on the shipment's
+  auto RECEIVABLE debt, so `GET /api/personal-account` (and the single-entry `PATCH` response) enrich each
+  entry with `paidAmount`/`remainingAmount`/`paidStatus`/`effectivePaymentDate` via
+  `computePersonalAccountPayment()` (`personal-account-sync.ts`, unit-tested). The debt is the source of
+  truth; the hand-filled `paymentDate` is only a fallback for a shipment that has no synced debt yet (quote
+  not "ready"). The table shows "Đã thanh toán" / "Thu một phần · X" / "Chưa thanh toán" and a "Còn lại"
+  column from these, and hides the manual date input (showing the real "Thu qua Công nợ" date) once debt
+  payments exist. Don't reintroduce a paymentDate-only paid flag.
+- **`GET /api/personal-account` lazily backfills** a missing entry for any shipment with
+  `quoteNoInvoiceAmount > 0` (same "no startup hook" reasoning as `ensureCompanyConversation`).
+  `PATCH /api/personal-account/[id]` updates only the hand-filled fields. Module key `PERSONAL_ACCOUNT` is
+  ADMIN-only by default (`ROLE_MODULES`), grantable per-user; `/api/users` `GET` also lists
+  `PERSONAL_ACCOUNT` in `getApiModules` because the page's người-phụ-trách dropdown needs the user list.
+  The page (`/personal-account`) shows KPI cards, an inline-editable table, and two client-side report
+  tables (theo tháng thanh toán, theo người phụ trách) — mirroring the `/debts` fetch-all pattern.
 
 ## Environment
 

@@ -151,6 +151,7 @@ export async function syncVendorInvoices(gmail: gmail_v1.Gmail): Promise<VendorI
               emailFrom,
               vendorId: reconciliation.vendorId,
               shipmentCostId: reconciliation.shipmentCostId,
+              shipmentId: reconciliation.shipmentId,
               sellerName: parsed.sellerName,
               sellerTaxCode: parsed.sellerTaxCode,
               buyerName: parsed.buyerName,

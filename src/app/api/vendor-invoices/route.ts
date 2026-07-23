@@ -4,6 +4,10 @@ import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { prisma } from "@/lib/prisma";
 import { determineInvoiceDirection, type InvoiceDirection } from "@/lib/vendor-invoice-parser";
+import {
+  loadOutputShipmentCandidates,
+  matchOutputInvoiceToShipment,
+} from "@/lib/vendor-invoice-reconciliation";
 import { AUTOMATIC_PAYABLE_DEBT_PREFIX } from "@/lib/shipment-debt-sync";
 
 const STATUSES = new Set(["MATCHED", "UNMATCHED", "NEEDS_REVIEW"]);
@@ -53,7 +57,7 @@ export async function GET(request: NextRequest) {
         : undefined,
     };
 
-    const [invoices, partners] = await Promise.all([
+    const [invoices, partners, outputShipmentCandidates] = await Promise.all([
       prisma.vendorInvoice.findMany({
         where,
         include: {
@@ -88,6 +92,7 @@ export async function GET(request: NextRequest) {
         },
         orderBy: { name: "asc" },
       }),
+      loadOutputShipmentCandidates(),
     ]);
 
     const shipmentIds = Array.from(new Set(
@@ -110,17 +115,40 @@ export async function GET(request: NextRequest) {
         invoice.buyerName,
         invoice.buyerTaxCode
       );
+      const persistedOutputShipment = invoice.shipmentId
+        ? outputShipmentCandidates.find((shipment) => shipment.id === invoice.shipmentId) ?? null
+        : null;
+      const outputShipment = invoiceDirection === "OUTPUT"
+        ? persistedOutputShipment ?? matchOutputInvoiceToShipment(invoice, outputShipmentCandidates)
+        : null;
+      const linkedShipment = invoiceDirection === "INPUT"
+        ? invoice.shipmentCost?.shipment ?? null
+        : outputShipment
+          ? {
+              id: outputShipment.id,
+              shipmentCode: outputShipment.shipmentCode,
+              declarationNo: outputShipment.declarationNo,
+              declarationDate: outputShipment.declarationDate,
+              goodsName: outputShipment.goodsName,
+              customerName: outputShipment.customerName,
+            }
+          : null;
       const note = invoiceDirection === "OUTPUT"
-        ? "Hóa đơn đầu ra do NQ Logistics xuất cho khách hàng."
+        ? outputShipment
+          ? "Hóa đơn đầu ra đã liên kết với lô hàng và khoản phải thu của khách hàng."
+          : "Chưa đủ dữ liệu để xác định duy nhất lô hàng của hóa đơn bán ra."
         : invoiceDirection === "UNRELATED"
           ? "NQ Logistics không phải bên bán hoặc bên mua; cần kiểm tra hóa đơn."
           : invoiceDirection === "UNKNOWN"
             ? "Chưa xác định được hóa đơn đầu vào hay đầu ra; cần kiểm tra MST bên bán và bên mua."
             : null;
-      const payableDebt = invoiceDirection === "INPUT" && invoice.shipmentCost
+      const inputPayableDebt = invoiceDirection === "INPUT" && invoice.shipmentCost
         ? payableDebtByShipment.get(invoice.shipmentCost.shipment.id) ?? null
         : null;
-      return { ...invoice, invoiceDirection, note, payableDebt };
+      const linkedDebt = invoiceDirection === "OUTPUT"
+        ? outputShipment?.debts[0] ?? null
+        : inputPayableDebt;
+      return { ...invoice, invoiceDirection, note, linkedShipment, linkedDebt };
     });
     const invoiceRows = direction
       ? classifiedInvoices.filter((invoice) => invoice.invoiceDirection === direction)
@@ -165,7 +193,16 @@ export async function GET(request: NextRequest) {
       ),
     }));
 
-    return apiSuccess({ invoices: invoiceRows, totals, partners: partnerRows });
+    const shipmentOptions = outputShipmentCandidates.map((shipment) => ({
+      id: shipment.id,
+      declarationNo: shipment.declarationNo,
+      goodsName: shipment.goodsName,
+      customerName: shipment.customer?.companyName || shipment.customerName,
+      taxCode: shipment.customer?.taxCode || shipment.taxCode,
+      quoteAmount: shipment.quotes[0]?.quoteAmount ?? null,
+    }));
+
+    return apiSuccess({ invoices: invoiceRows, totals, partners: partnerRows, shipmentOptions });
   } catch (error) {
     console.error("GET /api/vendor-invoices failed:", error);
     return apiError("Không thể tải danh sách hóa đơn đối tác.", 500);

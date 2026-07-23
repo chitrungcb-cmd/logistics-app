@@ -1,8 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import ShipmentLink from "@/components/shipments/ShipmentLink";
 import { useCallback, useEffect, useState } from "react";
 import GmailSyncPanel from "@/components/shipments/GmailSyncPanel";
+import AttachmentPreviewButton from "@/components/shipments/AttachmentPreviewButton";
+import VendorsSettingsClient from "./VendorsSettingsClient";
 
 type InvoiceStatus = "MATCHED" | "UNMATCHED" | "NEEDS_REVIEW";
 type InvoiceDirection = "INPUT" | "OUTPUT" | "UNRELATED" | "UNKNOWN";
@@ -40,7 +43,14 @@ type InvoiceRow = {
       customerName: string;
     };
   } | null;
-  payableDebt: { id: string; totalAmount: number; status: string; dueDate: string | null } | null;
+  linkedShipment: {
+    id: string;
+    declarationNo: string | null;
+    declarationDate: string | null;
+    goodsName: string | null;
+    customerName: string;
+  } | null;
+  linkedDebt: { id: string; totalAmount: number; status: string; dueDate: string | null } | null;
 };
 
 type PartnerRow = {
@@ -52,6 +62,15 @@ type PartnerRow = {
   invoiceCount: number;
   matchedCount: number;
   totalAmount: number;
+};
+
+type ShipmentOption = {
+  id: string;
+  declarationNo: string | null;
+  goodsName: string | null;
+  customerName: string;
+  taxCode: string | null;
+  quoteAmount: number | null;
 };
 
 type InvoiceData = {
@@ -67,6 +86,7 @@ type InvoiceData = {
     outputAmount: number;
   };
   partners: PartnerRow[];
+  shipmentOptions: ShipmentOption[];
 };
 
 function currentMonth() {
@@ -82,7 +102,11 @@ function formatMoney(amount: number | null, currency = "VND") {
 
 function StatusBadge({ invoice }: { invoice: InvoiceRow }) {
   if (invoice.invoiceDirection === "OUTPUT") {
-    return <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">Theo dõi phải thu</span>;
+    return invoice.linkedShipment ? (
+      <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">✓ Đã gắn lô – theo dõi phải thu</span>
+    ) : (
+      <span className="inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">Chờ xác định lô hàng</span>
+    );
   }
   if (invoice.invoiceDirection === "UNRELATED" || invoice.invoiceDirection === "UNKNOWN") {
     return <span className="inline-flex rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700">Cần kiểm tra</span>;
@@ -191,13 +215,22 @@ export function InvoiceManagementPanel({ isAdmin, embedded = false }: { isAdmin:
         </div>
 
         {error && <p className="m-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-        <InvoiceTable rows={data?.invoices ?? []} isLoading={isLoading} isAdmin={isAdmin} />
+        <InvoiceTable
+          rows={data?.invoices ?? []}
+          shipmentOptions={data?.shipmentOptions ?? []}
+          isLoading={isLoading}
+          isAdmin={isAdmin}
+          onLinked={loadData}
+        />
       </div>
     </div>
   );
 }
 
+type PartnersTab = "overview" | "vendors";
+
 export default function PartnersClient() {
+  const [activeTab, setActiveTab] = useState<PartnersTab>("overview");
   const [rows, setRows] = useState<PartnerRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -214,20 +247,66 @@ export default function PartnersClient() {
   }, []);
 
   return (
-    <div className="p-8">
-      <div className="mb-6">
+    <div>
+      <header className="px-8 pt-8">
         <h1 className="text-2xl font-semibold text-gray-900">Đối tác</h1>
         <p className="mt-1 text-sm text-gray-500">Danh sách nhà cung cấp và đối tác của NQ Logistics.</p>
-      </div>
-      {error && <p className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-      <div className="rounded-xl border border-gray-200 bg-white">
-        <PartnerTable rows={rows} isLoading={isLoading} />
-      </div>
+      </header>
+
+      <nav className="mt-6 flex gap-6 border-b border-gray-200 px-8" aria-label="Mục đối tác">
+        <button
+          type="button"
+          onClick={() => setActiveTab("overview")}
+          className={`border-b-2 px-1 pb-3 text-sm font-semibold ${
+            activeTab === "overview"
+              ? "border-blue-600 text-blue-700"
+              : "border-transparent text-gray-500 hover:text-gray-800"
+          }`}
+          aria-current={activeTab === "overview" ? "page" : undefined}
+        >
+          Danh sách đối tác
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("vendors")}
+          className={`border-b-2 px-1 pb-3 text-sm font-semibold ${
+            activeTab === "vendors"
+              ? "border-blue-600 text-blue-700"
+              : "border-transparent text-gray-500 hover:text-gray-800"
+          }`}
+          aria-current={activeTab === "vendors" ? "page" : undefined}
+        >
+          Nhà cung cấp
+        </button>
+      </nav>
+
+      {activeTab === "overview" ? (
+        <div className="p-8">
+          {error && <p className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+          <div className="rounded-xl border border-gray-200 bg-white">
+            <PartnerTable rows={rows} isLoading={isLoading} />
+          </div>
+        </div>
+      ) : (
+        <VendorsSettingsClient />
+      )}
     </div>
   );
 }
 
-function InvoiceTable({ rows, isLoading, isAdmin }: { rows: InvoiceRow[]; isLoading: boolean; isAdmin: boolean }) {
+function InvoiceTable({
+  rows,
+  shipmentOptions,
+  isLoading,
+  isAdmin,
+  onLinked,
+}: {
+  rows: InvoiceRow[];
+  shipmentOptions: ShipmentOption[];
+  isLoading: boolean;
+  isAdmin: boolean;
+  onLinked: () => Promise<void>;
+}) {
   return <div className="overflow-x-auto"><table className="min-w-[1180px] w-full divide-y divide-gray-200 text-sm">
     <thead className="bg-gray-50"><tr>
       <th className="w-14 px-4 py-3 text-center font-medium text-gray-500">STT</th>
@@ -251,11 +330,124 @@ function InvoiceTable({ rows, isLoading, isAdmin }: { rows: InvoiceRow[]; isLoad
         <td className="px-4 py-4"><p className="max-w-56 text-gray-700">{invoice.buyerName || "Chưa đọc được"}</p><p className="mt-1 text-xs text-gray-500">MST: {invoice.buyerTaxCode || "—"}</p></td>
         <td className="whitespace-nowrap px-4 py-4 text-right font-semibold text-gray-900">{formatMoney(invoice.totalAmount, invoice.currency)}</td>
         <td className="px-4 py-4"><StatusBadge invoice={invoice} />{invoice.note && <p className="mt-2 max-w-56 text-xs leading-5 text-gray-500">{invoice.note}</p>}</td>
-        <td className="px-4 py-4">{invoice.invoiceDirection === "OUTPUT" ? <span className="text-blue-600">Hóa đơn bán ra</span> : invoice.shipmentCost ? <><Link href={`/costs?shipmentId=${invoice.shipmentCost.shipment.id}`} className="font-medium text-blue-600 hover:underline">TK {invoice.shipmentCost.shipment.declarationNo || "chưa có"}</Link><p className="mt-1 max-w-64 text-xs text-gray-500">{invoice.shipmentCost.shipment.goodsName || invoice.shipmentCost.shipment.customerName}</p><p className="mt-1 text-xs text-gray-400">Chi phí: {formatMoney(invoice.shipmentCost.costPrice)}</p>{invoice.payableDebt && isAdmin ? <Link href={`/debts/${invoice.payableDebt.id}`} className="mt-2 inline-flex rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100">Mở khoản phải trả</Link> : invoice.status === "MATCHED" ? <p className="mt-2 text-xs text-amber-600">Chưa có khoản phải trả</p> : null}</> : <span className="text-gray-400">Chưa ghép lô hàng</span>}</td>
-        <td className="px-4 py-4 text-right"><div className="flex justify-end gap-3">{invoice.pdfUrl && <a href={invoice.pdfUrl} target="_blank" rel="noreferrer" className="font-medium text-blue-600 hover:underline">PDF</a>}{invoice.xmlUrl && <a href={invoice.xmlUrl} target="_blank" rel="noreferrer" className="font-medium text-emerald-600 hover:underline">XML</a>}{!invoice.pdfUrl && !invoice.xmlUrl && <a href={invoice.attachmentUrl} target="_blank" rel="noreferrer" className="font-medium text-blue-600 hover:underline">Mở file</a>}</div></td>
+        <td className="px-4 py-4">
+          {invoice.linkedShipment ? (
+            <>
+              <Link href={`/costs?shipmentId=${invoice.linkedShipment.id}`} className="font-medium text-blue-600 hover:underline">
+                TK {invoice.linkedShipment.declarationNo || "chưa có"}
+              </Link>
+              <p className="mt-1 max-w-64 text-xs text-gray-500">
+                {invoice.linkedShipment.goodsName || invoice.linkedShipment.customerName}
+              </p>
+              {invoice.invoiceDirection === "INPUT" && invoice.shipmentCost && (
+                <p className="mt-1 text-xs text-gray-400">Chi phí: {formatMoney(invoice.shipmentCost.costPrice)}</p>
+              )}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <ShipmentLink shipmentId={invoice.linkedShipment.id} className="inline-flex rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200">
+                  Mở lô hàng
+                </ShipmentLink>
+                {invoice.linkedDebt && isAdmin && (
+                  <Link href={`/debts/${invoice.linkedDebt.id}`} className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${invoice.invoiceDirection === "OUTPUT" ? "bg-blue-50 text-blue-700 hover:bg-blue-100" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}`}>
+                    {invoice.invoiceDirection === "OUTPUT" ? "Mở khoản phải thu" : "Mở khoản phải trả"}
+                  </Link>
+                )}
+              </div>
+              {!invoice.linkedDebt && invoice.status === "MATCHED" && (
+                <p className="mt-2 text-xs text-amber-600">Chưa có công nợ tự động</p>
+              )}
+            </>
+          ) : (
+            <span className="text-gray-400">Chưa xác định lô hàng</span>
+          )}
+          {invoice.invoiceDirection === "OUTPUT" && isAdmin && (
+            <OutputShipmentLinkControl invoice={invoice} shipmentOptions={shipmentOptions} onLinked={onLinked} />
+          )}
+        </td>
+        <td className="px-4 py-4 text-right">
+          <div className="flex justify-end gap-3">
+            {invoice.pdfUrl && (
+              <AttachmentPreviewButton url={invoice.pdfUrl} name={invoice.attachmentName} className="font-medium text-blue-600 hover:underline">
+                Xem PDF
+              </AttachmentPreviewButton>
+            )}
+            {invoice.xmlUrl && <a href={invoice.xmlUrl} target="_blank" rel="noreferrer" className="font-medium text-emerald-600 hover:underline">XML</a>}
+            {!invoice.pdfUrl && !invoice.xmlUrl && (
+              <AttachmentPreviewButton url={invoice.attachmentUrl} name={invoice.attachmentName} className="font-medium text-blue-600 hover:underline">
+                Mở file
+              </AttachmentPreviewButton>
+            )}
+          </div>
+        </td>
       </tr>)}
     </tbody>
   </table></div>;
+}
+
+function OutputShipmentLinkControl({
+  invoice,
+  shipmentOptions,
+  onLinked,
+}: {
+  invoice: InvoiceRow;
+  shipmentOptions: ShipmentOption[];
+  onLinked: () => Promise<void>;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [shipmentId, setShipmentId] = useState(invoice.linkedShipment?.id || "");
+  const [isSaving, setIsSaving] = useState(false);
+
+  const normalizedBuyerTaxCode = (invoice.buyerTaxCode || "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+  const sameCustomerOptions = shipmentOptions.filter(
+    (shipment) => (shipment.taxCode || "").replace(/[^0-9A-Za-z]/g, "").toUpperCase() === normalizedBuyerTaxCode
+  );
+  const options = sameCustomerOptions.length > 0 ? sameCustomerOptions : shipmentOptions;
+
+  async function saveLink() {
+    setIsSaving(true);
+    try {
+      const response = await fetch(`/api/vendor-invoices/${invoice.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shipmentId: shipmentId || null }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.error || "Không thể liên kết hóa đơn.");
+      setIsOpen(false);
+      await onLinked();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Không thể liên kết hóa đơn.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  if (!isOpen) {
+    return (
+      <button type="button" onClick={() => setIsOpen(true)} className="mt-2 block text-xs font-medium text-blue-700 hover:underline">
+        {invoice.linkedShipment ? "Đổi lô hàng" : "+ Chọn lô hàng"}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 min-w-72 rounded-md border border-blue-200 bg-blue-50 p-2">
+      <select value={shipmentId} onChange={(event) => setShipmentId(event.target.value)} className="input w-full text-xs">
+        <option value="">Bỏ liên kết</option>
+        {options.map((shipment) => (
+          <option key={shipment.id} value={shipment.id}>
+            TK {shipment.declarationNo || "—"} · {shipment.goodsName || shipment.customerName}
+            {shipment.quoteAmount ? ` · ${formatMoney(shipment.quoteAmount)}` : ""}
+          </option>
+        ))}
+      </select>
+      <div className="mt-2 flex gap-2">
+        <button type="button" onClick={() => void saveLink()} disabled={isSaving} className="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50">
+          {isSaving ? "Đang lưu..." : "Lưu liên kết"}
+        </button>
+        <button type="button" onClick={() => setIsOpen(false)} className="px-2 py-1 text-xs text-gray-500 hover:underline">Hủy</button>
+      </div>
+    </div>
+  );
 }
 
 function PartnerTable({ rows, isLoading }: { rows: PartnerRow[]; isLoading: boolean }) {

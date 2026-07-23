@@ -4,11 +4,121 @@ import {
   normalizeInvoiceNumber,
   type ParsedVendorInvoice,
 } from "@/lib/vendor-invoice-parser";
+import { AUTOMATIC_RECEIVABLE_DEBT_PREFIX } from "@/lib/shipment-debt-sync";
 
 export type ReconciliationStatus = "MATCHED" | "UNMATCHED" | "NEEDS_REVIEW";
 
 function normalizeTaxCode(value: string | null | undefined) {
   return (value || "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+}
+
+function normalizeCompanyName(value: string | null | undefined) {
+  return (value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/Đ/g, "D")
+    .replace(/đ/g, "d")
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase();
+}
+
+export type OutputInvoiceMatchSource = Pick<
+  ParsedVendorInvoice,
+  "buyerName" | "buyerTaxCode" | "subtotal" | "totalAmount"
+>;
+
+export type OutputShipmentCandidate = {
+  id: string;
+  shipmentCode: string;
+  declarationNo: string | null;
+  declarationDate: Date | null;
+  goodsName: string | null;
+  customerName: string;
+  taxCode: string | null;
+  customer: { companyName: string; taxCode: string } | null;
+  debts: Array<{
+    id: string;
+    sourceKey: string | null;
+    totalAmount: number;
+    status: string;
+    dueDate: Date | null;
+    type: string;
+  }>;
+  quotes: Array<{ quoteAmount: number }>;
+};
+
+function amountsEqual(left: number, right: number) {
+  return Math.abs(left - right) < 1;
+}
+
+/**
+ * Ghép hóa đơn bán ra với lô hàng bằng khách mua và khoản phải thu tự động. Số invoice trên tờ khai
+ * không được dùng ở đây vì đó là commercial invoice của hồ sơ hải quan, không phải hóa đơn NQ xuất.
+ */
+export function matchOutputInvoiceToShipment(
+  invoice: OutputInvoiceMatchSource,
+  candidates: OutputShipmentCandidate[]
+) {
+  const buyerTaxCode = normalizeTaxCode(invoice.buyerTaxCode);
+  const buyerName = normalizeCompanyName(invoice.buyerName);
+  if (!buyerTaxCode && !buyerName) return null;
+
+  const sameCustomer = candidates.filter((candidate) => {
+    const candidateTaxCode = normalizeTaxCode(candidate.customer?.taxCode || candidate.taxCode);
+    if (buyerTaxCode && candidateTaxCode) return buyerTaxCode === candidateTaxCode;
+    const candidateName = normalizeCompanyName(candidate.customer?.companyName || candidate.customerName);
+    return Boolean(buyerName && candidateName && buyerName === candidateName);
+  });
+  if (sameCustomer.length === 0) return null;
+
+  const invoiceAmounts = [invoice.subtotal, invoice.totalAmount].filter(
+    (amount): amount is number => typeof amount === "number" && amount > 0
+  );
+  const sameAmount = sameCustomer.filter((candidate) =>
+    [...candidate.debts.map((debt) => debt.totalAmount), ...candidate.quotes.map((quote) => quote.quoteAmount)]
+      .some((candidateAmount) => invoiceAmounts.some((amount) => amountsEqual(candidateAmount, amount)))
+  );
+  if (sameAmount.length === 1) return sameAmount[0];
+
+  // Chỉ tự ghép theo khách hàng khi đúng một lô có khoản phải thu. Nếu có nhiều lô, hệ thống để
+  // trạng thái chờ thay vì đoán và ghi nhận công nợ sai.
+  if (sameCustomer.length === 1) return sameCustomer[0];
+  return null;
+}
+
+export async function loadOutputShipmentCandidates(): Promise<OutputShipmentCandidate[]> {
+  return prisma.shipment.findMany({
+    select: {
+      id: true,
+      shipmentCode: true,
+      declarationNo: true,
+      declarationDate: true,
+      goodsName: true,
+      customerName: true,
+      taxCode: true,
+      customer: { select: { companyName: true, taxCode: true } },
+      debts: {
+        where: { sourceKey: { startsWith: AUTOMATIC_RECEIVABLE_DEBT_PREFIX } },
+        select: {
+          id: true,
+          sourceKey: true,
+          totalAmount: true,
+          status: true,
+          dueDate: true,
+          type: true,
+        },
+      },
+      quotes: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { quoteAmount: true },
+      },
+    },
+  });
+}
+
+export async function findMatchingOutputShipment(invoice: OutputInvoiceMatchSource) {
+  return matchOutputInvoiceToShipment(invoice, await loadOutputShipmentCandidates());
 }
 
 /** Finds the vendor represented by the invoice, creating it only when the seller can be identified. */
@@ -64,7 +174,7 @@ async function findMatchingShipmentCost(invoiceNumber: string, vendorId: string 
 
   const candidates = await prisma.shipmentCost.findMany({
     where: { invoiceNumber: { not: null } },
-    select: { id: true, vendorId: true, invoiceNumber: true, updatedAt: true },
+    select: { id: true, shipmentId: true, vendorId: true, invoiceNumber: true, updatedAt: true },
     orderBy: { updatedAt: "desc" },
   });
   const matches = candidates.filter(
@@ -88,10 +198,21 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
   // so creating NQ as its own vendor or matching the row to a shipment cost would be incorrect.
   const vendor = parsed.invoiceDirection === "INPUT" ? await findOrCreateInvoiceVendor(parsed) : null;
 
+  if (parsed.invoiceDirection === "OUTPUT") {
+    const shipment = await findMatchingOutputShipment(parsed);
+    return {
+      vendorId: null,
+      shipmentCostId: null,
+      shipmentId: shipment?.id ?? null,
+      status: shipment ? "MATCHED" as ReconciliationStatus : "UNMATCHED" as ReconciliationStatus,
+    };
+  }
+
   if (parsed.invoiceDirection !== "INPUT" || !parsed.invoiceNumber) {
     return {
       vendorId: vendor?.id ?? null,
       shipmentCostId: null,
+      shipmentId: null,
       status: "NEEDS_REVIEW" as ReconciliationStatus,
     };
   }
@@ -101,6 +222,7 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
     return {
       vendorId: vendor?.id ?? null,
       shipmentCostId: null,
+      shipmentId: null,
       status: "UNMATCHED" as ReconciliationStatus,
     };
   }
@@ -111,6 +233,7 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
   return {
     vendorId: vendor?.id ?? cost.vendorId ?? null,
     shipmentCostId: cost.id,
+    shipmentId: cost.shipmentId,
     status: "MATCHED" as ReconciliationStatus,
   };
 }
@@ -147,7 +270,8 @@ export async function reconcileStoredVendorInvoices() {
       data: {
         vendorId: result.vendorId,
         shipmentCostId: result.shipmentCostId,
-        status: result.status,
+        shipmentId: invoice.shipmentId ?? result.shipmentId,
+        status: invoice.shipmentId ? "MATCHED" : result.status,
       },
     });
 

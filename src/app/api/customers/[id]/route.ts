@@ -32,10 +32,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         orderBy: { createdAt: "desc" },
         select: {
           id: true,
-          shipmentCode: true,
           declarationNo: true,
+          declarationDate: true,
+          goodsName: true,
           status: true,
-          createdAt: true,
         },
       },
     },

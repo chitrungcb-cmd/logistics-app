@@ -2,16 +2,17 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import ShipmentLink from "@/components/shipments/ShipmentLink";
 import { useRouter } from "next/navigation";
 import Badge from "@/components/shipments/Badge";
 import { statusBadgeClass } from "@/lib/shipment-constants";
 
 type CustomerShipment = {
   id: string;
-  shipmentCode: string;
   declarationNo: string | null;
+  declarationDate: string | null;
+  goodsName: string | null;
   status: string;
-  createdAt: string;
 };
 
 type AssignableUser = { id: string; name: string; email: string };
@@ -60,7 +61,10 @@ export default function CustomerDetailClient({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`/api/customers/${customerId}`)
+    fetch(`/api/customers/${customerId}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    })
       .then((res) => res.json())
       .then((json) => {
         if (!json.success) throw new Error(json.error || "Không thể tải thông tin khách hàng.");
@@ -169,7 +173,8 @@ export default function CustomerDetailClient({
                 <table className="min-w-full divide-y divide-gray-200 text-sm">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Mã lô hàng</th>
+                      <th className="whitespace-nowrap px-3 py-2 text-left font-medium text-gray-500">Ngày tờ khai</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">Tên hàng</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Số tờ khai</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Trạng thái</th>
                     </tr>
@@ -177,16 +182,18 @@ export default function CustomerDetailClient({
                   <tbody className="divide-y divide-gray-100">
                     {customer.shipments.map((shipment) => (
                       <tr key={shipment.id} className="hover:bg-gray-50">
-                        <td className="px-3 py-2">
-                          <Link
-                            href={`/shipments/${shipment.id}`}
-                            className="font-medium text-blue-600 hover:underline"
-                          >
-                            {shipment.shipmentCode}
-                          </Link>
+                        <td className="whitespace-nowrap px-3 py-2 text-gray-600">
+                          {shipment.declarationDate
+                            ? new Date(shipment.declarationDate).toLocaleDateString("vi-VN")
+                            : "—"}
                         </td>
-                        <td className="px-3 py-2 text-gray-600">{shipment.declarationNo || "—"}</td>
-                        <td className="px-3 py-2">
+                        <td className="min-w-56 px-3 py-2">
+                          <ShipmentLink shipmentId={shipment.id} className="font-medium text-blue-600 hover:underline">
+                            {shipment.goodsName || "Chưa có tên hàng"}
+                          </ShipmentLink>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-gray-600">{shipment.declarationNo || "—"}</td>
+                        <td className="whitespace-nowrap px-3 py-2">
                           <Badge label={shipment.status} className={statusBadgeClass(shipment.status)} />
                         </td>
                       </tr>

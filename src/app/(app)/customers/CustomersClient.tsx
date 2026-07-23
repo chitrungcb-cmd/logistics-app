@@ -88,6 +88,7 @@ export default function CustomersClient({ canManage }: { canManage: boolean }) {
         <table className="min-w-full divide-y divide-gray-200 text-sm">
           <thead className="bg-gray-50">
             <tr>
+              <th className="px-4 py-3 text-left font-medium text-gray-500">STT</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Tên công ty</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Mã số thuế</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Điện thoại</th>
@@ -99,29 +100,32 @@ export default function CustomersClient({ canManage }: { canManage: boolean }) {
           <tbody className="divide-y divide-gray-100">
             {isLoading && (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={7} className="px-4 py-6 text-center text-gray-400">
                   Đang tải dữ liệu...
                 </td>
               </tr>
             )}
             {!isLoading && error && (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-red-600">
+                <td colSpan={7} className="px-4 py-6 text-center text-red-600">
                   {error}
                 </td>
               </tr>
             )}
             {!isLoading && !error && customers.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={7} className="px-4 py-6 text-center text-gray-400">
                   {search ? "Không có khách hàng khớp tìm kiếm." : "Chưa có khách hàng nào."}
                 </td>
               </tr>
             )}
             {!isLoading &&
               !error &&
-              customers.map((customer) => (
+              customers.map((customer, index) => (
                 <tr key={customer.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 text-gray-600">
+                    {(pagination.page - 1) * pagination.pageSize + index + 1}
+                  </td>
                   <td className="px-4 py-3 font-medium text-gray-900">{customer.companyName}</td>
                   <td className="px-4 py-3 text-gray-600">{customer.taxCode}</td>
                   <td className="px-4 py-3 text-gray-600">{customer.phone || "—"}</td>

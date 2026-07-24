@@ -126,6 +126,8 @@ export default function ShipmentFinanceEditorModal({
   const [companyAccounts, setCompanyAccounts] = useState<Array<{ id: string; name: string; isActive: boolean }>>([]);
   const [financeLinks, setFinanceLinks] = useState<FinanceLinks>({ debts: [], invoices: [] });
   const [activeTab, setActiveTab] = useState<"quote" | "cost">("cost");
+  // clientKey của dòng chi phí đang mở cửa sổ nhập chi tiết (null = danh sách).
+  const [editingCostKey, setEditingCostKey] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [costSaveStatus, setCostSaveStatus] = useState<Record<string, CostSaveStatus>>({});
   const [isSavingQuotes, setIsSavingQuotes] = useState(false);
@@ -500,28 +502,97 @@ export default function ShipmentFinanceEditorModal({
 
               {activeTab === "cost" && <section className="rounded-xl border border-emerald-200 bg-emerald-50/30 p-5">
                 <div className="mb-3 flex items-center justify-between">
-                  <div><h3 className="font-semibold text-gray-900">Bảng chi phí chi tiết</h3><p className="text-xs text-gray-500">Hiển thị sẵn mọi hạng mục · Tự động lưu sau khi nhập hoặc rời ô · Dòng “Tự động” được lấy từ Cài đặt</p></div>
+                  <div><h3 className="font-semibold text-gray-900">Bảng chi phí chi tiết</h3><p className="text-xs text-gray-500">Bấm vào một dòng để nhập/sửa chi tiết · Dòng “Tự động” được lấy từ Cài đặt</p></div>
                   <p className="text-lg font-bold text-emerald-700">{formatVnd(totalCost)}</p>
                 </div>
-                <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-                  <table className="min-w-[1360px] divide-y divide-gray-200 text-sm">
-                    <thead className="bg-gray-50"><tr><th className="px-2 py-2 text-left text-gray-500">Hạng mục</th><th className="px-2 py-2 text-left text-gray-500">Nhà cung cấp</th><th className="px-2 py-2 text-left text-gray-500">Đơn giá</th><th className="px-2 py-2 text-left text-gray-500">SL</th><th className="px-2 py-2 text-left text-gray-500">ĐVT</th><th className="px-2 py-2 text-left text-gray-500">Thành tiền</th><th className="px-2 py-2 text-left text-gray-500">Số HĐ</th><th className="px-2 py-2 text-left text-gray-500">Chi từ TK</th><th className="px-2 py-2 text-left text-gray-500">Ghi chú</th><th></th></tr></thead>
-                    <tbody className="divide-y divide-gray-100">{costs.map((cost, index) => <tr key={cost.clientKey}>
-                      <td className="px-2 py-2"><select value={cost.category} onChange={(event) => { const category = event.target.value; updateCost(index, { category, invoiceNumber: isInvoiceCostCategory(category) ? cost.invoiceNumber : "", vendorId: isVendorlessCostCategory(category) ? "" : cost.vendorId }, true); }} className="input min-w-32">{COST_CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{COST_CATEGORY_LABELS[category]}</option>)}</select><input value={cost.customLabel} onChange={(event) => updateCost(index, { customLabel: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input mt-1 min-w-32 text-xs" placeholder="Tên riêng (tùy chọn)" />{cost.presetId && !cost.isActual && <span className="mt-1 block text-[10px] font-medium text-amber-700">Dự kiến tự động</span>}{cost.isActual && cost.id && <span className="mt-1 block text-[10px] font-medium text-emerald-700">✓ Chi phí thực tế</span>}</td>
-                      <td className="px-2 py-2">{isVendorlessCostCategory(cost.category) ? <div className="flex min-h-10 min-w-48 items-center rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-gray-500">Không áp dụng</div> : <select value={cost.vendorId} onChange={(event) => updateCost(index, { vendorId: event.target.value }, true)} className={`input min-w-48 ${cost.vendorId ? "" : "border-amber-300 bg-amber-50"}`}><option value="">Chưa gắn nhà cung cấp</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}{vendor.type ? ` · ${vendor.type}` : ""}</option>)}</select>}</td>
-                      <td className="px-2 py-2"><MoneyInput value={cost.unitPrice} onValueChange={(raw) => updateCost(index, { unitPrice: raw }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-32" /></td>
-                      <td className="px-2 py-2"><input type="number" min="0" step="any" value={cost.quantity} onChange={(event) => updateCost(index, { quantity: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-20" /></td>
-                      <td className="px-2 py-2"><input value={cost.unit} onChange={(event) => updateCost(index, { unit: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-20" placeholder="lần, xe..." /></td>
-                      <td className="whitespace-nowrap px-2 py-2 font-medium text-gray-900">{formatVnd((Number(cost.unitPrice) || 0) * (Number(cost.quantity) || 0))}</td>
-                      <td className="px-2 py-2"><input value={cost.invoiceNumber} onChange={(event) => updateCost(index, { invoiceNumber: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} disabled={!isInvoiceCostCategory(cost.category)} className="input w-32" placeholder={isInvoiceCostCategory(cost.category) ? "Số HĐ" : "—"} /></td>
-                      <td className="px-2 py-2"><select value={cost.paidFromCompanyAccountId ? `acc:${cost.paidFromCompanyAccountId}` : cost.paidByUserId ? `user:${cost.paidByUserId}` : ""} onChange={(event) => { const v = event.target.value; if (v.startsWith("acc:")) updateCost(index, { paidFromCompanyAccountId: v.slice(4), paidByUserId: "" }, true); else if (v.startsWith("user:")) updateCost(index, { paidByUserId: v.slice(5), paidFromCompanyAccountId: "" }, true); else updateCost(index, { paidByUserId: "", paidFromCompanyAccountId: "" }, true); }} className="input min-w-44"><option value="">Chưa chọn</option><optgroup label="TK công ty">{companyAccounts.filter((a) => a.isActive || a.id === cost.paidFromCompanyAccountId).map((a) => <option key={a.id} value={`acc:${a.id}`}>{a.name}</option>)}</optgroup><optgroup label="Cá nhân">{users.filter((u) => u.isActive || u.id === cost.paidByUserId).map((u) => <option key={u.id} value={`user:${u.id}`}>{u.name}{!u.isActive ? " (đã khóa)" : ""}</option>)}</optgroup></select></td>
-                      <td className="px-2 py-2"><input value={cost.note} onChange={(event) => updateCost(index, { note: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input min-w-52" placeholder="Ghi chú" /></td>
-                      <td className="px-2 py-2"><div className="flex min-w-36 flex-col items-start gap-1"><SaveIndicator status={costSaveStatus[cost.clientKey] || "idle"} hasValue={!!cost.id || Number(cost.unitPrice) > 0} />{cost.id && !cost.isActual && <button type="button" onClick={() => updateCost(index, { isActual: true }, true)} className="whitespace-nowrap text-xs font-medium text-emerald-700 hover:underline">Xác nhận thực tế</button>}<button type="button" onClick={() => deleteCost(index)} disabled={costSaveStatus[cost.clientKey] === "saving"} className="text-xs text-red-600 hover:underline disabled:opacity-40">Xóa</button></div></td>
-                    </tr>)}</tbody>
+                <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50"><tr>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">Hạng mục</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">Nhà cung cấp</th>
+                      <th className="px-3 py-2 text-right font-medium text-gray-500">Thành tiền</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">Chi từ TK</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">Trạng thái</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-gray-100">{costs.map((cost) => {
+                      const amount = (Number(cost.unitPrice) || 0) * (Number(cost.quantity) || 0);
+                      const vendorLabel = isVendorlessCostCategory(cost.category) ? "Không áp dụng" : vendors.find((v) => v.id === cost.vendorId)?.name ?? "Chưa gắn NCC";
+                      const paidLabel = cost.paidFromCompanyAccountId
+                        ? companyAccounts.find((a) => a.id === cost.paidFromCompanyAccountId)?.name ?? "TK công ty"
+                        : cost.paidByUserId
+                          ? users.find((u) => u.id === cost.paidByUserId)?.name ?? "Cá nhân"
+                          : "—";
+                      return <tr key={cost.clientKey} onClick={() => setEditingCostKey(cost.clientKey)} className="cursor-pointer hover:bg-emerald-50/60">
+                        <td className="px-3 py-2 font-medium text-gray-900">{cost.customLabel || COST_CATEGORY_LABELS[cost.category]}{cost.customLabel && <span className="ml-1 text-[10px] font-normal text-gray-400">({COST_CATEGORY_LABELS[cost.category]})</span>}</td>
+                        <td className={`px-3 py-2 ${!isVendorlessCostCategory(cost.category) && !cost.vendorId ? "text-amber-600" : "text-gray-600"}`}>{vendorLabel}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-gray-900">{amount > 0 ? formatVnd(amount) : <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-600">{paidLabel}</td>
+                        <td className="px-3 py-2">{cost.presetId && !cost.isActual ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">Dự kiến</span> : cost.id ? <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">Đã lưu</span> : <span className="text-[11px] text-gray-400">Chưa nhập</span>}</td>
+                      </tr>;
+                    })}</tbody>
                   </table>
                 </div>
-                <button type="button" onClick={() => setCosts((current) => [...current, newCost()])} className="mt-3 rounded-md border border-emerald-600 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50">+ Thêm dòng chi phí</button>
+                <button type="button" onClick={() => { const nc = newCost(); setCosts((current) => [...current, nc]); setEditingCostKey(nc.clientKey); }} className="mt-3 rounded-md border border-emerald-600 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50">+ Thêm chi phí</button>
               </section>}
+
+              {/* Cửa sổ nhập/sửa chi tiết một dòng chi phí — tái dùng updateCost/flushCostSave/deleteCost. */}
+              {(() => {
+                if (!editingCostKey) return null;
+                const index = costs.findIndex((c) => c.clientKey === editingCostKey);
+                if (index < 0) return null;
+                const cost = costs[index];
+                const amount = (Number(cost.unitPrice) || 0) * (Number(cost.quantity) || 0);
+                const close = () => { flushCostSave(index); setEditingCostKey(null); };
+                return (
+                  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={close}>
+                    <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                      <div className="mb-4 flex items-start justify-between">
+                        <h3 className="text-lg font-semibold text-gray-900">Chi phí · {cost.customLabel || COST_CATEGORY_LABELS[cost.category]}</h3>
+                        <button type="button" onClick={close} className="text-xl text-gray-400 hover:text-gray-700" aria-label="Đóng">✕</button>
+                      </div>
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Hạng mục</span>
+                            <select value={cost.category} onChange={(event) => { const category = event.target.value; updateCost(index, { category, invoiceNumber: isInvoiceCostCategory(category) ? cost.invoiceNumber : "", vendorId: isVendorlessCostCategory(category) ? "" : cost.vendorId }, true); }} className="input">{COST_CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{COST_CATEGORY_LABELS[category]}</option>)}</select>
+                          </label>
+                          <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Tên hiển thị</span>
+                            <input value={cost.customLabel} onChange={(event) => updateCost(index, { customLabel: event.target.value }, true)} className="input" placeholder={COST_CATEGORY_LABELS[cost.category]} />
+                          </label>
+                        </div>
+                        {!isVendorlessCostCategory(cost.category) && (
+                          <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Nhà cung cấp</span>
+                            <select value={cost.vendorId} onChange={(event) => updateCost(index, { vendorId: event.target.value }, true)} className={`input ${cost.vendorId ? "" : "border-amber-300 bg-amber-50"}`}><option value="">Chưa gắn nhà cung cấp</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}{vendor.type ? ` · ${vendor.type}` : ""}</option>)}</select>
+                          </label>
+                        )}
+                        <div className="grid grid-cols-3 gap-3">
+                          <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Đơn giá</span><MoneyInput value={cost.unitPrice} onValueChange={(raw) => updateCost(index, { unitPrice: raw }, true)} className="input" /></label>
+                          <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Số lượng</span><input type="number" min="0" step="any" value={cost.quantity} onChange={(event) => updateCost(index, { quantity: event.target.value }, true)} className="input" /></label>
+                          <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">ĐVT</span><input value={cost.unit} onChange={(event) => updateCost(index, { unit: event.target.value }, true)} className="input" placeholder="lần, xe..." /></label>
+                        </div>
+                        <div className="rounded-md bg-gray-50 px-3 py-2 text-sm"><span className="text-gray-500">Thành tiền: </span><span className="font-semibold text-gray-900">{formatVnd(amount)}</span></div>
+                        {isInvoiceCostCategory(cost.category) && (
+                          <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Số hóa đơn</span><input value={cost.invoiceNumber} onChange={(event) => updateCost(index, { invoiceNumber: event.target.value }, true)} className="input" placeholder="Số HĐ" /></label>
+                        )}
+                        <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Chi từ TK</span>
+                          <select value={cost.paidFromCompanyAccountId ? `acc:${cost.paidFromCompanyAccountId}` : cost.paidByUserId ? `user:${cost.paidByUserId}` : ""} onChange={(event) => { const v = event.target.value; if (v.startsWith("acc:")) updateCost(index, { paidFromCompanyAccountId: v.slice(4), paidByUserId: "" }, true); else if (v.startsWith("user:")) updateCost(index, { paidByUserId: v.slice(5), paidFromCompanyAccountId: "" }, true); else updateCost(index, { paidByUserId: "", paidFromCompanyAccountId: "" }, true); }} className="input"><option value="">Chưa chọn</option><optgroup label="TK công ty">{companyAccounts.filter((a) => a.isActive || a.id === cost.paidFromCompanyAccountId).map((a) => <option key={a.id} value={`acc:${a.id}`}>{a.name}</option>)}</optgroup><optgroup label="Cá nhân">{users.filter((u) => u.isActive || u.id === cost.paidByUserId).map((u) => <option key={u.id} value={`user:${u.id}`}>{u.name}{!u.isActive ? " (đã khóa)" : ""}</option>)}</optgroup></select>
+                        </label>
+                        <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Ghi chú</span><input value={cost.note} onChange={(event) => updateCost(index, { note: event.target.value }, true)} className="input" placeholder="Ghi chú" /></label>
+                        {cost.presetId && !cost.isActual && <p className="text-xs text-amber-700">Đây là chi phí dự kiến tự động. Sửa lại số cho đúng hoặc bấm “Xác nhận thực tế”.</p>}
+                      </div>
+                      <div className="mt-5 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <SaveIndicator status={costSaveStatus[cost.clientKey] || "idle"} hasValue={!!cost.id || Number(cost.unitPrice) > 0} />
+                          {cost.id && !cost.isActual && <button type="button" onClick={() => updateCost(index, { isActual: true }, true)} className="text-sm font-medium text-emerald-700 hover:underline">Xác nhận thực tế</button>}
+                        </div>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => { deleteCost(index); setEditingCostKey(null); }} disabled={costSaveStatus[cost.clientKey] === "saving"} className="rounded-md border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-40">Xóa</button>
+                          <button type="button" onClick={close} className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Xong</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </>
           )}
           {message && <p className="mt-4 text-sm text-green-700">{message}</p>}

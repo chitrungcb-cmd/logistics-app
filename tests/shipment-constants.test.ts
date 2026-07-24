@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   getDeclarationBranches,
+  isClearanceDecisionFilename,
   mergeDeclarationBranch,
   normalizeDeclarationBranches,
+  resolveSyncedShipmentStatus,
 } from "@/lib/shipment-constants";
 
 describe("declaration branches", () => {
@@ -24,5 +26,30 @@ describe("declaration branches", () => {
     expect(mergeDeclarationBranch(["108028471610", "108028471612"], "108028471610")).toEqual([
       "108028471610",
     ]);
+  });
+});
+
+describe("Gmail shipment status sync", () => {
+  it("recognizes the actual VNACCS clearance-decision filename", () => {
+    expect(isClearanceDecisionFilename("ToKhaiHQ7N_QDTQ_108346275001.xlsx")).toBe(true);
+    expect(isClearanceDecisionFilename("ToKhaiHQ7N_108346275001.xlsx")).toBe(false);
+  });
+
+  it("moves a stored shipment to cleared when a clearance decision arrives", () => {
+    expect(
+      resolveSyncedShipmentStatus("Đưa hàng về bảo quản", {
+        isCleared: true,
+        hasStorageInstruction: true,
+      })
+    ).toBe("Thông quan");
+  });
+
+  it("does not let an older storage email downgrade a cleared shipment", () => {
+    expect(
+      resolveSyncedShipmentStatus("Thông quan", {
+        isCleared: false,
+        hasStorageInstruction: true,
+      })
+    ).toBe("Thông quan");
   });
 });

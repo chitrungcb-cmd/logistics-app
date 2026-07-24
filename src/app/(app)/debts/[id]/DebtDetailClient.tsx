@@ -12,6 +12,7 @@ import {
   type DebtPortionValue,
 } from "@/lib/debt-constants";
 import AttachmentPreviewButton from "@/components/shipments/AttachmentPreviewButton";
+import { INVOICE_VAT_RATE } from "@/lib/personal-account-sync";
 import ShipmentFinanceEditorModal from "@/components/shipments/ShipmentFinanceEditorModal";
 import MoneyInput from "@/components/MoneyInput";
 import ShipmentLink from "@/components/shipments/ShipmentLink";
@@ -294,6 +295,11 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
 
   const badge = debtStatusBadge(debt.status, debt.dueDate);
   const breakdown = computeInvoiceSplitBreakdown(debt);
+  const invoiceBeforeTax = breakdown
+    ? Math.round(breakdown.invoiceAmount / (1 + INVOICE_VAT_RATE))
+    : 0;
+  const invoiceTaxAmount = breakdown ? breakdown.invoiceAmount - invoiceBeforeTax : 0;
+  const invoiceVatPercent = Math.round(INVOICE_VAT_RATE * 100);
   const partnerName =
     debt.customer?.companyName ||
     debt.vendor?.name ||
@@ -373,8 +379,11 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
           {breakdown && (
             <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <PortionCard
-                label="Có hóa đơn (đã gồm VAT 8%)"
+                label={`Có hóa đơn (VAT ${invoiceVatPercent}%)`}
                 total={breakdown.invoiceAmount}
+                beforeTax={invoiceBeforeTax}
+                taxAmount={invoiceTaxAmount}
+                taxRatePercent={invoiceVatPercent}
                 paid={breakdown.paidInvoice}
                 remaining={breakdown.remainingInvoice}
                 className="border-green-200 bg-green-50/60"
@@ -738,6 +747,9 @@ function Info({ label, value }: { label: string; value: string | null | undefine
 function PortionCard({
   label,
   total,
+  beforeTax,
+  taxAmount,
+  taxRatePercent,
   paid,
   remaining,
   className,
@@ -745,6 +757,9 @@ function PortionCard({
 }: {
   label: string;
   total: number;
+  beforeTax?: number;
+  taxAmount?: number;
+  taxRatePercent?: number;
   paid: number;
   remaining: number;
   className: string;
@@ -761,9 +776,25 @@ function PortionCard({
         )}
       </div>
       <dl className="mt-2 space-y-1 text-sm">
+        {beforeTax !== undefined && (
+          <div className="flex justify-between">
+            <dt className="text-gray-500">Tiền trước thuế</dt>
+            <dd className="font-medium text-gray-900">{formatVnd(beforeTax)}</dd>
+          </div>
+        )}
+        {taxAmount !== undefined && (
+          <div className="flex justify-between">
+            <dt className="text-gray-500">
+              Thuế VAT{taxRatePercent !== undefined ? ` (${taxRatePercent}%)` : ""}
+            </dt>
+            <dd className="font-medium text-gray-900">{formatVnd(taxAmount)}</dd>
+          </div>
+        )}
         <div className="flex justify-between">
-          <dt className="text-gray-500">Tổng</dt>
-          <dd className="font-medium text-gray-900">{formatVnd(total)}</dd>
+          <dt className={beforeTax !== undefined ? "font-medium text-gray-700" : "text-gray-500"}>
+            {beforeTax !== undefined ? "Tổng gồm thuế" : "Tổng"}
+          </dt>
+          <dd className="font-semibold text-gray-900">{formatVnd(total)}</dd>
         </div>
         <div className="flex justify-between">
           <dt className="text-gray-500">Đã thu</dt>

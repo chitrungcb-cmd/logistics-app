@@ -23,6 +23,7 @@ const UPDATABLE_FIELDS = [
   "customLabel",
   "note",
   "vendorId",
+  "paidByUserId",
   "isActual",
 ] as const;
 
@@ -77,6 +78,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (!isInvoiceCostCategory(nextCategory)) data.invoiceNumber = null;
     }
 
+    if ("paidByUserId" in data) {
+      data.paidByUserId = typeof data.paidByUserId === "string" && data.paidByUserId ? data.paidByUserId : null;
+      if (data.paidByUserId && !(await prisma.user.findUnique({ where: { id: data.paidByUserId as string }, select: { id: true } }))) {
+        return apiError("Người chi không hợp lệ.", 400);
+      }
+    }
+
     // costPrice is never accepted directly — always re-derived from unitPrice * quantity, using
     // whichever of the two wasn't part of this particular partial update.
     if ("unitPrice" in data || "quantity" in data) {
@@ -110,6 +118,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         include: {
           shipment: { select: { id: true, shipmentCode: true, customerName: true, goodsName: true, declarationNo: true, declarationDate: true, invoiceNo: true } },
           vendor: { select: { id: true, name: true, type: true } },
+          paidBy: { select: { id: true, name: true } },
         },
       });
       await tx.costAuditLog.create({

@@ -6,11 +6,13 @@ import type {
   PDFDocumentProxy,
   RenderTask,
 } from "pdfjs-dist/types/src/display/api";
+import type { TextLayer } from "pdfjs-dist/types/src/display/text_layer";
 
 export default function PdfPreview({ url, name }: { url: string; name: string }) {
   const documentRef = useRef<PDFDocumentProxy | null>(null);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
+  const textLayerRefs = useRef(new Map<number, HTMLDivElement>());
   const [pageCount, setPageCount] = useState(0);
   const [zoom, setZoom] = useState(1.25);
   const [isLoading, setIsLoading] = useState(true);
@@ -22,6 +24,9 @@ export default function PdfPreview({ url, name }: { url: string; name: string })
     async function loadDocument() {
       try {
         const pdfjs = await import("pdfjs-dist");
+        setPageCount(0);
+        setError(null);
+        setIsLoading(true);
         if (cancelled) return;
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -59,16 +64,19 @@ export default function PdfPreview({ url, name }: { url: string; name: string })
 
     let cancelled = false;
     const renderTasks: RenderTask[] = [];
+    const textLayers: TextLayer[] = [];
     setIsLoading(true);
     setError(null);
 
     async function renderPages(pdfDocument: PDFDocumentProxy) {
       try {
+        const pdfjs = await import("pdfjs-dist");
         for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
           if (cancelled) return;
           const page = await pdfDocument.getPage(pageNumber);
           const canvas = canvasRefs.current.get(pageNumber);
-          if (!canvas || cancelled) return;
+          const textLayerContainer = textLayerRefs.current.get(pageNumber);
+          if (!canvas || !textLayerContainer || cancelled) return;
 
           const viewport = page.getViewport({ scale: zoom });
           const outputScale = Math.min(window.devicePixelRatio || 1, 2);
@@ -84,6 +92,24 @@ export default function PdfPreview({ url, name }: { url: string; name: string })
           });
           renderTasks.push(renderTask);
           await renderTask.promise;
+
+          const textContent = await page.getTextContent({
+            includeMarkedContent: true,
+            disableNormalization: true,
+          });
+          if (cancelled) return;
+
+          textLayerContainer.replaceChildren();
+          textLayerContainer.style.setProperty("--total-scale-factor", String(zoom));
+          textLayerContainer.style.setProperty("--scale-round-x", "1px");
+          textLayerContainer.style.setProperty("--scale-round-y", "1px");
+          const textLayer = new pdfjs.TextLayer({
+            textContentSource: textContent,
+            container: textLayerContainer,
+            viewport,
+          });
+          textLayers.push(textLayer);
+          await textLayer.render();
         }
         if (!cancelled) setIsLoading(false);
       } catch (renderError) {
@@ -103,6 +129,7 @@ export default function PdfPreview({ url, name }: { url: string; name: string })
     return () => {
       cancelled = true;
       renderTasks.forEach((task) => task.cancel());
+      textLayers.forEach((textLayer) => textLayer.cancel());
     };
   }, [pageCount, zoom]);
 
@@ -151,15 +178,24 @@ export default function PdfPreview({ url, name }: { url: string; name: string })
           {Array.from({ length: pageCount }, (_, index) => {
             const pageNumber = index + 1;
             return (
-              <canvas
-                key={pageNumber}
-                ref={(canvas) => {
-                  if (canvas) canvasRefs.current.set(pageNumber, canvas);
-                  else canvasRefs.current.delete(pageNumber);
-                }}
-                className="bg-white shadow-lg"
-                aria-label={`Trang ${pageNumber} của ${name}`}
-              />
+              <div key={pageNumber} className="relative bg-white shadow-lg">
+                <canvas
+                  ref={(canvas) => {
+                    if (canvas) canvasRefs.current.set(pageNumber, canvas);
+                    else canvasRefs.current.delete(pageNumber);
+                  }}
+                  className="block bg-white"
+                  aria-label={`Trang ${pageNumber} của ${name}`}
+                />
+                <div
+                  ref={(textLayer) => {
+                    if (textLayer) textLayerRefs.current.set(pageNumber, textLayer);
+                    else textLayerRefs.current.delete(pageNumber);
+                  }}
+                  className="pdf-text-layer"
+                  aria-label={`Nội dung chữ trang ${pageNumber}`}
+                />
+              </div>
             );
           })}
         </div>

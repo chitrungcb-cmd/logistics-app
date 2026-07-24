@@ -55,6 +55,27 @@ export type Attachment = {
   uploadedAt: string;
 };
 
+/** VNACCS clearance-decision workbooks use names such as ToKhaiHQ7N_QDTQ_….xlsx. */
+export function isClearanceDecisionFilename(filename: string) {
+  return filename.toLowerCase().includes("qdtq");
+}
+
+/**
+ * Gmail returns newest messages first, so an older storage-instruction email can be processed after
+ * a newer clearance decision in the same sync. Once cleared, that older email must not move the
+ * shipment backwards to bonded storage.
+ */
+export function resolveSyncedShipmentStatus(
+  currentStatus: string,
+  result: { isCleared: boolean; hasStorageInstruction: boolean }
+) {
+  if (result.isCleared) return "Thông quan";
+  if (result.hasStorageInstruction && currentStatus !== "Thông quan") {
+    return "Đưa hàng về bảo quản";
+  }
+  return currentStatus;
+}
+
 function declarationFamily(number: string) {
   return number.length >= 11 ? number.slice(0, 11) : number;
 }

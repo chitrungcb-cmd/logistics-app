@@ -28,6 +28,8 @@ type Entry = {
 
 type UserOption = { id: string; name: string; isActive?: boolean };
 
+type CostByPayer = { userId: string | null; userName: string; totalCost: number; count: number };
+
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 function formatVnd(amount: number) {
@@ -63,9 +65,10 @@ async function readApiJson(response: Response) {
   }
 }
 
-export default function PersonalAccountClient() {
+export default function PersonalAccountClient({ role }: { role: string }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
+  const [costByPayer, setCostByPayer] = useState<CostByPayer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -87,6 +90,16 @@ export default function PersonalAccountClient() {
       .catch((err) => setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra."))
       .finally(() => setIsLoading(false));
   }, []);
+
+  // Chi phí "do ai chi" là dữ liệu giá vốn ADMIN-only — chỉ ADMIN mới gọi (và endpoint cũng chặn
+  // 403 ở server), ACCOUNTANT xem trang này sẽ không thấy phần báo cáo chi.
+  useEffect(() => {
+    if (role !== "ADMIN") return;
+    fetch("/api/personal-account/cost-by-payer")
+      .then(readApiJson)
+      .then((json) => { if (json.success) setCostByPayer(json.data); })
+      .catch(() => { /* báo cáo phụ, lỗi tải không chặn trang chính */ });
+  }, [role]);
 
   useEffect(() => {
     const timers = savedTimers.current;
@@ -427,6 +440,36 @@ export default function PersonalAccountClient() {
           </table>
         </div>
       </section>
+
+      {role === "ADMIN" && (
+        <section className="rounded-xl border border-gray-200 bg-white p-5">
+          <h2 className="mb-1 font-semibold text-gray-900">Chi phí theo người chi</h2>
+          <p className="mb-3 text-xs text-gray-500">
+            Tổng chi phí lô hàng gom theo &quot;Do ai chi&quot; đã chọn ở bảng chi phí. Chỉ ADMIN xem được.
+          </p>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-gray-500">
+                <th className="py-2">Người chi</th>
+                <th className="py-2 text-right">Số khoản</th>
+                <th className="py-2 text-right">Tổng đã chi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {costByPayer.map((row) => (
+                <tr key={row.userId ?? "__none__"}>
+                  <td className="py-2 text-gray-700">{row.userName}</td>
+                  <td className="py-2 text-right text-gray-700">{row.count}</td>
+                  <td className="py-2 text-right font-medium text-gray-900">{formatVnd(row.totalCost)}</td>
+                </tr>
+              ))}
+              {costByPayer.length === 0 && (
+                <tr><td colSpan={3} className="py-6 text-center text-gray-400">Chưa gán &quot;Do ai chi&quot; cho khoản chi phí nào.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+      )}
 
       {error && <p className="text-sm text-red-600">{error}</p>}
     </div>

@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import PaginationControls from "@/components/PaginationControls";
 import Badge from "@/components/shipments/Badge";
 import AttachmentsCell from "@/components/shipments/AttachmentsCell";
 import GmailSyncPanel from "@/components/shipments/GmailSyncPanel";
+import ShipmentInfoModal from "@/components/shipments/ShipmentInfoModal";
 import TaskStepperCompact from "@/components/shipments/TaskStepperCompact";
 import {
   channelBadgeClass,
@@ -25,10 +25,10 @@ const LIST_REFRESH_INTERVAL_MS = 90 * 1000;
 const EMPTY_PAGINATION: PaginationMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 };
 
 export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
-  const router = useRouter();
   const [shipments, setShipments] = useState<ShipmentDTO[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedShipmentId, setSelectedShipmentId] = useState<string | null>(null);
   const [taskStepsSummary, setTaskStepsSummary] = useState<Record<string, (string | null)[]>>({});
   const [pagination, setPagination] = useState<PaginationMeta>(EMPTY_PAGINATION);
   const [currentPage, setCurrentPage] = useState(1);
@@ -72,6 +72,11 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
   const refreshList = useCallback(() => {
     void loadShipments();
   }, [loadShipments]);
+
+  const closeShipmentInfo = useCallback(() => {
+    setSelectedShipmentId(null);
+    refreshList();
+  }, [refreshList]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -237,10 +242,10 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
                     className="cursor-pointer align-top hover:bg-gray-50"
                     onClick={(event) => {
                       // Clicks on the row's own controls (attachment buttons/preview, links,
-                      // the hidden file input) must not also open the detail page.
+                      // the hidden file input) must not also open the information window.
                       const target = event.target as HTMLElement;
                       if (target.closest("a, button, input, select, textarea, label, [role='dialog']")) return;
-                      router.push(`/shipments/${shipment.id}`);
+                      setSelectedShipmentId(shipment.id);
                     }}
                   >
                     <td className="px-3 py-3 text-center text-gray-500">
@@ -309,6 +314,9 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
         </table>
       </div>
       <PaginationControls pagination={pagination} onPageChange={(page) => { setCurrentPage(page); setIsLoading(true); }} />
+      {selectedShipmentId && (
+        <ShipmentInfoModal shipmentId={selectedShipmentId} onClose={closeShipmentInfo} />
+      )}
     </div>
   );
 }

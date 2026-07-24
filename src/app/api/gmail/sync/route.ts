@@ -7,7 +7,13 @@ import { getAuthorizedGmailClient } from "@/lib/google";
 import { parseTokhaiExcel, type ParsedDeclaration } from "@/lib/tokhai-parser";
 import { saveUploadedFile } from "@/lib/save-upload";
 import { prisma } from "@/lib/prisma";
-import { generateShipmentCode, mergeDeclarationBranch, type Attachment } from "@/lib/shipment-constants";
+import {
+  generateShipmentCode,
+  isClearanceDecisionFilename,
+  mergeDeclarationBranch,
+  resolveSyncedShipmentStatus,
+  type Attachment,
+} from "@/lib/shipment-constants";
 import { applyCostPresetsToShipment } from "@/lib/cost-presets";
 import { ensureShipmentWorkflowTasks } from "@/lib/shipment-workflow";
 import { syncVendorInvoices, type VendorInvoiceSyncSummary } from "@/lib/vendor-invoice-sync";
@@ -113,12 +119,6 @@ function isDeclarationFile(filename: string) {
   return normalized.includes("tokhai") && normalized.endsWith(".xlsx");
 }
 
-// "QDTQ" = "Quyết định thông quan" — a different attachment than the channel-result printout,
-// sent once the declaration has cleared customs.
-function isClearanceDecisionFile(filename: string) {
-  return filename.toLowerCase().includes("qdtq");
-}
-
 /**
  * Upsert, not create: guards against the same message ID being processed twice in one run (Gmail's
  * search pagination has been observed returning a message on more than one page) without treating
@@ -213,6 +213,34 @@ async function findOrCreateCustomer(parsed: ParsedDeclaration): Promise<string |
   return existing.id;
 }
 
+/**
+ * Repairs shipments whose QDTQ attachment was saved by an older sync but whose status was not
+ * advanced. Those Gmail messages already have ProcessedEmail rows, so a normal re-sync will not
+ * revisit them.
+ */
+async function reconcileClearanceStatuses() {
+  const storedShipments = await prisma.shipment.findMany({
+    where: { status: "Đưa hàng về bảo quản" },
+    select: { id: true, attachments: true },
+  });
+  const clearedIds = storedShipments
+    .filter((shipment) => {
+      if (!Array.isArray(shipment.attachments)) return false;
+      return (shipment.attachments as unknown as Attachment[]).some(
+        (attachment) =>
+          typeof attachment?.name === "string" && isClearanceDecisionFilename(attachment.name)
+      );
+    })
+    .map((shipment) => shipment.id);
+
+  if (clearedIds.length === 0) return 0;
+  const result = await prisma.shipment.updateMany({
+    where: { id: { in: clearedIds }, status: "Đưa hàng về bảo quản" },
+    data: { status: "Thông quan" },
+  });
+  return result.count;
+}
+
 async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>, user: NonNullable<Awaited<ReturnType<typeof getSyncActor>>>) {
     // Set, not array: Gmail's search pagination isn't guaranteed collision-free across pages (seen
     // in practice returning the same message ID twice), and a duplicate ID in this list would hit
@@ -279,7 +307,10 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
         });
         const declarationBuffer = Buffer.from(declarationAttachment.data.data ?? "", "base64url");
         const parsed = await parseTokhaiExcel(declarationBuffer);
-        const isCleared = isClearanceDecisionFile(declarationPart.filename);
+        // The message commonly contains several ToKhai workbooks. The parser can use any declaration
+        // printout, but clearance is true when *any* attachment is the QDTQ decision—not only when the
+        // first workbook returned by Gmail happens to be QDTQ.
+        const isCleared = attachmentParts.some((part) => isClearanceDecisionFilename(part.filename));
         const rawSubject = getSubject(message);
         const subject = rawSubject ? extractGoodsName(rawSubject) : null;
 
@@ -320,9 +351,10 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
         if (existing) {
           const mergedAttachments = [...existingAttachments, ...savedAttachments];
 
-          let nextStatus = existing.status;
-          if (parsed.hasStorageInstruction) nextStatus = "Đưa hàng về bảo quản";
-          if (isCleared) nextStatus = "Thông quan";
+          const nextStatus = resolveSyncedShipmentStatus(existing.status, {
+            isCleared,
+            hasStorageInstruction: parsed.hasStorageInstruction,
+          });
 
           let declarationBranches: string[] = Array.isArray(existing.declarationBranches)
             ? (existing.declarationBranches as unknown as string[])
@@ -409,6 +441,9 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
         results.push({ messageId, status: "error", detail });
       }
     }
+
+    // Also fix records affected before the attachment-order bug was corrected.
+    updated += await reconcileClearanceStatuses();
 
     let invoiceSummary: VendorInvoiceSyncSummary = {
       scanned: 0,

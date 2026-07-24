@@ -210,9 +210,13 @@ rather than the email subject/body.
      numbers are otherwise unrelated-looking.
   3. Shared `invoiceNo` — the *only* way to find the record when VNACCS reissues the same declaration
      under a new number (a real amendment/resubmission), since nothing cross-references the old number in
-     that case. (Do not resurrect matching by shared 11-digit declaration-number prefix — that was tried
-     and produced false positives, merging two genuinely unrelated declarations that happened to be issued
-     by the same customs office around the same time.)
+     that case. **Guarded by `sharesDeclarationFamily()`**: an invoice match is only accepted when the new
+     declaration shares its 11-digit prefix with a declaration already on that shipment (i.e. it's a genuine
+     amendment of one). A commercial invoice routinely spans several genuinely-separate declarations
+     (different prefixes, `firstDeclarationNo` null) — without this guard those got wrongly merged into one
+     shipment (real bug, 2026-07: three unrelated máy khoan under invoice `855SWKH-2005C-1`). (Also: do not
+     resurrect matching by shared 11-digit prefix *directly* — that produced the inverse false positive,
+     merging unrelated declarations issued by the same customs office around the same time.)
   - **Match found** → `mergeDeclarationBranch()` (`src/lib/shipment-constants.ts`) decides whether the new
     declaration number replaces the existing one in `declarationBranches` (same 11-digit prefix = the
     *same* declaration, just amended — replace in place) or is appended as a genuinely new branch

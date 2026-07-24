@@ -55,6 +55,24 @@ export type Attachment = {
   uploadedAt: string;
 };
 
+function attachmentIdentity(attachment: Attachment) {
+  // Content-addressed private URLs may carry a display-name query. The path is the stored object.
+  return attachment.url.split(/[?#]/, 1)[0];
+}
+
+/** Keeps the first reference to each stored object, preventing duplicate attachment rows. */
+export function mergeUniqueAttachments(...groups: Attachment[][]) {
+  const merged: Attachment[] = [];
+  const seen = new Set<string>();
+  for (const attachment of groups.flat()) {
+    const identity = attachmentIdentity(attachment);
+    if (!identity || seen.has(identity)) continue;
+    seen.add(identity);
+    merged.push(attachment);
+  }
+  return merged;
+}
+
 /** VNACCS clearance-decision workbooks use names such as ToKhaiHQ7N_QDTQ_….xlsx. */
 export function isClearanceDecisionFilename(filename: string) {
   return filename.toLowerCase().includes("qdtq");
@@ -78,6 +96,24 @@ export function resolveSyncedShipmentStatus(
 
 function declarationFamily(number: string) {
   return number.length >= 11 ? number.slice(0, 11) : number;
+}
+
+/**
+ * True khi `newDeclarationNo` là bản sửa/nộp lại của một tờ khai đã có trên lô (cùng prefix 11 số với
+ * `declarationNo` hoặc một nhánh bất kỳ). Dùng để siết việc khớp theo số invoice: một invoice thương
+ * mại có thể phủ nhiều tờ khai HOÀN TOÀN riêng biệt (khác prefix, không có "số tờ khai đầu tiên") —
+ * những cái đó phải là lô riêng, không được gộp chỉ vì trùng invoice.
+ */
+export function sharesDeclarationFamily(
+  shipment: { declarationNo: string | null; declarationBranches: unknown },
+  newDeclarationNo: string
+): boolean {
+  const family = declarationFamily(newDeclarationNo);
+  const branches = Array.isArray(shipment.declarationBranches)
+    ? (shipment.declarationBranches as unknown[]).filter((b): b is string => typeof b === "string")
+    : [];
+  const existing = [shipment.declarationNo, ...branches].filter((n): n is string => Boolean(n));
+  return existing.some((n) => declarationFamily(n) === family);
 }
 
 /**

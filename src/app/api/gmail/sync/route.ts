@@ -10,7 +10,9 @@ import { prisma } from "@/lib/prisma";
 import {
   generateShipmentCode,
   isClearanceDecisionFilename,
+  mergeUniqueAttachments,
   mergeDeclarationBranch,
+  sharesDeclarationFamily,
   resolveSyncedShipmentStatus,
   type Attachment,
 } from "@/lib/shipment-constants";
@@ -173,7 +175,10 @@ async function findMatchingShipment(parsed: ParsedDeclaration) {
 
   if (parsed.invoiceNo) {
     const byInvoice = await prisma.shipment.findFirst({ where: { invoiceNo: parsed.invoiceNo } });
-    if (byInvoice) return byInvoice;
+    // Chỉ coi là cùng lô khi tờ khai mới là bản sửa/nộp lại của một tờ khai đã có trên lô đó (cùng
+    // prefix 11 số). Một invoice thương mại có thể phủ nhiều tờ khai riêng biệt (khác prefix, không có
+    // "số tờ khai đầu tiên"); những cái đó phải là lô riêng — không gộp chỉ vì trùng invoice.
+    if (byInvoice && sharesDeclarationFamily(byInvoice, parsed.declarationNo)) return byInvoice;
   }
 
   return null;
@@ -349,7 +354,7 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
         }
 
         if (existing) {
-          const mergedAttachments = [...existingAttachments, ...savedAttachments];
+          const mergedAttachments = mergeUniqueAttachments(existingAttachments, savedAttachments);
 
           const nextStatus = resolveSyncedShipmentStatus(existing.status, {
             isCleared,
@@ -417,7 +422,7 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
               customsOffice: parsed.customsOffice,
               consultationDate: parsed.consultationDate,
               status: isCleared ? "Thông quan" : parsed.hasStorageInstruction ? "Đưa hàng về bảo quản" : undefined,
-              attachments: savedAttachments,
+              attachments: mergeUniqueAttachments(savedAttachments),
             },
           });
           await Promise.all([

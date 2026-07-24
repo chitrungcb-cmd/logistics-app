@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   getDeclarationBranches,
   isClearanceDecisionFilename,
+  mergeUniqueAttachments,
   mergeDeclarationBranch,
   normalizeDeclarationBranches,
   resolveSyncedShipmentStatus,
+  sharesDeclarationFamily,
 } from "@/lib/shipment-constants";
 
 describe("declaration branches", () => {
@@ -26,6 +28,41 @@ describe("declaration branches", () => {
     expect(mergeDeclarationBranch(["108028471610", "108028471612"], "108028471610")).toEqual([
       "108028471610",
     ]);
+  });
+});
+
+describe("invoice-match guard (sharesDeclarationFamily)", () => {
+  it("accepts an amendment of an existing declaration (same 11-digit family)", () => {
+    // Bản sửa 108028471612 của tờ khai 108028471610 đã có trên lô — cùng prefix → cùng lô.
+    expect(
+      sharesDeclarationFamily(
+        { declarationNo: "108028471610", declarationBranches: null },
+        "108028471612"
+      )
+    ).toBe(true);
+    // Cùng họ với một nhánh (không phải declarationNo chính) cũng được chấp nhận.
+    expect(
+      sharesDeclarationFamily(
+        { declarationNo: "107369176020", declarationBranches: ["107369176020", "108399733040"] },
+        "108399733041"
+      )
+    ).toBe(true);
+  });
+
+  it("rejects a genuinely separate declaration that only shares the commercial invoice", () => {
+    // Bug thực tế: 3 tờ khai khác prefix, chung invoice 855SWKH-2005C-1 — KHÔNG được coi là cùng lô.
+    expect(
+      sharesDeclarationFamily(
+        { declarationNo: "107369176020", declarationBranches: ["107369176020"] },
+        "107174763950"
+      )
+    ).toBe(false);
+    expect(
+      sharesDeclarationFamily(
+        { declarationNo: "107369176020", declarationBranches: ["107369176020", "107174763950"] },
+        "108399733040"
+      )
+    ).toBe(false);
   });
 });
 
@@ -51,5 +88,17 @@ describe("Gmail shipment status sync", () => {
         hasStorageInstruction: true,
       })
     ).toBe("Thông quan");
+  });
+});
+
+describe("attachment deduplication", () => {
+  it("keeps one row when content-addressed URLs differ only by display name", () => {
+    const uploadedAt = "2026-07-24T00:00:00.000Z";
+    expect(
+      mergeUniqueAttachments(
+        [{ name: "a.pdf", url: "/api/attachments/file/attachments/sha256/ab/hash.pdf?name=a.pdf", uploadedAt }],
+        [{ name: "renamed.pdf", url: "/api/attachments/file/attachments/sha256/ab/hash.pdf?name=renamed.pdf", uploadedAt }]
+      )
+    ).toHaveLength(1);
   });
 });

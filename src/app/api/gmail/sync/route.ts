@@ -213,39 +213,7 @@ async function findOrCreateCustomer(parsed: ParsedDeclaration): Promise<string |
   return existing.id;
 }
 
-export async function POST(request: NextRequest) {
-  let ownsSyncLock = false;
-  try {
-    const user = await getSyncActor(request);
-    if (!user) return apiError("Chưa đăng nhập hoặc khóa tác vụ máy chủ không hợp lệ.", 401);
-    if (user.role !== "ADMIN") return apiError("Chỉ Admin mới được đồng bộ Gmail.", 403);
-
-    const gmail = await getAuthorizedGmailClient();
-    if (!gmail) {
-      return apiError("Chưa kết nối Gmail. Hãy bấm \"Kết nối Gmail\" trước.", 400);
-    }
-
-    if (syncInProgress) {
-      return apiSuccess({
-        scanned: 0,
-        newlyFound: 0,
-        created: 0,
-        updated: 0,
-        skipped: 0,
-        errors: 0,
-        invoicesScanned: 0,
-        invoicesCreated: 0,
-        invoicesMatched: 0,
-        invoicesUnmatched: 0,
-        invoicesNeedsReview: 0,
-        invoiceErrors: 0,
-        results: [],
-        inProgress: true,
-      }, 202);
-    }
-    syncInProgress = true;
-    ownsSyncLock = true;
-
+async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>, user: NonNullable<Awaited<ReturnType<typeof getSyncActor>>>) {
     // Set, not array: Gmail's search pagination isn't guaranteed collision-free across pages (seen
     // in practice returning the same message ID twice), and a duplicate ID in this list would hit
     // the ProcessedEmail unique constraint the second time it's processed.
@@ -467,7 +435,7 @@ export async function POST(request: NextRequest) {
       console.error("Missing-cost alert reconciliation failed:", notificationError);
     }
 
-    return apiSuccess({
+    return {
       scanned,
       newlyFound: messageIds.length,
       created,
@@ -481,7 +449,57 @@ export async function POST(request: NextRequest) {
       invoicesNeedsReview: invoiceSummary.needsReview,
       invoiceErrors: invoiceSummary.errors,
       results,
-    });
+    };
+}
+
+export async function POST(request: NextRequest) {
+  let ownsSyncLock = false;
+  const isCron = (request.headers.get("authorization") ?? "").startsWith("Bearer ");
+  try {
+    const user = await getSyncActor(request);
+    if (!user) return apiError("Chưa đăng nhập hoặc khóa tác vụ máy chủ không hợp lệ.", 401);
+    if (user.role !== "ADMIN") return apiError("Chỉ Admin mới được đồng bộ Gmail.", 403);
+
+    const gmail = await getAuthorizedGmailClient();
+    if (!gmail) {
+      return apiError("Chưa kết nối Gmail. Hãy bấm \"Kết nối Gmail\" trước.", 400);
+    }
+
+    if (syncInProgress) {
+      return apiSuccess({
+        scanned: 0,
+        newlyFound: 0,
+        created: 0,
+        updated: 0,
+        skipped: 0,
+        errors: 0,
+        invoicesScanned: 0,
+        invoicesCreated: 0,
+        invoicesMatched: 0,
+        invoicesUnmatched: 0,
+        invoicesNeedsReview: 0,
+        invoiceErrors: 0,
+        results: [],
+        inProgress: true,
+      }, 202);
+    }
+    syncInProgress = true;
+    ownsSyncLock = true;
+
+    // Cron (gọi bằng Bearer CRON_SECRET) chạy ngầm và trả 202 ngay để dịch vụ cron timeout ngắn
+    // (vd cron-job.org 30s) không hiểu nhầm là lỗi; server Hostinger là tiến trình lâu dài nên
+    // tác vụ nền vẫn chạy tới khi xong. UI vẫn await để hiện kết quả đồng bộ như cũ.
+    if (isCron) {
+      void runGmailSync(gmail, user)
+        .catch((error) => console.error("Background Gmail sync failed:", error))
+        .finally(() => {
+          syncInProgress = false;
+        });
+      ownsSyncLock = false; // tác vụ nền tự nhả khóa; finally ngoài không đụng tới
+      return apiSuccess({ started: true, inProgress: true }, 202);
+    }
+
+    return apiSuccess(await runGmailSync(gmail, user));
   } catch (error) {
     console.error("POST /api/gmail/sync failed:", error);
     return apiError("Đồng bộ email thất bại.", 500);

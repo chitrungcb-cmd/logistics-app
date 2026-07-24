@@ -79,7 +79,6 @@ export async function POST(request: NextRequest) {
         taskId: task.id,
         taskTitle: task.title,
         shipmentId: task.relatedShipment?.id ?? null,
-        shipmentCode: task.relatedShipment?.shipmentCode ?? null,
       });
     }
 

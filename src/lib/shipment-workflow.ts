@@ -270,7 +270,6 @@ export async function reassignOpenShipmentWorkflowTasks({
       relatedShipmentId: true,
       relatedShipment: {
         select: {
-          shipmentCode: true,
           declarationNo: true,
           customerName: true,
           goodsName: true,
@@ -298,7 +297,6 @@ export async function reassignOpenShipmentWorkflowTasks({
         notifyShipmentAssigned({
           recipientUserIds: [assignedToUserId],
           shipmentId,
-          shipmentCode: shipment.shipmentCode,
           declarationNo: shipment.declarationNo,
           customerName: shipment.customerName,
           goodsName: shipment.goodsName,

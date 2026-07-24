@@ -12,11 +12,19 @@ type Task = {
   title: string;
   description: string | null;
   status: string;
+  updatedAt: string;
   dueDate: string | null;
   attachmentUrl: string | null;
   assignedTo: { id: string; name: string; email: string };
   createdBy: { id: string; name: string; email: string };
   relatedShipment: { id: string; shipmentCode: string; customerName: string } | null;
+  statusLogs: Array<{
+    id: string;
+    fromStatus: string;
+    toStatus: string;
+    createdAt: string;
+    actor: { id: string; name: string };
+  }>;
 };
 
 export default function TaskDetailClient({ taskId, canManage }: { taskId: string; canManage: boolean }) {
@@ -35,6 +43,7 @@ export default function TaskDetailClient({ taskId, canManage }: { taskId: string
   const [saveError, setSaveError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isProgressDetailOpen, setIsProgressDetailOpen] = useState(false);
 
   useEffect(() => {
     fetch(`/api/tasks/${taskId}`)
@@ -87,6 +96,7 @@ export default function TaskDetailClient({ taskId, canManage }: { taskId: string
       if (!res.ok || !json.success) throw new Error(json.error || "Cập nhật thất bại.");
       setTask(json.data);
       setSuccessMessage("Cập nhật nhiệm vụ thành công.");
+      setIsProgressDetailOpen(true);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
     } finally {
@@ -231,11 +241,144 @@ export default function TaskDetailClient({ taskId, canManage }: { taskId: string
           </form>
         </section>
       </div>
+      {isProgressDetailOpen && (
+        <ProgressDetailModal
+          task={task}
+          onClose={() => setIsProgressDetailOpen(false)}
+          onPreviewAttachment={(url) => setPreviewUrl(url)}
+        />
+      )}
       <AttachmentPreviewModal
         key={previewUrl}
         attachment={previewUrl ? { name: previewUrl.split("/").pop() || "file", url: previewUrl, uploadedAt: "" } : null}
         onClose={() => setPreviewUrl(null)}
       />
+    </div>
+  );
+}
+
+function ProgressDetailModal({
+  task,
+  onClose,
+  onPreviewAttachment,
+}: {
+  task: Task;
+  onClose: () => void;
+  onPreviewAttachment: (url: string) => void;
+}) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="progress-detail-title"
+        className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-blue-600">Đã cập nhật thành công</p>
+            <h2 id="progress-detail-title" className="mt-1 text-xl font-semibold text-gray-900">
+              Chi tiết tiến trình
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-2 text-xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+            aria-label="Đóng cửa sổ chi tiết tiến trình"
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="space-y-5 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-gray-50 p-4">
+            <div>
+              <p className="text-lg font-semibold text-gray-900">{task.title}</p>
+              <p className="mt-1 text-sm text-gray-500">
+                Cập nhật lúc {new Date(task.updatedAt).toLocaleString("vi-VN")}
+              </p>
+            </div>
+            <Badge
+              label={TASK_STATUS_LABELS[task.status] ?? task.status}
+              className={taskStatusBadgeClass(task.status)}
+            />
+          </div>
+
+          <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Info label="Người phụ trách" value={`${task.assignedTo.name} (${task.assignedTo.email})`} />
+            <Info label="Người giao việc" value={`${task.createdBy.name} (${task.createdBy.email})`} />
+          </dl>
+
+          <section>
+            <h3 className="text-sm font-semibold text-gray-900">Ghi chú tiến độ</h3>
+            <p className="mt-2 whitespace-pre-wrap rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-700">
+              {task.description || "Chưa có ghi chú."}
+            </p>
+          </section>
+
+          {task.attachmentUrl && (
+            <section>
+              <h3 className="text-sm font-semibold text-gray-900">Chứng từ đính kèm</h3>
+              <button
+                type="button"
+                onClick={() => onPreviewAttachment(task.attachmentUrl!)}
+                className="mt-2 text-sm font-medium text-blue-600 hover:underline"
+              >
+                Xem {task.attachmentUrl.split("/").pop() || "file đính kèm"}
+              </button>
+            </section>
+          )}
+
+          <section>
+            <h3 className="text-sm font-semibold text-gray-900">Lịch sử trạng thái</h3>
+            <ul className="mt-2 divide-y divide-gray-100 rounded-lg border border-gray-200">
+              {task.statusLogs.map((log) => (
+                <li key={log.id} className="flex flex-wrap items-start justify-between gap-2 px-3 py-3 text-sm">
+                  <span className="text-gray-700">
+                    {TASK_STATUS_LABELS[log.fromStatus] ?? log.fromStatus} →{" "}
+                    <span className="font-medium">{TASK_STATUS_LABELS[log.toStatus] ?? log.toStatus}</span>
+                    {" · "}
+                    {log.actor.name}
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    {new Date(log.createdAt).toLocaleString("vi-VN")}
+                  </span>
+                </li>
+              ))}
+              {task.statusLogs.length === 0 && (
+                <li className="px-3 py-4 text-sm text-gray-400">
+                  Chưa có lần thay đổi trạng thái nào được ghi nhận.
+                </li>
+              )}
+            </ul>
+          </section>
+        </div>
+
+        <footer className="flex justify-end border-t border-gray-200 px-5 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Đóng
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }

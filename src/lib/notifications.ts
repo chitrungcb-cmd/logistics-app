@@ -55,25 +55,23 @@ export async function syncMissingActualCostAlerts(now = new Date()) {
   });
 }
 
-/** Formats the "- Lô hàng {code}" suffix shared by both notification message templates. */
-function shipmentSuffix(shipmentCode: string | null) {
-  return shipmentCode ? ` - Lô hàng ${shipmentCode}` : "";
-}
-
 function shipmentAssignmentMessage(params: {
   declarationNo: string | null;
-  shipmentCode: string;
   customerName: string;
   goodsName: string | null;
 }) {
-  const reference = params.declarationNo ? `TK ${params.declarationNo}` : params.shipmentCode;
-  return `Bạn được phân công phụ trách lô hàng · ${reference} · ${params.customerName}${params.goodsName ? ` · ${params.goodsName}` : ""}`;
+  const details = [
+    "Bạn được phân công phụ trách lô hàng",
+    params.declarationNo ? `TK ${params.declarationNo}` : null,
+    params.customerName,
+    params.goodsName,
+  ].filter((value): value is string => Boolean(value));
+  return details.join(" · ");
 }
 
 export async function notifyShipmentAssigned(params: {
   recipientUserIds: string[];
   shipmentId: string;
-  shipmentCode: string;
   declarationNo: string | null;
   customerName: string;
   goodsName: string | null;
@@ -105,7 +103,6 @@ export async function notifyNewShipmentAssignees(params: {
   const shipment = await prisma.shipment.findUnique({
     where: { id: params.shipmentId },
     select: {
-      shipmentCode: true,
       declarationNo: true,
       customerName: true,
       goodsName: true,
@@ -125,7 +122,6 @@ export async function notifyNewShipmentAssignees(params: {
   await notifyShipmentAssigned({
     recipientUserIds: recipients,
     shipmentId: params.shipmentId,
-    shipmentCode: shipment.shipmentCode,
     declarationNo: shipment.declarationNo,
     customerName: shipment.customerName,
     goodsName: shipment.goodsName,
@@ -138,13 +134,12 @@ export async function notifyTaskAssigned(params: {
   taskId: string;
   taskTitle: string;
   shipmentId: string | null;
-  shipmentCode: string | null;
 }) {
   await prisma.notification.create({
     data: {
       userId: params.assignedToUserId,
       type: "TASK_ASSIGNED",
-      message: `Bạn được giao: ${params.taskTitle}${shipmentSuffix(params.shipmentCode)}`,
+      message: `Bạn được giao: ${params.taskTitle}`,
       relatedTaskId: params.taskId,
       relatedShipmentId: params.shipmentId,
     },
@@ -159,10 +154,9 @@ export async function notifyTaskProgressUpdate(params: {
   taskTitle: string;
   newStatusLabel: string;
   shipmentId: string | null;
-  shipmentCode: string | null;
   recipientUserIds: (string | null | undefined)[];
 }) {
-  const message = `${params.actorName} đã cập nhật ${params.taskTitle} sang ${params.newStatusLabel}${shipmentSuffix(params.shipmentCode)}`;
+  const message = `${params.actorName} đã cập nhật ${params.taskTitle} sang ${params.newStatusLabel}`;
   const recipients = [...new Set(params.recipientUserIds.filter((id): id is string => !!id))].filter(
     (id) => id !== params.actorUserId
   );

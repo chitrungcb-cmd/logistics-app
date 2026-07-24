@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { notificationMessageForDisplay } from "@/lib/notification-message";
 
 type Notification = {
   id: string;
@@ -132,7 +133,7 @@ export default function NotificationBell() {
                   n.isRead ? "text-gray-500" : "bg-blue-50/50 font-medium text-gray-900"
                 }`}
               >
-                <p>{n.message}</p>
+                <p>{notificationMessageForDisplay(n.message)}</p>
                 <p className="mt-0.5 text-xs text-gray-400">
                   {new Date(n.createdAt).toLocaleString("vi-VN")}
                 </p>

@@ -9,6 +9,16 @@ const TASK_INCLUDE = {
   assignedTo: { select: { id: true, name: true, email: true } },
   createdBy: { select: { id: true, name: true, email: true } },
   relatedShipment: { select: { id: true, shipmentCode: true, customerName: true } },
+  statusLogs: {
+    select: {
+      id: true,
+      fromStatus: true,
+      toStatus: true,
+      createdAt: true,
+      actor: { select: { id: true, name: true } },
+    },
+    orderBy: { createdAt: "desc" as const },
+  },
 } as const;
 
 // Fields a FIELD_STAFF may change on their own task: progress status, a progress note (reuses
@@ -49,7 +59,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const existing = await prisma.task.findUnique({
       where: { id },
       include: {
-        relatedShipment: { select: { id: true, shipmentCode: true, customer: { select: { assignedUserId: true } } } },
+        relatedShipment: { select: { id: true, customer: { select: { assignedUserId: true } } } },
       },
     });
     if (!existing) return apiError("Không tìm thấy nhiệm vụ.", 404);
@@ -73,19 +83,20 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     const task = await prisma.task.update({ where: { id }, data, include: TASK_INCLUDE });
 
-    if (typeof data.status === "string" && data.status !== existing.status) {
-      await prisma.taskStatusLog.create({
-        data: {
-          taskId: task.id,
-          actorUserId: user.id,
-          fromStatus: existing.status,
-          toStatus: data.status as typeof existing.status,
-        },
-      });
-    }
+    const statusLog =
+      typeof data.status === "string" && data.status !== existing.status
+        ? await prisma.taskStatusLog.create({
+            data: {
+              taskId: task.id,
+              actorUserId: user.id,
+              fromStatus: existing.status,
+              toStatus: data.status as typeof existing.status,
+            },
+            include: { actor: { select: { id: true, name: true } } },
+          })
+        : null;
 
     const shipmentId = existing.relatedShipment?.id ?? null;
-    const shipmentCode = existing.relatedShipment?.shipmentCode ?? null;
 
     if (typeof data.assignedToUserId === "string" && data.assignedToUserId !== existing.assignedToUserId) {
       await notifyTaskAssigned({
@@ -93,7 +104,6 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         taskId: task.id,
         taskTitle: task.title,
         shipmentId,
-        shipmentCode,
       });
     }
 
@@ -105,12 +115,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         taskTitle: task.title,
         newStatusLabel: TASK_STATUS_LABELS[data.status] ?? data.status,
         shipmentId,
-        shipmentCode,
         recipientUserIds: [existing.relatedShipment?.customer?.assignedUserId, existing.createdByUserId],
       });
     }
 
-    return apiSuccess(task);
+    return apiSuccess(statusLog ? { ...task, statusLogs: [statusLog, ...task.statusLogs] } : task);
   } catch (error) {
     console.error("PATCH /api/tasks/[id] failed:", error);
     return apiError("Không thể cập nhật nhiệm vụ.", 500);

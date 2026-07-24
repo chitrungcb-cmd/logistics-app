@@ -3,17 +3,20 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
-type CompanyAccount = { id: string; name: string; isActive: boolean; chi: number; count: number };
-type Person = { id: string; name: string; chi: number; count: number };
+type Account = { id: string; name: string; isActive?: boolean; thu: number; chi: number; balance: number; chiCount: number; thuCount: number };
 type Report = {
-  companyThu: number;
-  companyAccounts: CompanyAccount[];
-  persons: Person[];
-  unassigned: { chi: number; count: number };
+  companyAccounts: Account[];
+  persons: Account[];
+  unassignedChi: { amount: number; count: number };
+  unassignedThu: { amount: number; count: number };
 };
 
 function formatVnd(n: number) {
   return n.toLocaleString("vi-VN") + " đ";
+}
+
+function Balance({ value }: { value: number }) {
+  return <span className={value >= 0 ? "text-blue-700" : "text-orange-700"}>{formatVnd(value)}</span>;
 }
 
 export default function CashFlowReportClient() {
@@ -68,9 +71,8 @@ export default function CashFlowReportClient() {
     await load();
   }
 
-  const companyChiTotal = report?.companyAccounts.reduce((s, a) => s + a.chi, 0) ?? 0;
-  const companyBalance = (report?.companyThu ?? 0) - companyChiTotal;
-  const personChiTotal = report?.persons.reduce((s, p) => s + p.chi, 0) ?? 0;
+  const totalThu = report ? [...report.companyAccounts, ...report.persons].reduce((s, a) => s + a.thu, 0) : 0;
+  const totalChi = report ? [...report.companyAccounts, ...report.persons].reduce((s, a) => s + a.chi, 0) + report.unassignedChi.amount : 0;
 
   return (
     <div className="space-y-6 p-8">
@@ -78,7 +80,7 @@ export default function CashFlowReportClient() {
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Thu – chi theo tài khoản</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Ai thu, ai chi những gì. THU công ty = tiền thu qua hóa đơn; CHI = chi phí thực tế theo &quot;Chi từ TK&quot;.
+            Ai thu, ai chi những gì. THU = tiền vào theo &quot;TK nhận tiền&quot;; CHI = chi phí thực tế theo &quot;Chi từ TK&quot;.
           </p>
         </div>
         <Link href="/reports" className="text-sm text-blue-600 hover:underline">← Báo cáo</Link>
@@ -90,23 +92,21 @@ export default function CashFlowReportClient() {
         <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>
       ) : report ? (
         <>
-          {/* KPI công ty */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-              <p className="text-xs font-medium text-emerald-700">THU công ty (qua hóa đơn)</p>
-              <p className="mt-1 text-2xl font-bold text-emerald-800">{formatVnd(report.companyThu)}</p>
+              <p className="text-xs font-medium text-emerald-700">Tổng thu</p>
+              <p className="mt-1 text-2xl font-bold text-emerald-800">{formatVnd(totalThu)}</p>
             </div>
             <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-              <p className="text-xs font-medium text-red-700">CHI từ các TK công ty</p>
-              <p className="mt-1 text-2xl font-bold text-red-800">{formatVnd(companyChiTotal)}</p>
+              <p className="text-xs font-medium text-red-700">Tổng chi</p>
+              <p className="mt-1 text-2xl font-bold text-red-800">{formatVnd(totalChi)}</p>
             </div>
-            <div className={`rounded-xl border p-4 ${companyBalance >= 0 ? "border-blue-200 bg-blue-50" : "border-orange-200 bg-orange-50"}`}>
-              <p className={`text-xs font-medium ${companyBalance >= 0 ? "text-blue-700" : "text-orange-700"}`}>Số dư công ty (THU − CHI)</p>
-              <p className={`mt-1 text-2xl font-bold ${companyBalance >= 0 ? "text-blue-800" : "text-orange-800"}`}>{formatVnd(companyBalance)}</p>
+            <div className={`rounded-xl border p-4 ${totalThu - totalChi >= 0 ? "border-blue-200 bg-blue-50" : "border-orange-200 bg-orange-50"}`}>
+              <p className={`text-xs font-medium ${totalThu - totalChi >= 0 ? "text-blue-700" : "text-orange-700"}`}>Số dư (Thu − Chi)</p>
+              <p className="mt-1 text-2xl font-bold"><Balance value={totalThu - totalChi} /></p>
             </div>
           </div>
 
-          {/* Tài khoản công ty + chi theo từng TK */}
           <section className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="font-semibold text-gray-900">Tài khoản công ty</h2>
@@ -123,70 +123,72 @@ export default function CashFlowReportClient() {
                 </button>
               </div>
             </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-left text-gray-500">
-                  <th className="py-2">Tài khoản</th>
-                  <th className="py-2 text-right">Số khoản chi</th>
-                  <th className="py-2 text-right">Tổng chi</th>
-                  <th className="py-2 text-right">Trạng thái</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {report.companyAccounts.length === 0 && (
-                  <tr><td colSpan={4} className="py-6 text-center text-gray-400">Chưa có tài khoản công ty. Thêm ở ô trên.</td></tr>
-                )}
-                {report.companyAccounts.map((a) => (
-                  <tr key={a.id} className={a.isActive ? "" : "opacity-50"}>
-                    <td className="py-2 font-medium text-gray-900">{a.name}</td>
-                    <td className="py-2 text-right text-gray-600">{a.count}</td>
-                    <td className="py-2 text-right font-medium text-red-700">{formatVnd(a.chi)}</td>
-                    <td className="py-2 text-right">
-                      <button type="button" onClick={() => toggleAccount(a.id, a.isActive)} className="text-xs text-blue-600 hover:underline">
-                        {a.isActive ? "Đang dùng · Tắt" : "Đã tắt · Bật"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <AccountTable rows={report.companyAccounts} onToggle={toggleAccount} showToggle />
           </section>
 
-          {/* Chi theo cá nhân */}
           <section className="rounded-xl border border-gray-200 bg-white p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900">Chi theo cá nhân</h2>
-              <span className="text-sm text-gray-500">Tổng: {formatVnd(personChiTotal)}</span>
-            </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-left text-gray-500">
-                  <th className="py-2">Người chi</th>
-                  <th className="py-2 text-right">Số khoản</th>
-                  <th className="py-2 text-right">Tổng chi</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {report.persons.filter((p) => p.count > 0).length === 0 && (
-                  <tr><td colSpan={3} className="py-6 text-center text-gray-400">Chưa có khoản chi nào gắn cá nhân.</td></tr>
-                )}
-                {report.persons.filter((p) => p.count > 0).map((p) => (
-                  <tr key={p.id}>
-                    <td className="py-2 font-medium text-gray-900">{p.name}</td>
-                    <td className="py-2 text-right text-gray-600">{p.count}</td>
-                    <td className="py-2 text-right font-medium text-red-700">{formatVnd(p.chi)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {report.unassigned.count > 0 && (
-              <p className="mt-3 text-xs text-amber-700">
-                ⚠ Còn {report.unassigned.count} khoản chi ({formatVnd(report.unassigned.chi)}) chưa gán &quot;Chi từ TK&quot; — cập nhật trong bảng chi phí để báo cáo đủ.
-              </p>
-            )}
+            <h2 className="mb-4 font-semibold text-gray-900">Cá nhân</h2>
+            <AccountTable rows={report.persons.filter((p) => p.thu > 0 || p.chi > 0)} emptyText="Chưa có thu/chi nào gắn cá nhân." />
           </section>
+
+          {(report.unassignedChi.count > 0 || report.unassignedThu.count > 0) && (
+            <div className="space-y-1 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              {report.unassignedChi.count > 0 && (
+                <p>⚠ {report.unassignedChi.count} khoản chi ({formatVnd(report.unassignedChi.amount)}) <b>chưa gán &quot;Chi từ TK&quot;</b> — coi như <b>chưa chi</b>, cập nhật trong bảng chi phí để báo cáo đủ.</p>
+              )}
+              {report.unassignedThu.count > 0 && (
+                <p>⚠ {report.unassignedThu.count} khoản thu ({formatVnd(report.unassignedThu.amount)}) <b>chưa gán &quot;TK nhận tiền&quot;</b> — cập nhật khi ghi nhận thanh toán ở Công nợ.</p>
+              )}
+            </div>
+          )}
         </>
       ) : null}
     </div>
+  );
+}
+
+function AccountTable({
+  rows,
+  onToggle,
+  showToggle,
+  emptyText,
+}: {
+  rows: Account[];
+  onToggle?: (id: string, isActive: boolean) => void;
+  showToggle?: boolean;
+  emptyText?: string;
+}) {
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="border-b border-gray-200 text-left text-gray-500">
+          <th className="py-2">Tài khoản</th>
+          <th className="py-2 text-right">Thu</th>
+          <th className="py-2 text-right">Chi</th>
+          <th className="py-2 text-right">Số dư</th>
+          {showToggle && <th className="py-2 text-right">Trạng thái</th>}
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-gray-100">
+        {rows.length === 0 && (
+          <tr><td colSpan={showToggle ? 5 : 4} className="py-6 text-center text-gray-400">{emptyText ?? "Chưa có tài khoản. Thêm ở ô trên."}</td></tr>
+        )}
+        {rows.map((a) => (
+          <tr key={a.id} className={a.isActive === false ? "opacity-50" : ""}>
+            <td className="py-2 font-medium text-gray-900">{a.name}</td>
+            <td className="py-2 text-right font-medium text-emerald-700">{a.thu > 0 ? formatVnd(a.thu) : <span className="text-gray-300">—</span>}</td>
+            <td className="py-2 text-right font-medium text-red-700">{a.chi > 0 ? formatVnd(a.chi) : <span className="text-gray-300">—</span>}</td>
+            <td className="py-2 text-right font-semibold"><Balance value={a.balance} /></td>
+            {showToggle && onToggle && (
+              <td className="py-2 text-right">
+                <button type="button" onClick={() => onToggle(a.id, a.isActive !== false)} className="text-xs text-blue-600 hover:underline">
+                  {a.isActive !== false ? "Đang dùng · Tắt" : "Đã tắt · Bật"}
+                </button>
+              </td>
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
       include: {
         shipment: { select: { id: true, shipmentCode: true, customerName: true, goodsName: true, declarationNo: true, declarationDate: true, invoiceNo: true } },
         vendor: { select: { id: true, name: true, type: true } },
+        paidBy: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -83,6 +84,11 @@ export async function POST(request: NextRequest) {
       : null;
     if (vendorId && !vendor) return apiError("Nhà cung cấp không hợp lệ.", 400);
 
+    const paidByUserId = typeof body.paidByUserId === "string" && body.paidByUserId ? body.paidByUserId : null;
+    if (paidByUserId && !(await prisma.user.findUnique({ where: { id: paidByUserId }, select: { id: true } }))) {
+      return apiError("Người chi không hợp lệ.", 400);
+    }
+
     const cost = await prisma.$transaction(async (tx) => {
       const created = await tx.shipmentCost.create({
         data: {
@@ -100,6 +106,7 @@ export async function POST(request: NextRequest) {
           customLabel: typeof body.customLabel === "string" ? body.customLabel.trim() || null : null,
           note: body.note || null,
           vendorId,
+          paidByUserId,
         },
         include: {
           shipment: { select: { id: true, shipmentCode: true, customerName: true, goodsName: true, declarationNo: true, declarationDate: true, invoiceNo: true } },

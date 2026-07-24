@@ -24,6 +24,7 @@ type CostDraft = {
   invoiceNumber: string;
   note: string;
   vendorId: string;
+  paidByUserId: string;
   isActual: boolean;
   presetId?: string | null;
 };
@@ -31,6 +32,8 @@ type CostDraft = {
 type CostSaveStatus = "idle" | "saving" | "saved" | "error";
 
 type VendorOption = { id: string; name: string; type: string | null };
+
+type UserOption = { id: string; name: string; isActive: boolean };
 
 type FinanceLinks = {
   debts: Array<{
@@ -81,6 +84,7 @@ function newCost(category: string = COST_CATEGORY_OPTIONS[0]): CostDraft {
     invoiceNumber: "",
     note: "",
     vendorId: "",
+    paidByUserId: "",
     isActual: true,
   };
 }
@@ -116,6 +120,7 @@ export default function ShipmentFinanceEditorModal({
   const [invoiceAmountInput, setInvoiceAmountInput] = useState("");
   const [noInvoiceOverride, setNoInvoiceOverride] = useState<string | null>(null);
   const [vendors, setVendors] = useState<VendorOption[]>([]);
+  const [users, setUsers] = useState<UserOption[]>([]);
   const [financeLinks, setFinanceLinks] = useState<FinanceLinks>({ debts: [], invoices: [] });
   const [activeTab, setActiveTab] = useState<"quote" | "cost">("cost");
   const [isLoading, setIsLoading] = useState(true);
@@ -143,10 +148,11 @@ export default function ShipmentFinanceEditorModal({
       fetch(`/api/shipments/${shipment.id}/quote-lines`).then(readApiJson),
       fetch("/api/vendors").then(readApiJson),
       fetch(`/api/shipments/${shipment.id}/finance-links`).then(readApiJson),
+      fetch("/api/users").then(readApiJson),
     ])
-      .then(([costJson, quoteJson, vendorJson, financeJson]) => {
+      .then(([costJson, quoteJson, vendorJson, financeJson, userJson]) => {
         if (!costJson.success) throw new Error(costJson.error || "Không thể tải chi phí.");
-        const loadedCosts: CostDraft[] = costJson.data.map((cost: { id: string; category: string; customLabel?: string | null; unit?: string | null; unitPrice: number; quantity: number; invoiceNumber: string | null; note: string | null; presetId?: string | null; vendorId?: string | null; isActual?: boolean }) => ({
+        const loadedCosts: CostDraft[] = costJson.data.map((cost: { id: string; category: string; customLabel?: string | null; unit?: string | null; unitPrice: number; quantity: number; invoiceNumber: string | null; note: string | null; presetId?: string | null; vendorId?: string | null; paidByUserId?: string | null; isActual?: boolean }) => ({
           clientKey: `cost-${cost.id}`,
           id: cost.id,
           category: cost.category,
@@ -157,6 +163,7 @@ export default function ShipmentFinanceEditorModal({
           invoiceNumber: cost.invoiceNumber || "",
           note: cost.note || "",
           vendorId: isVendorlessCostCategory(cost.category) ? "" : cost.vendorId || "",
+          paidByUserId: cost.paidByUserId || "",
           presetId: cost.presetId,
           isActual: cost.isActual ?? true,
         }));
@@ -193,6 +200,7 @@ export default function ShipmentFinanceEditorModal({
         setQuotes(loadedQuotes.length > 0 ? loadedQuotes : defaultQuotes());
         if (vendorJson.success) setVendors(vendorJson.data);
         if (financeJson.success) setFinanceLinks(financeJson.data);
+        if (userJson.success) setUsers(userJson.data);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra."))
       .finally(() => setIsLoading(false));
@@ -490,15 +498,17 @@ export default function ShipmentFinanceEditorModal({
                   <p className="text-lg font-bold text-emerald-700">{formatVnd(totalCost)}</p>
                 </div>
                 <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-                  <table className="min-w-[1050px] divide-y divide-gray-200 text-sm">
-                    <thead className="bg-gray-50"><tr><th className="px-2 py-2 text-left text-gray-500">Hạng mục</th><th className="px-2 py-2 text-left text-gray-500">Nhà cung cấp</th><th className="px-2 py-2 text-left text-gray-500">Đơn giá</th><th className="px-2 py-2 text-left text-gray-500">SL</th><th className="px-2 py-2 text-left text-gray-500">ĐVT</th><th className="px-2 py-2 text-left text-gray-500">Số HĐ</th><th className="px-2 py-2 text-left text-gray-500">Ghi chú</th><th></th></tr></thead>
+                  <table className="min-w-[1360px] divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50"><tr><th className="px-2 py-2 text-left text-gray-500">Hạng mục</th><th className="px-2 py-2 text-left text-gray-500">Nhà cung cấp</th><th className="px-2 py-2 text-left text-gray-500">Đơn giá</th><th className="px-2 py-2 text-left text-gray-500">SL</th><th className="px-2 py-2 text-left text-gray-500">ĐVT</th><th className="px-2 py-2 text-left text-gray-500">Thành tiền</th><th className="px-2 py-2 text-left text-gray-500">Số HĐ</th><th className="px-2 py-2 text-left text-gray-500">Do ai chi</th><th className="px-2 py-2 text-left text-gray-500">Ghi chú</th><th></th></tr></thead>
                     <tbody className="divide-y divide-gray-100">{costs.map((cost, index) => <tr key={cost.clientKey}>
                       <td className="px-2 py-2"><select value={cost.category} onChange={(event) => { const category = event.target.value; updateCost(index, { category, invoiceNumber: isInvoiceCostCategory(category) ? cost.invoiceNumber : "", vendorId: isVendorlessCostCategory(category) ? "" : cost.vendorId }, true); }} className="input min-w-32">{COST_CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{COST_CATEGORY_LABELS[category]}</option>)}</select><input value={cost.customLabel} onChange={(event) => updateCost(index, { customLabel: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input mt-1 min-w-32 text-xs" placeholder="Tên riêng (tùy chọn)" />{cost.presetId && !cost.isActual && <span className="mt-1 block text-[10px] font-medium text-amber-700">Dự kiến tự động</span>}{cost.isActual && cost.id && <span className="mt-1 block text-[10px] font-medium text-emerald-700">✓ Chi phí thực tế</span>}</td>
                       <td className="px-2 py-2">{isVendorlessCostCategory(cost.category) ? <div className="flex min-h-10 min-w-48 items-center rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-gray-500">Không áp dụng</div> : <select value={cost.vendorId} onChange={(event) => updateCost(index, { vendorId: event.target.value }, true)} className={`input min-w-48 ${cost.vendorId ? "" : "border-amber-300 bg-amber-50"}`}><option value="">Chưa gắn nhà cung cấp</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}{vendor.type ? ` · ${vendor.type}` : ""}</option>)}</select>}</td>
                       <td className="px-2 py-2"><MoneyInput value={cost.unitPrice} onValueChange={(raw) => updateCost(index, { unitPrice: raw }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-32" /></td>
                       <td className="px-2 py-2"><input type="number" min="0" step="any" value={cost.quantity} onChange={(event) => updateCost(index, { quantity: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-20" /></td>
                       <td className="px-2 py-2"><input value={cost.unit} onChange={(event) => updateCost(index, { unit: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input w-20" placeholder="lần, xe..." /></td>
+                      <td className="whitespace-nowrap px-2 py-2 font-medium text-gray-900">{formatVnd((Number(cost.unitPrice) || 0) * (Number(cost.quantity) || 0))}</td>
                       <td className="px-2 py-2"><input value={cost.invoiceNumber} onChange={(event) => updateCost(index, { invoiceNumber: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} disabled={!isInvoiceCostCategory(cost.category)} className="input w-32" placeholder={isInvoiceCostCategory(cost.category) ? "Số HĐ" : "—"} /></td>
+                      <td className="px-2 py-2"><select value={cost.paidByUserId} onChange={(event) => updateCost(index, { paidByUserId: event.target.value }, true)} className="input min-w-40"><option value="">Chưa chọn</option>{users.filter((u) => u.isActive || u.id === cost.paidByUserId).map((u) => <option key={u.id} value={u.id}>{u.name}{!u.isActive ? " (đã khóa)" : ""}</option>)}</select></td>
                       <td className="px-2 py-2"><input value={cost.note} onChange={(event) => updateCost(index, { note: event.target.value }, true)} onBlur={() => flushCostSave(index)} onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()} className="input min-w-52" placeholder="Ghi chú" /></td>
                       <td className="px-2 py-2"><div className="flex min-w-36 flex-col items-start gap-1"><SaveIndicator status={costSaveStatus[cost.clientKey] || "idle"} hasValue={!!cost.id || Number(cost.unitPrice) > 0} />{cost.id && !cost.isActual && <button type="button" onClick={() => updateCost(index, { isActual: true }, true)} className="whitespace-nowrap text-xs font-medium text-emerald-700 hover:underline">Xác nhận thực tế</button>}<button type="button" onClick={() => deleteCost(index)} disabled={costSaveStatus[cost.clientKey] === "saving"} className="text-xs text-red-600 hover:underline disabled:opacity-40">Xóa</button></div></td>
                     </tr>)}</tbody>

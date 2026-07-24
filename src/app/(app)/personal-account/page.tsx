@@ -7,5 +7,5 @@ export default async function PersonalAccountPage() {
   if (!user) redirect("/login");
   if (user.role === "FIELD_STAFF") redirect("/forbidden");
 
-  return <PersonalAccountClient />;
+  return <PersonalAccountClient role={user.role} />;
 }

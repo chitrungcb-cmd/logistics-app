@@ -141,6 +141,7 @@ model CompanyAccount {
   name      String
   isActive  Boolean        @default(true)
   costs     ShipmentCost[] @relation("CostPaidFromCompanyAccount")
+  paymentsReceived Payment[] @relation("PaymentReceivedToCompanyAccount")
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 }
@@ -420,11 +421,21 @@ model Payment {
   amount        Float
   paymentDate   DateTime
   method        String?
+  // "TK nhận tiền": thu vào TK công ty (receivedToCompanyAccountId) hoặc TK cá nhân của một người
+  // (receivedByUserId) — loại trừ nhau. Đối xứng với "Chi từ TK" bên ShipmentCost, để theo dõi dòng
+  // tiền công ty vs cá nhân. SetNull khi bản ghi gốc bị xóa để không vỡ FK.
+  receivedToCompanyAccount   CompanyAccount? @relation("PaymentReceivedToCompanyAccount", fields: [receivedToCompanyAccountId], references: [id], onDelete: SetNull)
+  receivedToCompanyAccountId String?
+  receivedBy                 User?           @relation("PaymentReceivedBy", fields: [receivedByUserId], references: [id], onDelete: SetNull)
+  receivedByUserId           String?
   // Phần được trả (chỉ dùng cho công nợ phải thu tách hóa đơn); null với công nợ không tách.
   portion       DebtPortion?
   attachmentUrl String?
   note          String?
   createdAt     DateTime     @default(now())
+
+  @@index([receivedToCompanyAccountId])
+  @@index([receivedByUserId])
 }
 
 enum UserRole {
@@ -451,6 +462,7 @@ model User {
   notifications           Notification[]
   costAuditLogs           CostAuditLog[]
   costsPaid               ShipmentCost[]       @relation("CostPaidBy")
+  paymentsReceived        Payment[]            @relation("PaymentReceivedBy")
   otherExpensesCreated    OtherExpense[]       @relation("OtherExpenseCreator")
   taskStatusLogs          TaskStatusLog[]
   conversationsCreated    Conversation[]       @relation("CreatedConversations")

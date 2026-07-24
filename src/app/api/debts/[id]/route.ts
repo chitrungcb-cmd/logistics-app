@@ -30,7 +30,13 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
           customerName: true,
         },
       },
-      payments: { orderBy: { paymentDate: "desc" } },
+      payments: {
+        orderBy: { paymentDate: "desc" },
+        include: {
+          receivedToCompanyAccount: { select: { id: true, name: true } },
+          receivedBy: { select: { id: true, name: true } },
+        },
+      },
     },
   });
   if (!debt) return apiError("Không tìm thấy công nợ.", 404);

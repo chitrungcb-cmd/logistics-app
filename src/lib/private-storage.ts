@@ -1,5 +1,6 @@
 import { readFile, stat } from "fs/promises";
 import path from "path";
+import { contentAddressedFileName } from "@/lib/file-storage-key";
 
 const PRIVATE_FILE_PREFIX = "/api/attachments/file/";
 const OBJECT_ROOT = "attachments";
@@ -59,14 +60,17 @@ export function privateObjectKeyFromUrl(url: string) {
   }
 }
 
-export function privateFileUrl(key: string) {
+export function privateFileUrl(key: string, displayName?: string) {
   if (!isSafeObjectKey(key)) throw new Error("Invalid private storage object key.");
-  return `${PRIVATE_FILE_PREFIX}${encodePath(key)}`;
+  const baseUrl = `${PRIVATE_FILE_PREFIX}${encodePath(key)}`;
+  return displayName ? `${baseUrl}?name=${encodeURIComponent(displayName)}` : baseUrl;
 }
 
 export function fileNameFromObjectKey(key: string) {
   const storedName = key.split("/").pop() || "attachment";
-  return storedName.replace(/^\d+-[0-9a-f]{32}-/, "") || "attachment";
+  return storedName
+    .replace(/^\d+-[0-9a-f]{32}-/, "")
+    .replace(/^[0-9a-f]{64}-/, "") || "attachment";
 }
 
 export function contentTypeForFileName(fileName: string) {
@@ -99,18 +103,18 @@ async function storageError(response: Response) {
 
 export async function uploadPrivateObject(fileName: string, buffer: Buffer) {
   const config = requireStorageConfig();
-  const now = new Date();
-  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const randomPart = crypto.randomUUID().replaceAll("-", "");
+  const storedName = contentAddressedFileName(fileName, buffer);
   const key = [
     OBJECT_ROOT,
-    String(now.getUTCFullYear()),
-    String(now.getUTCMonth() + 1).padStart(2, "0"),
-    `${Date.now()}-${randomPart}-${safeName}`,
+    "sha256",
+    storedName.slice(0, 2),
+    storedName,
   ].join("/");
+  const objectUrl =
+    `${config.baseUrl}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodePath(key)}`;
 
   const response = await fetch(
-    `${config.baseUrl}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodePath(key)}`,
+    objectUrl,
     {
       method: "POST",
       headers: {
@@ -124,8 +128,17 @@ export async function uploadPrivateObject(fileName: string, buffer: Buffer) {
     }
   );
 
-  if (!response.ok) throw await storageError(response);
-  return { key, url: privateFileUrl(key) };
+  if (!response.ok) {
+    // Supabase rejects an existing object when x-upsert=false. Verify that the deterministic key
+    // already exists; this also resolves concurrent uploads of the same bytes without overwriting.
+    const existing = await fetch(objectUrl, {
+      headers: { ...storageHeaders(config), Range: "bytes=0-0" },
+      cache: "no-store",
+    });
+    if (!existing.ok) throw await storageError(response);
+    await existing.body?.cancel();
+  }
+  return { key, url: privateFileUrl(key, fileName) };
 }
 
 export async function fetchPrivateObject(key: string, range?: string | null) {

@@ -31,7 +31,15 @@ export async function GET(
     if (!key) return apiError("Đường dẫn tệp không hợp lệ.", 400);
 
     const upstream = await fetchPrivateObject(key, request.headers.get("range"));
-    const fileName = fileNameFromObjectKey(key);
+    const requestedName = request.nextUrl.searchParams.get("name");
+    const fileName =
+      requestedName &&
+      requestedName.length <= 180 &&
+      !requestedName.includes("/") &&
+      !requestedName.includes("\\") &&
+      !/[\u0000-\u001f\u007f]/.test(requestedName)
+        ? requestedName
+        : fileNameFromObjectKey(key);
     const headers = new Headers({
       "Cache-Control": "private, no-store",
       "Content-Disposition": contentDisposition(fileName),

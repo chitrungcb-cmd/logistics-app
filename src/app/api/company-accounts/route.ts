@@ -3,11 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 
-// Tài khoản công ty là cấu hình tài chính → ADMIN-only (đồng nhất với dữ liệu chi phí).
+// Danh sách TK công ty chỉ là nhãn tài khoản (không kèm số tiền/giá vốn) nên đọc được bởi mọi vai trò
+// trừ FIELD_STAFF — ACCOUNTANT cần để chọn "TK nhận tiền" khi ghi nhận thanh toán. Ghi (POST) vẫn ADMIN-only.
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
-  if (user.role !== "ADMIN") return apiError("Bạn không có quyền xem tài khoản công ty.", 403);
+  if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền xem tài khoản công ty.", 403);
   const accounts = await prisma.companyAccount.findMany({ orderBy: [{ isActive: "desc" }, { name: "asc" }] });
   return apiSuccess(accounts);
 }

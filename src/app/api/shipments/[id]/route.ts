@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { applyCostPresetsToShipment } from "@/lib/cost-presets";
+import { mergeUniqueAttachments, type Attachment } from "@/lib/shipment-constants";
 
 // totalAmount deliberately NOT here (audit 3.1) — the legacy per-shipment cost field is vestigial;
 // real costs live in ShipmentCost / the /costs page. The DB column is kept for historical reference
@@ -87,6 +88,10 @@ export async function PATCH(
 
     for (const dateField of ["declarationDate", "consultationDate"] as const) {
       if (dateField in data) data[dateField] = data[dateField] ? new Date(data[dateField] as string) : null;
+    }
+    if ("attachments" in data) {
+      if (!Array.isArray(data.attachments)) return apiError("Danh sách chứng từ không hợp lệ.", 400);
+      data.attachments = mergeUniqueAttachments(data.attachments as Attachment[]);
     }
 
     const nullableTextFields = [

@@ -47,4 +47,7 @@ next-env.d.ts
 # uploaded attachments
 /public/uploads/*
 !/public/uploads/.gitkeep
+
+# local recoverable backups created during upload deduplication
+/.local-backups/
 deploy.env

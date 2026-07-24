@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { notificationMessageForDisplay } from "@/lib/notification-message";
+import TaskDetailModal from "@/components/tasks/TaskDetailModal";
 
 type Notification = {
   id: string;
@@ -24,19 +25,20 @@ export default function NotificationBell() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    fetch("/api/notifications")
+      .then((res) => res.json())
+      .then((json) => {
+        if (!json.success) return;
+        setNotifications(json.data.notifications);
+        setUnreadCount(json.data.unreadCount);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
-    function load() {
-      fetch("/api/notifications")
-        .then((res) => res.json())
-        .then((json) => {
-          if (!json.success) return;
-          setNotifications(json.data.notifications);
-          setUnreadCount(json.data.unreadCount);
-        })
-        .catch(() => {});
-    }
-
     load();
     const loadWhenVisible = () => {
       if (document.visibilityState === "visible") load();
@@ -49,7 +51,7 @@ export default function NotificationBell() {
       window.removeEventListener("focus", loadWhenVisible);
       document.removeEventListener("visibilitychange", loadWhenVisible);
     };
-  }, []);
+  }, [load]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -75,8 +77,9 @@ export default function NotificationBell() {
       }).catch(() => {});
     }
 
+    // A task notification opens the task detail in a modal window instead of navigating away.
     if (notification.relatedTaskId) {
-      router.push(`/tasks/${notification.relatedTaskId}`);
+      setOpenTaskId(notification.relatedTaskId);
     } else if (notification.relatedConversationId) {
       router.push(`/messages?conversationId=${notification.relatedConversationId}`);
     } else if (notification.relatedShipmentId) {
@@ -141,6 +144,14 @@ export default function NotificationBell() {
             ))}
           </div>
         </div>
+      )}
+
+      {openTaskId && (
+        <TaskDetailModal
+          taskId={openTaskId}
+          onClose={() => setOpenTaskId(null)}
+          onTaskUpdated={load}
+        />
       )}
     </div>
   );

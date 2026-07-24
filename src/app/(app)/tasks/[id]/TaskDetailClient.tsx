@@ -17,7 +17,7 @@ type Task = {
   attachmentUrl: string | null;
   assignedTo: { id: string; name: string; email: string };
   createdBy: { id: string; name: string; email: string };
-  relatedShipment: { id: string; shipmentCode: string; customerName: string } | null;
+  relatedShipment: { id: string; customerName: string; declarationNo: string | null } | null;
   statusLogs: Array<{
     id: string;
     fromStatus: string;
@@ -163,7 +163,12 @@ export default function TaskDetailClient({
               label="Lô hàng liên quan"
               value={
                 task.relatedShipment
-                  ? `${task.relatedShipment.customerName} (${task.relatedShipment.shipmentCode})`
+                  ? [
+                      task.relatedShipment.customerName,
+                      task.relatedShipment.declarationNo ? `TK ${task.relatedShipment.declarationNo}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
                   : null
               }
             />

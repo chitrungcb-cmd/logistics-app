@@ -9,7 +9,7 @@ import { paginationMeta, parsePagination } from "@/lib/pagination";
 const TASK_INCLUDE = {
   assignedTo: { select: { id: true, name: true, email: true } },
   createdBy: { select: { id: true, name: true, email: true } },
-  relatedShipment: { select: { id: true, shipmentCode: true, customerName: true } },
+  relatedShipment: { select: { id: true, customerName: true, declarationNo: true } },
 } as const;
 
 export async function GET(request: NextRequest) {

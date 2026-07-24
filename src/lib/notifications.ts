@@ -154,9 +154,21 @@ export async function notifyTaskProgressUpdate(params: {
   taskTitle: string;
   newStatusLabel: string;
   shipmentId: string | null;
+  customerName?: string | null;
+  declarationNo?: string | null;
   recipientUserIds: (string | null | undefined)[];
 }) {
-  const message = `${params.actorName} đã cập nhật ${params.taskTitle} sang ${params.newStatusLabel}`;
+  // Identify the shipment by customer + declaration number (what staff recognize), never the
+  // internal LH shipment code.
+  const shipmentLabel = [
+    params.customerName,
+    params.declarationNo ? `TK ${params.declarationNo}` : null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
+  const message =
+    `${params.actorName} đã cập nhật ${params.taskTitle} sang ${params.newStatusLabel}` +
+    (shipmentLabel ? ` · ${shipmentLabel}` : "");
   const recipients = [...new Set(params.recipientUserIds.filter((id): id is string => !!id))].filter(
     (id) => id !== params.actorUserId
   );

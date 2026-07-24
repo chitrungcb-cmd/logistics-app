@@ -63,7 +63,7 @@ export default async function DashboardPage() {
             title: true,
             status: true,
             dueDate: true,
-            relatedShipment: { select: { id: true, shipmentCode: true, customerName: true } },
+            relatedShipment: { select: { id: true, customerName: true, declarationNo: true } },
           },
         },
       },
@@ -396,7 +396,7 @@ function TaskProgressItem({
     title: string;
     status: string;
     dueDate: Date | null;
-    relatedShipment: { id: string; shipmentCode: string; customerName: string } | null;
+    relatedShipment: { id: string; customerName: string; declarationNo: string | null } | null;
   };
   startOfToday: Date;
 }) {
@@ -414,7 +414,7 @@ function TaskProgressItem({
           <p className={`mt-1 truncate text-[11px] ${overdue ? "font-medium text-red-600" : "text-gray-400"}`}>
             {overdue ? "Quá hạn · " : ""}
             {task.dueDate ? `Hạn ${task.dueDate.toLocaleDateString("vi-VN")}` : "Chưa đặt hạn"}
-            {task.relatedShipment ? ` · ${task.relatedShipment.shipmentCode}` : ""}
+            {task.relatedShipment ? ` · ${task.relatedShipment.declarationNo ? `TK ${task.relatedShipment.declarationNo}` : task.relatedShipment.customerName}` : ""}
           </p>
         </div>
         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${taskStatusBadgeClass(task.status)}`}>

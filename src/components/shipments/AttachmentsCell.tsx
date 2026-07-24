@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { Attachment } from "@/lib/shipment-constants";
+import { mergeUniqueAttachments, type Attachment } from "@/lib/shipment-constants";
 import AttachmentPreviewModal from "./AttachmentPreviewModal";
 
 export default function AttachmentsCell({
@@ -44,7 +44,7 @@ export default function AttachmentsCell({
         url: uploadJson.data.url,
         uploadedAt: new Date().toISOString(),
       };
-      const nextAttachments = [...attachments, newAttachment];
+      const nextAttachments = mergeUniqueAttachments(attachments, [newAttachment]);
 
       const patchRes = await fetch(`/api/shipments/${shipmentId}`, {
         method: "PATCH",

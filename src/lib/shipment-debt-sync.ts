@@ -142,7 +142,6 @@ export async function syncShipmentDebts(tx: Prisma.TransactionClient, shipmentId
       quoteInvoiceAmount: true,
       quoteNoInvoiceAmount: true,
       costs: { select: { costPrice: true, isActual: true } },
-      quoteLines: { select: { amount: true } },
       quotes: {
         orderBy: { createdAt: "desc" },
         take: 1,
@@ -160,11 +159,11 @@ export async function syncShipmentDebts(tx: Prisma.TransactionClient, shipmentId
   const receivableNoInvoiceAmount = manualSplit ? shipment.quoteNoInvoiceAmount ?? 0 : null;
 
   const latestQuoteAmount = shipment.quotes[0]?.quoteAmount ?? 0;
-  const quoteLinesComplete = shipment.quoteLines.length === 0 ||
-    shipment.quoteLines.every((line) => line.amount > 0);
+  // Một dòng báo giá để 0 nghĩa là "hạng mục không áp dụng cho lô này" (form seed sẵn mọi hạng mục),
+  // KHÔNG được chặn đồng bộ công nợ. Điều kiện đủ chỉ là tổng báo giá > 0 (đã gồm cả phân bổ nhập tay).
   const costsComplete = shipment.costs.length > 0 &&
     shipment.costs.every((cost) => cost.isActual && cost.costPrice > 0);
-  const ready = latestQuoteAmount > 0 && quoteLinesComplete && costsComplete;
+  const ready = latestQuoteAmount > 0 && costsComplete;
   const actualCostTotal = shipment.costs
     .filter((cost) => cost.isActual && cost.costPrice > 0)
     .reduce((sum, cost) => sum + cost.costPrice, 0);

@@ -8,7 +8,7 @@ import { TASK_STATUS_LABELS } from "@/lib/task-constants";
 const TASK_INCLUDE = {
   assignedTo: { select: { id: true, name: true, email: true } },
   createdBy: { select: { id: true, name: true, email: true } },
-  relatedShipment: { select: { id: true, shipmentCode: true, customerName: true } },
+  relatedShipment: { select: { id: true, customerName: true, declarationNo: true } },
   statusLogs: {
     select: {
       id: true,
@@ -115,6 +115,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         taskTitle: task.title,
         newStatusLabel: TASK_STATUS_LABELS[data.status] ?? data.status,
         shipmentId,
+        customerName: task.relatedShipment?.customerName ?? null,
+        declarationNo: task.relatedShipment?.declarationNo ?? null,
         recipientUserIds: [existing.relatedShipment?.customer?.assignedUserId, existing.createdByUserId],
       });
     }

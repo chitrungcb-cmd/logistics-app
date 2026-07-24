@@ -19,12 +19,16 @@ import ShipmentLink from "@/components/shipments/ShipmentLink";
 
 type DebtStats = { paidAmount: number; remainingAmount: number; status: string };
 
+type NamedRef = { id: string; name: string } | null;
+
 type Payment = {
   id: string;
   amount: number;
   paymentDate: string;
   method: string | null;
   portion: DebtPortionValue | null;
+  receivedToCompanyAccount: NamedRef;
+  receivedBy: NamedRef;
   attachmentUrl: string | null;
   note: string | null;
   createdAt: string;
@@ -73,11 +77,13 @@ function formatVnd(amount: number) {
   return amount.toLocaleString("vi-VN") + " đ";
 }
 
+// "TK nhận tiền": giá trị gộp "company:<id>" | "user:<id>" | "" để dùng trong 1 dropdown, tách ra khi lưu.
 const emptyPaymentForm = {
   amount: "",
   paymentDate: new Date().toISOString().slice(0, 10),
   method: "",
   portion: "INVOICE" as DebtPortionValue,
+  receivingAccount: "",
   note: "",
   attachmentUrl: null as string | null,
 };
@@ -95,6 +101,10 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
   const [formError, setFormError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Tùy chọn "TK nhận tiền": TK công ty + TK cá nhân (người dùng).
+  const [companyAccounts, setCompanyAccounts] = useState<Array<{ id: string; name: string; isActive: boolean }>>([]);
+  const [users, setUsers] = useState<Array<{ id: string; name: string; isActive: boolean }>>([]);
 
   // Cửa sổ "Báo giá & chi phí" của lô hàng liên quan — ADMIN-only, vì chi phí là dữ liệu chỉ ADMIN xem được.
   const [isFinanceOpen, setIsFinanceOpen] = useState(false);
@@ -123,6 +133,17 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
   useEffect(() => {
     loadDebt();
   }, [loadDebt]);
+
+  useEffect(() => {
+    fetch("/api/company-accounts")
+      .then((res) => res.json())
+      .then((json) => { if (json.success) setCompanyAccounts(json.data); })
+      .catch(() => { /* danh sách TK là phụ trợ, lỗi tải không chặn form */ });
+    fetch("/api/users")
+      .then((res) => res.json())
+      .then((json) => { if (json.success) setUsers(json.data); })
+      .catch(() => { /* tương tự */ });
+  }, []);
 
   async function handleAttachmentChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -164,6 +185,12 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
             paymentDate: form.paymentDate,
             method: form.method,
             portion: debt && hasInvoiceSplit(debt) ? form.portion : undefined,
+            receivedToCompanyAccountId: form.receivingAccount.startsWith("company:")
+              ? form.receivingAccount.slice("company:".length)
+              : null,
+            receivedByUserId: form.receivingAccount.startsWith("user:")
+              ? form.receivingAccount.slice("user:".length)
+              : null,
             attachmentUrl: form.attachmentUrl,
             note: form.note,
           }),
@@ -235,6 +262,11 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
       paymentDate: payment.paymentDate.slice(0, 10),
       method: payment.method || "",
       portion: payment.portion ?? "INVOICE",
+      receivingAccount: payment.receivedToCompanyAccount
+        ? `company:${payment.receivedToCompanyAccount.id}`
+        : payment.receivedBy
+          ? `user:${payment.receivedBy.id}`
+          : "",
       note: payment.note || "",
       attachmentUrl: payment.attachmentUrl,
     });
@@ -471,6 +503,7 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Số tiền</th>
                       {breakdown && <th className="px-3 py-2 text-left font-medium text-gray-500">Phần</th>}
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Phương thức</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">TK nhận tiền</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Ghi chú</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Biên lai</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500"></th>
@@ -495,6 +528,15 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
                           </td>
                         )}
                         <td className="px-3 py-2 text-gray-600">{p.method || "—"}</td>
+                        <td className="px-3 py-2">
+                          {p.receivedToCompanyAccount ? (
+                            <span className="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">{p.receivedToCompanyAccount.name}</span>
+                          ) : p.receivedBy ? (
+                            <span className="inline-flex rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">{p.receivedBy.name}</span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-gray-600">{p.note || "—"}</td>
                         <td className="px-3 py-2">
                           {p.attachmentUrl ? (
@@ -615,6 +657,34 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
                   <option value="">— Chọn —</option>
                   <option value="Tiền mặt">Tiền mặt</option>
                   <option value="Chuyển khoản">Chuyển khoản</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">TK nhận tiền</span>
+                <select
+                  value={form.receivingAccount}
+                  onChange={(e) => setForm((prev) => ({ ...prev, receivingAccount: e.target.value }))}
+                  className="input"
+                >
+                  <option value="">— Chưa chọn —</option>
+                  {companyAccounts.length > 0 && (
+                    <optgroup label="TK công ty">
+                      {companyAccounts
+                        .filter((a) => a.isActive || form.receivingAccount === `company:${a.id}`)
+                        .map((a) => (
+                          <option key={a.id} value={`company:${a.id}`}>{a.name}{!a.isActive ? " (ngừng)" : ""}</option>
+                        ))}
+                    </optgroup>
+                  )}
+                  {users.length > 0 && (
+                    <optgroup label="TK cá nhân">
+                      {users
+                        .filter((u) => u.isActive || form.receivingAccount === `user:${u.id}`)
+                        .map((u) => (
+                          <option key={u.id} value={`user:${u.id}`}>{u.name}{!u.isActive ? " (đã khóa)" : ""}</option>
+                        ))}
+                    </optgroup>
+                  )}
                 </select>
               </label>
               <div className="flex items-center gap-3">

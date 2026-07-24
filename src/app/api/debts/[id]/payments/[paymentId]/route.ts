@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { validatePaymentAmount } from "@/lib/debt-constants";
-import { recomputeDebtStatus } from "@/lib/debt";
+import { recomputeDebtStatus, resolvePaymentReceivingAccount } from "@/lib/debt";
 import { isAutomaticPayableDebt } from "@/lib/shipment-debt-sync";
 
 // Sửa một khoản thanh toán đã ghi nhận (số tiền, phần có/không hóa đơn, ngày, phương thức, biên
@@ -36,6 +36,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const checked = validatePaymentAmount(debt, Number(amount), body.portion, paymentId);
     if ("error" in checked) return apiError(checked.error, 400);
 
+    const account = await resolvePaymentReceivingAccount(body);
+    if ("error" in account) return apiError(account.error, 400);
+
     const payment = await prisma.payment.update({
       where: { id: paymentId },
       data: {
@@ -43,8 +46,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         paymentDate: new Date(paymentDate),
         method: method || null,
         portion: checked.portion,
+        receivedToCompanyAccountId: account.receivedToCompanyAccountId,
+        receivedByUserId: account.receivedByUserId,
         attachmentUrl: attachmentUrl || null,
         note: note || null,
+      },
+      include: {
+        receivedToCompanyAccount: { select: { id: true, name: true } },
+        receivedBy: { select: { id: true, name: true } },
       },
     });
 

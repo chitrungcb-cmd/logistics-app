@@ -17,7 +17,7 @@ type Task = {
   dueDate: string | null;
   assignedTo: { id: string; name: string };
   createdBy: { id: string; name: string };
-  relatedShipment: { id: string; shipmentCode: string; customerName: string } | null;
+  relatedShipment: { id: string; customerName: string; declarationNo: string | null } | null;
 };
 
 export default function TasksClient({ canManage }: { canManage: boolean }) {
@@ -109,7 +109,12 @@ export default function TasksClient({ canManage }: { canManage: boolean }) {
                   </td>
                   <td className="px-4 py-3 text-gray-600">
                     {task.relatedShipment
-                      ? `${task.relatedShipment.customerName} (${task.relatedShipment.shipmentCode})`
+                      ? [
+                          task.relatedShipment.customerName,
+                          task.relatedShipment.declarationNo ? `TK ${task.relatedShipment.declarationNo}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
                       : "—"}
                   </td>
                   <td className="px-4 py-3">

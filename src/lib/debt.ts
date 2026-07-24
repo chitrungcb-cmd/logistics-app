@@ -20,3 +20,30 @@ export async function recomputeDebtStatus(debtId: string) {
 
   return { paidAmount, remainingAmount: debt.totalAmount - paidAmount, status };
 }
+
+/**
+ * Chuẩn hóa + kiểm tra "TK nhận tiền" của một khoản thanh toán: thu vào TK công ty hoặc TK cá nhân
+ * của một người, LOẠI TRỪ NHAU (TK công ty ưu tiên nếu gửi cả hai). Dùng chung cho POST/PATCH payment.
+ */
+export async function resolvePaymentReceivingAccount(body: {
+  receivedToCompanyAccountId?: unknown;
+  receivedByUserId?: unknown;
+}): Promise<{ receivedToCompanyAccountId: string | null; receivedByUserId: string | null } | { error: string }> {
+  const companyId =
+    typeof body.receivedToCompanyAccountId === "string" && body.receivedToCompanyAccountId ? body.receivedToCompanyAccountId : null;
+  const userId = typeof body.receivedByUserId === "string" && body.receivedByUserId ? body.receivedByUserId : null;
+
+  if (companyId) {
+    if (!(await prisma.companyAccount.findUnique({ where: { id: companyId }, select: { id: true } }))) {
+      return { error: "Tài khoản công ty không hợp lệ." };
+    }
+    return { receivedToCompanyAccountId: companyId, receivedByUserId: null };
+  }
+  if (userId) {
+    if (!(await prisma.user.findUnique({ where: { id: userId }, select: { id: true } }))) {
+      return { error: "Người nhận tiền không hợp lệ." };
+    }
+    return { receivedToCompanyAccountId: null, receivedByUserId: userId };
+  }
+  return { receivedToCompanyAccountId: null, receivedByUserId: null };
+}

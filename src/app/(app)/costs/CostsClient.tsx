@@ -373,16 +373,16 @@ export default function CostsClient() {
               {!isLoading && paginatedShipments.map((shipment, index) => {
                 const expanded = expandedShipmentId === shipment.id;
                 return <Fragment key={shipment.id}>
-                  <tr className={shipment.spikeCount > 0 ? "bg-red-50/50" : "hover:bg-gray-50"}>
+                  <tr onClick={() => setEditingShipment(shipment)} className={`cursor-pointer ${shipment.spikeCount > 0 ? "bg-red-50/50 hover:bg-red-50" : "hover:bg-emerald-50/60"}`} title="Bấm để mở chi phí lô hàng">
                     <td className="px-3 py-3 text-center text-gray-500">{(safePage - 1) * pageSize + index + 1}</td>
                     <td className="max-w-xs px-3 py-3 font-medium text-gray-900">{shipment.customerName}</td>
-                    <td className="whitespace-nowrap px-3 py-3"><button type="button" onClick={() => setViewingShipmentId(shipment.id)} className="font-medium text-blue-600 hover:underline" title="Xem nhanh thông tin lô hàng">{shipment.declarationNo || "Chưa có TK"}</button><span className="block text-xs text-gray-400">{shipment.declarationDate ? new Date(shipment.declarationDate).toLocaleDateString("vi-VN") : "—"}</span></td>
+                    <td className="whitespace-nowrap px-3 py-3"><button type="button" onClick={(event) => { event.stopPropagation(); setViewingShipmentId(shipment.id); }} className="font-medium text-blue-600 hover:underline" title="Xem nhanh thông tin lô hàng">{shipment.declarationNo || "Chưa có TK"}</button><span className="block text-xs text-gray-400">{shipment.declarationDate ? new Date(shipment.declarationDate).toLocaleDateString("vi-VN") : "—"}</span></td>
                     <td className="max-w-sm px-3 py-3 text-gray-700">{shipment.goodsName || "Chưa có tên hàng"}</td>
                     <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-gray-900">{formatVnd(shipment.totalCost)}</td>
                     <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-blue-700">{formatVnd(shipment.totalRevenue)}</td>
                     <td className={`whitespace-nowrap px-3 py-3 text-right font-semibold ${shipment.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>{formatVnd(shipment.profit)}</td>
                     <td className="px-3 py-3 text-center text-gray-500">📎 {shipment.documentCount}</td>
-                    <td className="px-3 py-3"><div className="flex min-w-44 justify-end gap-3"><button type="button" onClick={() => setExpandedShipmentId(expanded ? null : shipment.id)} className="text-blue-600 hover:underline">{expanded ? "Thu gọn" : `Chi tiết (${shipment.costs.length})`}</button><button type="button" onClick={() => setEditingShipment(shipment)} className="font-medium text-blue-600 hover:underline">Mở chi phí lô hàng</button></div></td>
+                    <td className="px-3 py-3"><div className="flex min-w-28 items-center justify-end gap-2"><button type="button" onClick={(event) => { event.stopPropagation(); setExpandedShipmentId(expanded ? null : shipment.id); }} className="text-xs text-gray-500 hover:text-blue-600 hover:underline">{expanded ? "Thu gọn" : `Chi tiết (${shipment.costs.length})`}</button><span className="text-lg leading-none text-gray-300">›</span></div></td>
                   </tr>
                   {expanded && <tr><td colSpan={9} className="bg-slate-50 px-6 py-4"><ShipmentCostDetails shipment={shipment} opportunityByCostId={opportunityByCostId} onHistory={setViewingCost} onCompare={() => setSimilarShipmentId(shipment.id)} /></td></tr>}
                 </Fragment>;

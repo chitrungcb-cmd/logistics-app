@@ -1,9 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import dynamic from "next/dynamic";
 import { readApiResponse } from "@/lib/client-api";
 import { SHIPMENT_TASK_STEPS, TASK_STATUS_LABELS } from "@/lib/task-constants";
+
+const TaskDetailModal = dynamic(() => import("@/components/tasks/TaskDetailModal"), {
+  ssr: false,
+  loading: () => (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4">
+      <div className="rounded-xl bg-white px-6 py-5 text-sm text-gray-500 shadow-2xl">
+        Đang mở nhiệm vụ...
+      </div>
+    </div>
+  ),
+});
 
 const POLL_MS = 30000;
 
@@ -47,6 +58,8 @@ export default function TaskStepper({ shipmentId }: { shipmentId: string }) {
   );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
 
   useEffect(() => {
     function load() {
@@ -77,7 +90,7 @@ export default function TaskStepper({ shipmentId }: { shipmentId: string }) {
       window.removeEventListener("focus", loadWhenVisible);
       document.removeEventListener("visibilitychange", loadWhenVisible);
     };
-  }, [shipmentId]);
+  }, [shipmentId, refreshVersion]);
 
   const selectedStep = selectedIndex === null ? null : steps[selectedIndex];
 
@@ -132,7 +145,15 @@ export default function TaskStepper({ shipmentId }: { shipmentId: string }) {
                 </>
               ) : <p className="mt-1 text-gray-500">Chưa tạo nhiệm vụ và chưa có người phụ trách.</p>}
             </div>
-            {selectedStep.task && <Link href={`/tasks/${selectedStep.task.id}`} className="text-blue-600 hover:underline">Mở nhiệm vụ →</Link>}
+            {selectedStep.task && (
+              <button
+                type="button"
+                onClick={() => setOpenTaskId(selectedStep.task?.id ?? null)}
+                className="text-blue-600 hover:underline"
+              >
+                Mở nhiệm vụ →
+              </button>
+            )}
           </div>
           {selectedStep.task && (
             <div className="mt-3 border-t border-blue-100 pt-3">
@@ -153,6 +174,14 @@ export default function TaskStepper({ shipmentId }: { shipmentId: string }) {
             </div>
           )}
         </div>
+      )}
+
+      {openTaskId && (
+        <TaskDetailModal
+          taskId={openTaskId}
+          onClose={() => setOpenTaskId(null)}
+          onTaskUpdated={() => setRefreshVersion((current) => current + 1)}
+        />
       )}
     </div>
   );

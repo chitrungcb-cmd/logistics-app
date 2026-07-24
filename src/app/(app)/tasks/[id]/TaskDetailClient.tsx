@@ -27,7 +27,17 @@ type Task = {
   }>;
 };
 
-export default function TaskDetailClient({ taskId, canManage }: { taskId: string; canManage: boolean }) {
+export default function TaskDetailClient({
+  taskId,
+  canManage,
+  embedded = false,
+  onTaskUpdated,
+}: {
+  taskId: string;
+  canManage: boolean;
+  embedded?: boolean;
+  onTaskUpdated?: () => void;
+}) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,6 +105,7 @@ export default function TaskDetailClient({ taskId, canManage }: { taskId: string
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "Cập nhật thất bại.");
       setTask(json.data);
+      onTaskUpdated?.();
       setSuccessMessage("Cập nhật nhiệm vụ thành công.");
       setIsProgressDetailOpen(true);
     } catch (err) {
@@ -110,25 +121,29 @@ export default function TaskDetailClient({ taskId, canManage }: { taskId: string
     router.push("/tasks");
   }
 
-  if (isLoading) return <div className="p-8 text-gray-400">Đang tải...</div>;
+  if (isLoading) return <div className={`${embedded ? "p-6" : "p-8"} text-gray-400`}>Đang tải...</div>;
   if (loadError || !task) {
     return (
-      <div className="p-8">
+      <div className={embedded ? "p-6" : "p-8"}>
         <p className="text-red-600">{loadError || "Không tìm thấy nhiệm vụ."}</p>
-        <Link href="/tasks" className="mt-4 inline-block text-blue-600 hover:underline">
-          ← Quay lại danh sách
-        </Link>
+        {!embedded && (
+          <Link href="/tasks" className="mt-4 inline-block text-blue-600 hover:underline">
+            ← Quay lại danh sách
+          </Link>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="p-8">
+    <div className={embedded ? "p-5 sm:p-6" : "p-8"}>
       <div className="mb-6">
-        <Link href="/tasks" className="text-sm text-blue-600 hover:underline">
-          ← Quay lại danh sách
-        </Link>
-        <div className="mt-2 flex items-center gap-3">
+        {!embedded && (
+          <Link href="/tasks" className="text-sm text-blue-600 hover:underline">
+            ← Quay lại danh sách
+          </Link>
+        )}
+        <div className={`${embedded ? "" : "mt-2"} flex items-center gap-3`}>
           <h1 className="text-2xl font-semibold text-gray-900">{task.title}</h1>
           <Badge label={TASK_STATUS_LABELS[task.status] ?? task.status} className={taskStatusBadgeClass(task.status)} />
         </div>

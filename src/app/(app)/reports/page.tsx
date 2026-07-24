@@ -15,6 +15,10 @@ export default async function ReportsPage() {
             <p className="font-medium text-gray-900">Báo cáo lãi lỗ</p>
             <p className="mt-1 text-sm text-gray-500">Tổng hợp thu, chi phí và lãi/lỗ theo thời gian.</p>
           </Link>
+          <Link href="/reports/cash-flow" className="rounded-lg border border-gray-200 bg-white p-4 hover:border-blue-300 hover:shadow-sm">
+            <p className="font-medium text-gray-900">Thu – chi theo tài khoản</p>
+            <p className="mt-1 text-sm text-gray-500">Ai thu, ai chi những gì: theo TK công ty và từng cá nhân.</p>
+          </Link>
           <Link href="/reports/vendor-payables" className="rounded-lg border border-gray-200 bg-white p-4 hover:border-blue-300 hover:shadow-sm">
             <p className="font-medium text-gray-900">Phải trả nhà cung cấp</p>
             <p className="mt-1 text-sm text-gray-500">Theo tháng: mỗi công ty phục vụ bao nhiêu lô và tổng số tiền phải trả.</p>

@@ -114,6 +114,10 @@ model ShipmentCost {
   // SetNull khi user bị xóa để không vỡ FK (user chỉ bị khóa chứ hiếm khi xóa, xem User.isActive).
   paidBy         User?           @relation("CostPaidBy", fields: [paidByUserId], references: [id], onDelete: SetNull)
   paidByUserId   String?
+  // "Chi từ TK": trỏ tới 1 tài khoản công ty; nếu null mà paidByUserId có giá trị = chi từ TK cá nhân
+  // người đó; cả hai null = chưa chọn. Đúng một trong hai được đặt. Dùng cho báo cáo thu–chi theo TK.
+  paidFromCompanyAccount   CompanyAccount? @relation("CostPaidFromCompanyAccount", fields: [paidFromCompanyAccountId], references: [id], onDelete: SetNull)
+  paidFromCompanyAccountId String?
   vendor         Vendor?         @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   vendorId       String?
   preset         CostPreset?     @relation(fields: [presetId], references: [id], onDelete: SetNull)
@@ -126,7 +130,19 @@ model ShipmentCost {
   @@unique([shipmentId, presetId])
   @@index([vendorId])
   @@index([paidByUserId])
+  @@index([paidFromCompanyAccountId])
   @@index([shipmentId, createdAt])
+}
+
+// Tài khoản công ty (nhiều TK ngân hàng, có thể thuộc cả 2 công ty) — nguồn chi/thu chính thức.
+// "Chi từ TK" trên chi phí trỏ vào đây; báo cáo thu–chi tổng hợp theo từng tài khoản.
+model CompanyAccount {
+  id        String         @id @default(cuid())
+  name      String
+  isActive  Boolean        @default(true)
+  costs     ShipmentCost[] @relation("CostPaidFromCompanyAccount")
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 }
 
 enum OtherExpenseCategory {

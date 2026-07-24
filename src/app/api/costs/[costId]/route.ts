@@ -24,6 +24,7 @@ const UPDATABLE_FIELDS = [
   "note",
   "vendorId",
   "paidByUserId",
+  "paidFromCompanyAccountId",
   "isActual",
 ] as const;
 
@@ -83,6 +84,17 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (data.paidByUserId && !(await prisma.user.findUnique({ where: { id: data.paidByUserId as string }, select: { id: true } }))) {
         return apiError("Người chi không hợp lệ.", 400);
       }
+      // Chọn người chi thì bỏ gắn TK công ty (loại trừ nhau).
+      if (data.paidByUserId) data.paidFromCompanyAccountId = null;
+    }
+    if ("paidFromCompanyAccountId" in data) {
+      data.paidFromCompanyAccountId =
+        typeof data.paidFromCompanyAccountId === "string" && data.paidFromCompanyAccountId ? data.paidFromCompanyAccountId : null;
+      if (data.paidFromCompanyAccountId && !(await prisma.companyAccount.findUnique({ where: { id: data.paidFromCompanyAccountId as string }, select: { id: true } }))) {
+        return apiError("Tài khoản công ty không hợp lệ.", 400);
+      }
+      // Chi từ TK công ty thì bỏ người chi cá nhân.
+      if (data.paidFromCompanyAccountId) data.paidByUserId = null;
     }
 
     // costPrice is never accepted directly — always re-derived from unitPrice * quantity, using

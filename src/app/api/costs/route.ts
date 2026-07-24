@@ -49,6 +49,7 @@ export async function GET(request: NextRequest) {
         shipment: { select: { id: true, shipmentCode: true, customerName: true, goodsName: true, declarationNo: true, declarationDate: true, invoiceNo: true } },
         vendor: { select: { id: true, name: true, type: true } },
         paidBy: { select: { id: true, name: true } },
+        paidFromCompanyAccount: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -88,6 +89,12 @@ export async function POST(request: NextRequest) {
     if (paidByUserId && !(await prisma.user.findUnique({ where: { id: paidByUserId }, select: { id: true } }))) {
       return apiError("Người chi không hợp lệ.", 400);
     }
+    // "Chi từ TK": tài khoản công ty và cá nhân loại trừ nhau — ưu tiên TK công ty nếu gửi cả hai.
+    const paidFromCompanyAccountId =
+      typeof body.paidFromCompanyAccountId === "string" && body.paidFromCompanyAccountId ? body.paidFromCompanyAccountId : null;
+    if (paidFromCompanyAccountId && !(await prisma.companyAccount.findUnique({ where: { id: paidFromCompanyAccountId }, select: { id: true } }))) {
+      return apiError("Tài khoản công ty không hợp lệ.", 400);
+    }
 
     const cost = await prisma.$transaction(async (tx) => {
       const created = await tx.shipmentCost.create({
@@ -106,7 +113,8 @@ export async function POST(request: NextRequest) {
           customLabel: typeof body.customLabel === "string" ? body.customLabel.trim() || null : null,
           note: body.note || null,
           vendorId,
-          paidByUserId,
+          paidByUserId: paidFromCompanyAccountId ? null : paidByUserId,
+          paidFromCompanyAccountId,
         },
         include: {
           shipment: { select: { id: true, shipmentCode: true, customerName: true, goodsName: true, declarationNo: true, declarationDate: true, invoiceNo: true } },

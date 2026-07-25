@@ -40,17 +40,38 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     },
   });
   if (!debt) return apiError("Không tìm thấy công nợ.", 404);
-  if (user.role !== "ADMIN" && isAutomaticPayableDebt(debt.sourceKey)) {
-    return apiError("Bạn không có quyền xem công nợ chi phí tự động.", 403);
-  }
+  // ADMIN + ACCOUNTANT đều được xem công nợ Phải trả tự động (để tích chi phí đã trả); FIELD_STAFF
+  // đã bị chặn ở đầu hàm.
 
   const paidAmount = sumPayments(debt.payments);
   const financeLinks = debt.shipmentId ? await getShipmentFinanceLinks(debt.shipmentId) : null;
+  // Với công nợ Phải trả: kèm danh sách dòng chi phí thực tế để tích "đã thanh toán" từng khoản.
+  const payableCosts =
+    debt.type === "PAYABLE" && debt.shipmentId
+      ? await prisma.shipmentCost.findMany({
+          where: { shipmentId: debt.shipmentId, isActual: true, costPrice: { gt: 0 } },
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            category: true,
+            customLabel: true,
+            unit: true,
+            quantity: true,
+            costPrice: true,
+            isPaid: true,
+            paidAt: true,
+            vendor: { select: { name: true } },
+            paidBy: { select: { id: true, name: true } },
+            paidConfirmedBy: { select: { name: true } },
+          },
+        })
+      : [];
   return apiSuccess({
     ...debt,
     paidAmount,
     remainingAmount: debt.totalAmount - paidAmount,
     linkedInvoices: financeLinks?.invoices ?? [],
+    payableCosts,
   });
 }
 

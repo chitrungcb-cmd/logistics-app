@@ -12,6 +12,7 @@ import {
   type DebtPortionValue,
 } from "@/lib/debt-constants";
 import AttachmentPreviewButton from "@/components/shipments/AttachmentPreviewButton";
+import { COST_CATEGORY_LABELS } from "@/lib/shipment-cost-constants";
 import { INVOICE_VAT_RATE } from "@/lib/personal-account-sync";
 import ShipmentFinanceEditorModal from "@/components/shipments/ShipmentFinanceEditorModal";
 import MoneyInput from "@/components/MoneyInput";
@@ -71,6 +72,21 @@ type DebtDetail = {
   }>;
   paidAmount: number;
   remainingAmount: number;
+  payableCosts?: PayableCost[];
+};
+
+type PayableCost = {
+  id: string;
+  category: string;
+  customLabel: string | null;
+  unit: string | null;
+  quantity: number;
+  costPrice: number;
+  isPaid: boolean;
+  paidAt: string | null;
+  vendor: { name: string } | null;
+  paidBy: { id: string; name: string } | null;
+  paidConfirmedBy: { name: string } | null;
 };
 
 function formatVnd(amount: number) {
@@ -88,11 +104,13 @@ const emptyPaymentForm = {
   attachmentUrl: null as string | null,
 };
 
-export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; isAdmin: boolean }) {
+export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { debtId: string; isAdmin: boolean; currentUserId: string }) {
   const router = useRouter();
   const [debt, setDebt] = useState<DebtDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [paidCostError, setPaidCostError] = useState<string | null>(null);
+  const [togglingCostId, setTogglingCostId] = useState<string | null>(null);
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   // null = đang thêm mới; có id = đang sửa khoản thanh toán đó (dùng chung một form).
@@ -230,6 +248,36 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
     }
     setDebt((prev) => (prev ? { ...prev, payments: prev.payments.filter((p) => p.id !== paymentId) } : prev));
     applyStats(json.data);
+  }
+
+  async function handleToggleCostPaid(cost: PayableCost, nextPaid: boolean) {
+    setPaidCostError(null);
+    setTogglingCostId(cost.id);
+    try {
+      const res = await fetch(`/api/debts/${debtId}/payable-costs/${cost.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isPaid: nextPaid }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Không thể cập nhật.");
+      setDebt((prev) =>
+        prev
+          ? {
+              ...prev,
+              payableCosts: (prev.payableCosts ?? []).map((c) =>
+                c.id === cost.id
+                  ? { ...c, isPaid: json.data.isPaid, paidAt: json.data.paidAt, paidConfirmedBy: json.data.paidConfirmedBy }
+                  : c
+              ),
+            }
+          : prev
+      );
+    } catch (err) {
+      setPaidCostError(err instanceof Error ? err.message : "Đã có lỗi xảy ra.");
+    } finally {
+      setTogglingCostId(null);
+    }
   }
 
   async function handleDeleteDebt() {
@@ -477,6 +525,64 @@ export default function DebtDetailClient({ debtId, isAdmin }: { debtId: string; 
                   })}
                 </div>
               )}
+            </div>
+          )}
+
+          {debt.type === "PAYABLE" && (debt.payableCosts?.length ?? 0) > 0 && (
+            <div className="mt-6">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-gray-900">Chi phí — tích khi đã thanh toán</h3>
+                <span className="text-xs text-gray-500">
+                  {debt.payableCosts!.filter((c) => c.isPaid).length}/{debt.payableCosts!.length} đã trả
+                </span>
+              </div>
+              <div className="overflow-x-auto rounded-md border border-gray-200">
+                <table className="min-w-full divide-y divide-gray-200 text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">Hạng mục</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">Nhà cung cấp</th>
+                      <th className="px-3 py-2 text-right font-medium text-gray-500">Số tiền</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">Do ai chi</th>
+                      <th className="px-3 py-2 text-center font-medium text-gray-500">Đã thanh toán</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {debt.payableCosts!.map((cost) => {
+                      const canTick = isAdmin || cost.paidBy?.id === currentUserId;
+                      return (
+                        <tr key={cost.id} className={cost.isPaid ? "bg-green-50/40" : ""}>
+                          <td className="px-3 py-2 text-gray-800">
+                            {cost.customLabel || COST_CATEGORY_LABELS[cost.category] || cost.category}
+                          </td>
+                          <td className="px-3 py-2 text-gray-600">{cost.vendor?.name || "—"}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-gray-900">{formatVnd(cost.costPrice)}</td>
+                          <td className="px-3 py-2 text-gray-600">{cost.paidBy?.name || <span className="text-amber-600">Chưa gán</span>}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-col items-center gap-0.5">
+                              <input
+                                type="checkbox"
+                                checked={cost.isPaid}
+                                disabled={!canTick || togglingCostId === cost.id}
+                                onChange={(e) => handleToggleCostPaid(cost, e.target.checked)}
+                                className="h-4 w-4 cursor-pointer accent-green-600 disabled:cursor-not-allowed disabled:opacity-40"
+                                title={canTick ? "Tích khi đã thanh toán" : "Chỉ người phụ trách khoản này mới tích được"}
+                              />
+                              {cost.isPaid && cost.paidAt && (
+                                <span className="text-[10px] text-green-700">
+                                  {new Date(cost.paidAt).toLocaleDateString("vi-VN")}
+                                  {cost.paidConfirmedBy?.name ? ` · ${cost.paidConfirmedBy.name}` : ""}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {paidCostError && <p className="mt-2 text-sm text-red-600">{paidCostError}</p>}
             </div>
           )}
 

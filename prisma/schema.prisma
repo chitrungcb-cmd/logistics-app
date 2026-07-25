@@ -118,6 +118,12 @@ model ShipmentCost {
   // người đó; cả hai null = chưa chọn. Đúng một trong hai được đặt. Dùng cho báo cáo thu–chi theo TK.
   paidFromCompanyAccount   CompanyAccount? @relation("CostPaidFromCompanyAccount", fields: [paidFromCompanyAccountId], references: [id], onDelete: SetNull)
   paidFromCompanyAccountId String?
+  // Xác nhận "đã thanh toán" trong công nợ Phải trả: người phụ trách (paidBy) hoặc ADMIN tích vào.
+  // isPaid = đã trả; paidAt = thời điểm tích; paidConfirmedBy = người bấm tích (thường là paidBy).
+  isPaid                   Boolean         @default(false)
+  paidAt                   DateTime?
+  paidConfirmedBy          User?           @relation("CostPaidConfirmedBy", fields: [paidConfirmedByUserId], references: [id], onDelete: SetNull)
+  paidConfirmedByUserId    String?
   vendor         Vendor?         @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   vendorId       String?
   preset         CostPreset?     @relation(fields: [presetId], references: [id], onDelete: SetNull)
@@ -462,6 +468,7 @@ model User {
   notifications           Notification[]
   costAuditLogs           CostAuditLog[]
   costsPaid               ShipmentCost[]       @relation("CostPaidBy")
+  costsPaidConfirmed      ShipmentCost[]       @relation("CostPaidConfirmedBy")
   paymentsReceived        Payment[]            @relation("PaymentReceivedBy")
   otherExpensesCreated    OtherExpense[]       @relation("OtherExpenseCreator")
   taskStatusLogs          TaskStatusLog[]

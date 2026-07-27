@@ -228,24 +228,16 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
   if (parsed.invoiceDirection === "OUTPUT") {
     const candidates = await loadOutputShipmentCandidates();
     // Ưu tiên khớp theo số tờ khai ghi trong nội dung hóa đơn (đúng lô tuyệt đối). Khi khớp được,
-    // lấy tiền trước thuế của hóa đơn làm phần "Có hóa đơn" của phải thu rồi đồng bộ lại công nợ.
+    // đánh dấu để caller cập nhật lại phần "Có hóa đơn" của phải thu = TỔNG mọi HĐ bán ra của lô
+    // (sau khi hóa đơn này đã được lưu) — không ghi đè bằng một hóa đơn.
     const byDeclaration = matchOutputInvoiceByDeclaration(parsed, candidates);
     if (byDeclaration) {
-      if (typeof parsed.subtotal === "number" && parsed.subtotal > 0) {
-        await prisma.$transaction(async (tx) => {
-          await tx.shipment.update({
-            where: { id: byDeclaration.id },
-            data: { quoteInvoiceAmount: parsed.subtotal },
-          });
-          await syncPersonalAccountEntry(tx, byDeclaration.id);
-          await syncShipmentDebts(tx, byDeclaration.id);
-        });
-      }
       return {
         vendorId: null,
         shipmentCostId: null,
         shipmentId: byDeclaration.id,
         status: "MATCHED" as ReconciliationStatus,
+        applyInvoicedReceivable: true,
       };
     }
     const shipment = matchOutputInvoiceToShipment(parsed, candidates);
@@ -254,6 +246,7 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
       shipmentCostId: null,
       shipmentId: shipment?.id ?? null,
       status: shipment ? "MATCHED" as ReconciliationStatus : "UNMATCHED" as ReconciliationStatus,
+      applyInvoicedReceivable: false,
     };
   }
 
@@ -263,6 +256,7 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
       shipmentCostId: null,
       shipmentId: null,
       status: "NEEDS_REVIEW" as ReconciliationStatus,
+      applyInvoicedReceivable: false,
     };
   }
 
@@ -273,6 +267,7 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
       shipmentCostId: null,
       shipmentId: null,
       status: "UNMATCHED" as ReconciliationStatus,
+      applyInvoicedReceivable: false,
     };
   }
 
@@ -284,7 +279,30 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
     shipmentCostId: cost.id,
     shipmentId: cost.shipmentId,
     status: "MATCHED" as ReconciliationStatus,
+    applyInvoicedReceivable: false,
   };
+}
+
+/**
+ * Đặt phần "Có hóa đơn" của phải thu một lô = TỔNG tiền trước thuế của mọi hóa đơn bán ra đã gắn
+ * vào lô (shipmentId set, shipmentCostId null = hóa đơn đầu ra), rồi đồng bộ lại công nợ. Idempotent:
+ * gọi lại luôn ra cùng kết quả, và cộng đúng khi một lô có nhiều hóa đơn bán ra. Giữ nguyên phần
+ * "Không hóa đơn" (quoteNoInvoiceAmount) để nhập tay.
+ */
+export async function recomputeShipmentInvoicedReceivable(shipmentId: string) {
+  await prisma.$transaction(async (tx) => {
+    const invoices = await tx.vendorInvoice.findMany({
+      where: { shipmentId, shipmentCostId: null },
+      select: { subtotal: true },
+    });
+    const sum = invoices.reduce((total, invoice) => total + (invoice.subtotal ?? 0), 0);
+    await tx.shipment.update({
+      where: { id: shipmentId },
+      data: { quoteInvoiceAmount: sum > 0 ? sum : null },
+    });
+    await syncPersonalAccountEntry(tx, shipmentId);
+    await syncShipmentDebts(tx, shipmentId);
+  });
 }
 
 /** Re-runs matching after staff add an invoice number/vendor to a cost row. */

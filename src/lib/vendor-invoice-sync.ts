@@ -2,7 +2,11 @@ import type { gmail_v1 } from "googleapis";
 import { prisma } from "@/lib/prisma";
 import { saveUploadedFile } from "@/lib/save-upload";
 import { parseVendorInvoiceXml } from "@/lib/vendor-invoice-parser";
-import { reconcileParsedVendorInvoice, reconcileStoredVendorInvoices } from "@/lib/vendor-invoice-reconciliation";
+import {
+  reconcileParsedVendorInvoice,
+  reconcileStoredVendorInvoices,
+  recomputeShipmentInvoicedReceivable,
+} from "@/lib/vendor-invoice-reconciliation";
 
 const NEW_INVOICES_PER_SYNC = 100;
 
@@ -183,6 +187,11 @@ export async function syncVendorInvoices(gmail: gmail_v1.Gmail): Promise<VendorI
               note,
             },
           });
+          // Hóa đơn bán ra khớp lô theo số tờ khai: sau khi đã lưu, đặt phần "Có hóa đơn" của phải
+          // thu = tổng mọi HĐ bán ra của lô (bao gồm cái vừa lưu).
+          if (reconciliation.applyInvoicedReceivable && reconciliation.shipmentId) {
+            await recomputeShipmentInvoicedReceivable(reconciliation.shipmentId);
+          }
           summary.created++;
           if (reconciliation.status === "MATCHED") summary.matched++;
           else if (reconciliation.status === "UNMATCHED") summary.unmatched++;

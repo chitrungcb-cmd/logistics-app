@@ -20,6 +20,8 @@ type DetailRow = {
   amount: number;
   invoiceNumber: string | null;
   accountingDate: Date;
+  isPaid: boolean;
+  paidAt: Date | null;
 };
 
 type VendorGroup = {
@@ -67,6 +69,8 @@ export async function GET(request: NextRequest) {
       costPrice: true,
       invoiceNumber: true,
       createdAt: true,
+      isPaid: true,
+      paidAt: true,
       vendorId: true,
       vendor: { select: { id: true, name: true, type: true } },
       shipment: {
@@ -111,6 +115,8 @@ export async function GET(request: NextRequest) {
       amount: cost.costPrice,
       invoiceNumber: cost.invoiceNumber,
       accountingDate: cost.shipment.declarationDate || cost.createdAt,
+      isPaid: cost.isPaid,
+      paidAt: cost.paidAt,
     });
     groups.set(key, group);
   }

@@ -22,6 +22,8 @@ type DetailRow = {
   amount: number;
   invoiceNumber: string | null;
   accountingDate: string;
+  isPaid: boolean;
+  paidAt: string | null;
 };
 
 type VendorRow = {
@@ -108,6 +110,7 @@ export default function VendorPayablesReportClient() {
         "Hạng mục": detail.categoryLabel,
         "Số hóa đơn": detail.invoiceNumber || "",
         "Số tiền": detail.amount,
+        "Ngày trả": detail.isPaid ? (detail.paidAt ? new Date(detail.paidAt).toLocaleDateString("vi-VN") : "Đã trả") : "Chưa trả",
       }))
     );
     await downloadExcel(`phai-tra-nha-cung-cap-${month}.xlsx`, [
@@ -194,11 +197,12 @@ export default function VendorPayablesReportClient() {
 
 function DetailTable({ details }: { details: DetailRow[] }) {
   return <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white"><table className="min-w-full divide-y divide-gray-100 text-xs">
-    <thead className="bg-gray-50"><tr><th className="px-3 py-2 text-left text-gray-500">Số TK</th><th className="px-3 py-2 text-left text-gray-500">Khách hàng / tên hàng</th><th className="px-3 py-2 text-left text-gray-500">Hạng mục</th><th className="px-3 py-2 text-left text-gray-500">Số HĐ</th><th className="px-3 py-2 text-right text-gray-500">Phải trả</th><th></th></tr></thead>
+    <thead className="bg-gray-50"><tr><th className="px-3 py-2 text-left text-gray-500">Số TK</th><th className="px-3 py-2 text-left text-gray-500">Khách hàng / tên hàng</th><th className="px-3 py-2 text-left text-gray-500">Hạng mục</th><th className="px-3 py-2 text-left text-gray-500">Số HĐ</th><th className="px-3 py-2 text-right text-gray-500">Phải trả</th><th className="px-3 py-2 text-left text-gray-500">Ngày trả</th><th></th></tr></thead>
     <tbody className="divide-y divide-gray-100">{details.map((detail) => <tr key={detail.costId}>
       <td className="px-3 py-2"><ShipmentLink shipmentId={detail.shipmentId} className="font-medium text-blue-600 hover:underline">{detail.declarationNo || "Chưa có TK"}</ShipmentLink><span className="block text-gray-400">{new Date(detail.accountingDate).toLocaleDateString("vi-VN")}</span></td>
       <td className="px-3 py-2 text-gray-700">{detail.customerName}<span className="block text-gray-400">{detail.goodsName || "Chưa có tên hàng"}</span></td>
       <td className="px-3 py-2 text-gray-600">{detail.categoryLabel}</td><td className="px-3 py-2 text-gray-600">{detail.invoiceNumber || "—"}</td><td className="px-3 py-2 text-right font-medium text-gray-900">{formatVnd(detail.amount)}</td>
+      <td className="px-3 py-2">{detail.isPaid ? <span className="font-medium text-green-700">{detail.paidAt ? new Date(detail.paidAt).toLocaleDateString("vi-VN") : "Đã trả"}</span> : <span className="text-gray-400">Chưa trả</span>}</td>
       <td className="px-3 py-2 text-right"><Link href={`/costs?shipmentId=${detail.shipmentId}`} className="text-blue-600 hover:underline">Mở chi phí</Link></td>
     </tr>)}</tbody>
   </table></div>;

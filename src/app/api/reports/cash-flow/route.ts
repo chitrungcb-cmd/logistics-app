@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { buildCashFlowReport } from "@/lib/cash-flow-report";
 
 // Báo cáo thu–chi theo tài khoản (ADMIN-only, như mọi dữ liệu chi phí).
 // CHI: Σ costPrice thực tế nhóm theo "Chi từ TK" (paidFromCompanyAccountId / paidByUserId).
@@ -50,40 +51,16 @@ export async function GET() {
     }),
   ]);
 
-  const chiCompanyMap = new Map(chiByCompany.map((r) => [r.paidFromCompanyAccountId, { chi: r._sum.costPrice ?? 0, count: r._count._all }]));
-  const chiPersonMap = new Map(chiByPerson.map((r) => [r.paidByUserId, { chi: r._sum.costPrice ?? 0, count: r._count._all }]));
-  const thuCompanyMap = new Map(thuByCompany.map((r) => [r.receivedToCompanyAccountId, { thu: r._sum.amount ?? 0, count: r._count._all }]));
-  const thuPersonMap = new Map(thuByPerson.map((r) => [r.receivedByUserId, { thu: r._sum.amount ?? 0, count: r._count._all }]));
-
-  return apiSuccess({
-    companyAccounts: accounts.map((a) => {
-      const thu = thuCompanyMap.get(a.id)?.thu ?? 0;
-      const chi = chiCompanyMap.get(a.id)?.chi ?? 0;
-      return {
-        id: a.id,
-        name: a.name,
-        isActive: a.isActive,
-        thu,
-        chi,
-        balance: thu - chi,
-        chiCount: chiCompanyMap.get(a.id)?.count ?? 0,
-        thuCount: thuCompanyMap.get(a.id)?.count ?? 0,
-      };
-    }),
-    persons: users.map((u) => {
-      const thu = thuPersonMap.get(u.id)?.thu ?? 0;
-      const chi = chiPersonMap.get(u.id)?.chi ?? 0;
-      return {
-        id: u.id,
-        name: u.name,
-        thu,
-        chi,
-        balance: thu - chi,
-        chiCount: chiPersonMap.get(u.id)?.count ?? 0,
-        thuCount: thuPersonMap.get(u.id)?.count ?? 0,
-      };
-    }),
-    unassignedChi: { amount: chiUnassigned._sum.costPrice ?? 0, count: chiUnassigned._count._all },
-    unassignedThu: { amount: thuUnassigned._sum.amount ?? 0, count: thuUnassigned._count._all },
+  const report = buildCashFlowReport({
+    companyAccounts: accounts.map((a) => ({ id: a.id, name: a.name, isActive: a.isActive })),
+    users: users.map((u) => ({ id: u.id, name: u.name })),
+    chiByCompany: chiByCompany.map((r) => ({ id: r.paidFromCompanyAccountId, amount: r._sum.costPrice ?? 0, count: r._count._all })),
+    chiByPerson: chiByPerson.map((r) => ({ id: r.paidByUserId, amount: r._sum.costPrice ?? 0, count: r._count._all })),
+    chiUnassigned: { amount: chiUnassigned._sum.costPrice ?? 0, count: chiUnassigned._count._all },
+    thuByCompany: thuByCompany.map((r) => ({ id: r.receivedToCompanyAccountId, amount: r._sum.amount ?? 0, count: r._count._all })),
+    thuByPerson: thuByPerson.map((r) => ({ id: r.receivedByUserId, amount: r._sum.amount ?? 0, count: r._count._all })),
+    thuUnassigned: { amount: thuUnassigned._sum.amount ?? 0, count: thuUnassigned._count._all },
   });
+
+  return apiSuccess(report);
 }

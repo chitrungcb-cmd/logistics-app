@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { computeCashFlowTotals } from "@/lib/cash-flow-report";
 
 type Account = { id: string; name: string; isActive?: boolean; thu: number; chi: number; balance: number; chiCount: number; thuCount: number };
 type Report = {
@@ -71,9 +72,9 @@ export default function CashFlowReportClient() {
     await load();
   }
 
-  // Tổng phải phản ánh TOÀN BỘ tiền vào/ra, gồm cả khoản chưa gán tài khoản — để hai vế cân xứng.
-  const totalThu = report ? [...report.companyAccounts, ...report.persons].reduce((s, a) => s + a.thu, 0) + report.unassignedThu.amount : 0;
-  const totalChi = report ? [...report.companyAccounts, ...report.persons].reduce((s, a) => s + a.chi, 0) + report.unassignedChi.amount : 0;
+  const totals = report ? computeCashFlowTotals(report) : { thu: 0, chi: 0, balance: 0 };
+  const totalThu = totals.thu;
+  const totalChi = totals.chi;
 
   return (
     <div className="space-y-6 p-8">

@@ -271,14 +271,21 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
     applyStats(json.data);
   }
 
-  async function handleToggleCostPaid(cost: PayableCost, nextPaid: boolean) {
+  async function handleToggleCostPaid(
+    cost: PayableCost,
+    nextPaid: boolean,
+    paidAt?: string
+  ) {
     setPaidCostError(null);
     setTogglingCostId(cost.id);
     try {
       const res = await fetch(`/api/debts/${debtId}/payable-costs/${cost.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isPaid: nextPaid }),
+        body: JSON.stringify({
+          isPaid: nextPaid,
+          ...(paidAt ? { paidAt } : {}),
+        }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "Không thể cập nhật.");
@@ -631,10 +638,23 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
                                 title={canTick ? "Tích khi đã thanh toán" : "Chỉ người phụ trách khoản này mới tích được"}
                               />
                               {cost.isPaid && cost.paidAt && (
-                                <span className="text-[10px] text-green-700">
-                                  {new Date(cost.paidAt).toLocaleDateString("vi-VN")}
-                                  {cost.paidConfirmedBy?.name ? ` · ${cost.paidConfirmedBy.name}` : ""}
-                                </span>
+                                <>
+                                  <input
+                                    type="date"
+                                    value={cost.paidAt.slice(0, 10)}
+                                    disabled={!canTick || togglingCostId === cost.id}
+                                    onChange={(event) =>
+                                      handleToggleCostPaid(cost, true, event.target.value)
+                                    }
+                                    className="input h-7 w-32 px-1.5 py-0.5 text-[11px] disabled:cursor-not-allowed disabled:bg-gray-100"
+                                    title="Sửa ngày thanh toán"
+                                  />
+                                  {cost.paidConfirmedBy?.name && (
+                                    <span className="text-[10px] text-green-700">
+                                      Xác nhận: {cost.paidConfirmedBy.name}
+                                    </span>
+                                  )}
+                                </>
                               )}
                             </div>
                           </td>

@@ -21,7 +21,13 @@ export async function PATCH(
 
     const cost = await prisma.shipmentCost.findUnique({
       where: { id: costId },
-      select: { id: true, shipmentId: true, paidByUserId: true },
+      select: {
+        id: true,
+        shipmentId: true,
+        paidByUserId: true,
+        isPaid: true,
+        paidAt: true,
+      },
     });
     if (!cost || cost.shipmentId !== debt.shipmentId) {
       return apiError("Khoản chi phí không thuộc công nợ này.", 404);
@@ -32,12 +38,26 @@ export async function PATCH(
     }
 
     const body = await request.json();
-    const isPaid = Boolean(body.isPaid);
+    const isPaid = "isPaid" in body ? Boolean(body.isPaid) : cost.isPaid;
+    let paidAt: Date | null = null;
+    if (isPaid) {
+      if ("paidAt" in body) {
+        if (typeof body.paidAt !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.paidAt)) {
+          return apiError("Ngày thanh toán không hợp lệ.", 400);
+        }
+        paidAt = new Date(body.paidAt);
+        if (Number.isNaN(paidAt.getTime())) {
+          return apiError("Ngày thanh toán không hợp lệ.", 400);
+        }
+      } else {
+        paidAt = cost.paidAt ?? new Date();
+      }
+    }
     const updated = await prisma.shipmentCost.update({
       where: { id: costId },
       data: {
         isPaid,
-        paidAt: isPaid ? new Date() : null,
+        paidAt,
         paidConfirmedByUserId: isPaid ? user.id : null,
       },
       select: {

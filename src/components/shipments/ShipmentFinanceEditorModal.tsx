@@ -11,6 +11,7 @@ import {
 import { QUOTE_LINE_LABELS, QUOTE_LINE_OPTIONS } from "@/lib/quote-line-constants";
 import AttachmentPreviewButton from "./AttachmentPreviewButton";
 import MoneyInput from "@/components/MoneyInput";
+import VendorCombobox from "@/components/vendors/VendorCombobox";
 import { INVOICE_VAT_RATE, computeInvoiceVat, resolveInvoiceAmountWithVat } from "@/lib/personal-account-sync";
 
 type CostDraft = {
@@ -24,6 +25,7 @@ type CostDraft = {
   invoiceNumber: string;
   note: string;
   vendorId: string;
+  vendorName: string;
   paidByUserId: string;
   paidFromCompanyAccountId: string;
   isActual: boolean;
@@ -85,6 +87,7 @@ function newCost(category: string = COST_CATEGORY_OPTIONS[0]): CostDraft {
     invoiceNumber: "",
     note: "",
     vendorId: "",
+    vendorName: "",
     paidByUserId: "",
     paidFromCompanyAccountId: "",
     isActual: true,
@@ -159,7 +162,7 @@ export default function ShipmentFinanceEditorModal({
       .then(([costJson, quoteJson, vendorJson, financeJson, userJson, companyAccountJson]) => {
         if (companyAccountJson?.success) setCompanyAccounts(companyAccountJson.data);
         if (!costJson.success) throw new Error(costJson.error || "Không thể tải chi phí.");
-        const loadedCosts: CostDraft[] = costJson.data.map((cost: { id: string; category: string; customLabel?: string | null; unit?: string | null; unitPrice: number; quantity: number; invoiceNumber: string | null; note: string | null; presetId?: string | null; vendorId?: string | null; paidByUserId?: string | null; paidFromCompanyAccountId?: string | null; isActual?: boolean }) => ({
+        const loadedCosts: CostDraft[] = costJson.data.map((cost: { id: string; category: string; customLabel?: string | null; unit?: string | null; unitPrice: number; quantity: number; invoiceNumber: string | null; note: string | null; presetId?: string | null; vendorId?: string | null; vendor?: { name: string } | null; paidByUserId?: string | null; paidFromCompanyAccountId?: string | null; isActual?: boolean }) => ({
           clientKey: `cost-${cost.id}`,
           id: cost.id,
           category: cost.category,
@@ -170,6 +173,7 @@ export default function ShipmentFinanceEditorModal({
           invoiceNumber: cost.invoiceNumber || "",
           note: cost.note || "",
           vendorId: isVendorlessCostCategory(cost.category) ? "" : cost.vendorId || "",
+          vendorName: isVendorlessCostCategory(cost.category) ? "" : cost.vendor?.name || "",
           paidByUserId: cost.paidByUserId || "",
           paidFromCompanyAccountId: cost.paidFromCompanyAccountId || "",
           presetId: cost.presetId,
@@ -515,7 +519,7 @@ export default function ShipmentFinanceEditorModal({
                     </tr></thead>
                     <tbody className="divide-y divide-gray-100">{costs.map((cost) => {
                       const amount = (Number(cost.unitPrice) || 0) * (Number(cost.quantity) || 0);
-                      const vendorLabel = isVendorlessCostCategory(cost.category) ? "Không áp dụng" : vendors.find((v) => v.id === cost.vendorId)?.name ?? "Chưa gắn NCC";
+                      const vendorLabel = isVendorlessCostCategory(cost.category) ? "Không áp dụng" : cost.vendorName || vendors.find((v) => v.id === cost.vendorId)?.name || "Chưa gắn NCC";
                       const paidLabel = cost.paidFromCompanyAccountId
                         ? companyAccounts.find((a) => a.id === cost.paidFromCompanyAccountId)?.name ?? "TK công ty"
                         : cost.paidByUserId
@@ -551,7 +555,7 @@ export default function ShipmentFinanceEditorModal({
                       <div className="space-y-4">
                         <div className="grid grid-cols-2 gap-3">
                           <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Hạng mục</span>
-                            <select value={cost.category} onChange={(event) => { const category = event.target.value; updateCost(index, { category, invoiceNumber: isInvoiceCostCategory(category) ? cost.invoiceNumber : "", vendorId: isVendorlessCostCategory(category) ? "" : cost.vendorId }, true); }} className="input">{COST_CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{COST_CATEGORY_LABELS[category]}</option>)}</select>
+                            <select value={cost.category} onChange={(event) => { const category = event.target.value; updateCost(index, { category, invoiceNumber: isInvoiceCostCategory(category) ? cost.invoiceNumber : "", vendorId: isVendorlessCostCategory(category) ? "" : cost.vendorId, vendorName: isVendorlessCostCategory(category) ? "" : cost.vendorName }, true); }} className="input">{COST_CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{COST_CATEGORY_LABELS[category]}</option>)}</select>
                           </label>
                           <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Tên hiển thị</span>
                             <input value={cost.customLabel} onChange={(event) => updateCost(index, { customLabel: event.target.value }, true)} className="input" placeholder={COST_CATEGORY_LABELS[cost.category]} />
@@ -559,7 +563,17 @@ export default function ShipmentFinanceEditorModal({
                         </div>
                         {!isVendorlessCostCategory(cost.category) && (
                           <label className="block"><span className="mb-1 block text-sm font-medium text-gray-700">Nhà cung cấp</span>
-                            <select value={cost.vendorId} onChange={(event) => updateCost(index, { vendorId: event.target.value }, true)} className={`input ${cost.vendorId ? "" : "border-amber-300 bg-amber-50"}`}><option value="">Chưa gắn nhà cung cấp</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}{vendor.type ? ` · ${vendor.type}` : ""}</option>)}</select>
+                            <VendorCombobox
+                              vendorName={cost.vendorName}
+                              vendorId={cost.vendorId || null}
+                              onChange={({ vendorName, vendorId }) =>
+                                updateCost(
+                                  index,
+                                  { vendorName, vendorId: vendorId || "" },
+                                  Boolean(vendorId)
+                                )
+                              }
+                            />
                           </label>
                         )}
                         <div className="grid grid-cols-3 gap-3">

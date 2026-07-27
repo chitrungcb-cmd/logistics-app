@@ -15,6 +15,7 @@ import {
   debtStatusBadge,
   isOverdue,
 } from "@/lib/debt-constants";
+import { summarizeDebts } from "@/lib/debt-summary";
 
 const ALL_FILTER = "__all__";
 const OVERDUE_FILTER = "__overdue__";
@@ -210,6 +211,11 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
     });
   }, [tabDebts, filters]);
 
+  const filteredSummary = useMemo(() => summarizeDebts(filteredDebts), [filteredDebts]);
+  const hasActiveFilters = Boolean(
+    filters.search || filters.status !== ALL_FILTER || filters.dueFrom || filters.dueTo
+  );
+
   const kpi = useMemo(() => {
     const tongPhaiThu = debts
       .filter((d) => d.type === "RECEIVABLE")
@@ -235,7 +241,7 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
   }, [debts]);
 
   const agingReport = useMemo(() => {
-    const overdue = tabDebts.filter((d) => isOverdue(d.status, d.dueDate) && d.dueDate);
+    const overdue = filteredDebts.filter((d) => isOverdue(d.status, d.dueDate) && d.dueDate);
     return AGING_BUCKETS.map((bucket) => {
       const inBucket = overdue.filter((d) => {
         const days = daysOverdue(d.dueDate!);
@@ -247,7 +253,7 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
         total: inBucket.reduce((sum, d) => sum + d.remainingAmount, 0),
       };
     });
-  }, [tabDebts]);
+  }, [filteredDebts]);
 
   function resetForm() {
     setForm(emptyForm);
@@ -396,7 +402,7 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
           onChange={(e) => setFilters((prev) => ({ ...prev, dueTo: e.target.value }))}
           className="input w-auto"
         />
-        {(filters.search || filters.status !== ALL_FILTER || filters.dueFrom || filters.dueTo) && (
+        {hasActiveFilters && (
           <button
             type="button"
             onClick={() => setFilters({ search: "", status: ALL_FILTER, dueFrom: "", dueTo: "" })}
@@ -406,6 +412,45 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
           </button>
         )}
       </div>
+
+      <section className="mb-4 rounded-xl border border-blue-200 bg-blue-50/50 p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">
+              {hasActiveFilters ? "Tổng theo kết quả lọc" : "Tổng danh sách đang hiển thị"} · {DEBT_TYPE_LABELS[activeTab]}
+            </h2>
+            <p className="mt-0.5 text-xs text-gray-500">
+              Tự cập nhật theo từ khóa, trạng thái và hạn thanh toán.
+            </p>
+          </div>
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
+            {filteredSummary.count} khoản
+          </span>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <FilteredTotalCard
+            label={activeTab === "RECEIVABLE" ? "Tổng phải thu" : "Tổng phải trả"}
+            value={filteredSummary.totalAmount}
+            valueClassName={activeTab === "RECEIVABLE" ? "text-blue-700" : "text-orange-700"}
+            invoice={filteredSummary.splitCount > 0 ? filteredSummary.invoiceAmount : undefined}
+            noInvoice={filteredSummary.splitCount > 0 ? filteredSummary.noInvoiceAmount : undefined}
+          />
+          <FilteredTotalCard
+            label="Đã thanh toán"
+            value={filteredSummary.paidAmount}
+            valueClassName="text-green-700"
+            invoice={filteredSummary.splitCount > 0 ? filteredSummary.paidInvoice : undefined}
+            noInvoice={filteredSummary.splitCount > 0 ? filteredSummary.paidNoInvoice : undefined}
+          />
+          <FilteredTotalCard
+            label="Còn lại"
+            value={filteredSummary.remainingAmount}
+            valueClassName="text-red-700"
+            invoice={filteredSummary.splitCount > 0 ? filteredSummary.remainingInvoice : undefined}
+            noInvoice={filteredSummary.splitCount > 0 ? filteredSummary.remainingNoInvoice : undefined}
+          />
+        </div>
+      </section>
 
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -689,6 +734,28 @@ function SplitLines({ invoice, noInvoice }: { invoice?: number; noInvoice?: numb
     <div className="mt-1 space-y-0.5 text-[11px] font-normal">
       <div className="text-green-700">Có HĐ: {formatVnd(invoice)}</div>
       <div className="text-orange-700">Không HĐ: {formatVnd(noInvoice)}</div>
+    </div>
+  );
+}
+
+function FilteredTotalCard({
+  label,
+  value,
+  valueClassName,
+  invoice,
+  noInvoice,
+}: {
+  label: string;
+  value: number;
+  valueClassName: string;
+  invoice?: number;
+  noInvoice?: number;
+}) {
+  return (
+    <div className="rounded-lg border border-white bg-white p-3 shadow-sm">
+      <p className="text-xs font-medium text-gray-500">{label}</p>
+      <p className={`mt-1 text-xl font-bold ${valueClassName}`}>{formatVnd(value)}</p>
+      <SplitLines invoice={invoice} noInvoice={noInvoice} />
     </div>
   );
 }

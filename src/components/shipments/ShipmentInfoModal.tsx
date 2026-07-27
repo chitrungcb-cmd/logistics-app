@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import AttachmentPreviewModal from "@/components/shipments/AttachmentPreviewModal";
 import Badge from "@/components/shipments/Badge";
 import ShipmentDetailsTable from "@/components/shipments/ShipmentDetailsTable";
@@ -324,7 +325,17 @@ export default function ShipmentInfoModal({
             )}
           </div>
 
-          <footer className="flex shrink-0 justify-end border-t border-gray-200 bg-gray-50 px-5 py-3 sm:px-6">
+          <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-gray-200 bg-gray-50 px-5 py-3 sm:px-6">
+            {shipment ? (
+              <Link
+                href={`/shipments/${shipment.id}`}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                ✏️ Chỉnh sửa lô hàng
+              </Link>
+            ) : (
+              <span />
+            )}
             <button
               type="button"
               onClick={onClose}

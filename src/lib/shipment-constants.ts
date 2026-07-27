@@ -73,6 +73,50 @@ export function mergeUniqueAttachments(...groups: Attachment[][]) {
   return merged;
 }
 
+/** Extracts VNACCS declaration numbers embedded in attachment names. */
+export function declarationNumbersFromFilename(filename: string) {
+  return [...filename.matchAll(/(?<!\d)\d{12}(?!\d)/g)].map((match) => match[0]);
+}
+
+/**
+ * Chooses which files from a multi-declaration Gmail message belong to one declaration.
+ * Parsed declaration workbooks are authoritative. Other files are matched by the 12-digit
+ * declaration number in their filename; an unnumbered file is only safe when the email contains
+ * exactly one declaration.
+ */
+export function attachmentMatchesDeclaration(input: {
+  filename: string;
+  parsedDeclarationNo?: string | null;
+  targetDeclarationNo: string;
+  declarationCount: number;
+}) {
+  if (input.parsedDeclarationNo) {
+    return input.parsedDeclarationNo === input.targetDeclarationNo;
+  }
+
+  const numbers = declarationNumbersFromFilename(input.filename);
+  if (numbers.length > 0) return numbers.includes(input.targetDeclarationNo);
+  return input.declarationCount === 1;
+}
+
+/**
+ * Removes declaration files that were historically attached to an unrelated shipment. Revisions
+ * of the same declaration share the first 11 digits and stay together; genuinely different
+ * declaration families are detached during the versioned Gmail re-sync.
+ */
+export function attachmentBelongsToDeclarationFamilies(
+  filename: string,
+  declarationNumbers: string[]
+) {
+  const fileNumbers = declarationNumbersFromFilename(filename);
+  if (fileNumbers.length === 0) return true;
+
+  const allowedFamilies = new Set(
+    declarationNumbers.filter(Boolean).map((number) => declarationFamily(number))
+  );
+  return fileNumbers.some((number) => allowedFamilies.has(declarationFamily(number)));
+}
+
 /** VNACCS clearance-decision workbooks use names such as ToKhaiHQ7N_QDTQ_….xlsx. */
 export function isClearanceDecisionFilename(filename: string) {
   return filename.toLowerCase().includes("qdtq");

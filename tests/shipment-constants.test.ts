@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachmentBelongsToDeclarationFamilies,
+  attachmentMatchesDeclaration,
+  declarationNumbersFromFilename,
   getDeclarationBranches,
   isClearanceDecisionFilename,
   mergeUniqueAttachments,
@@ -100,5 +103,69 @@ describe("attachment deduplication", () => {
         [{ name: "renamed.pdf", url: "/api/attachments/file/attachments/sha256/ab/hash.pdf?name=renamed.pdf", uploadedAt }]
       )
     ).toHaveLength(1);
+  });
+});
+
+describe("Gmail attachment assignment", () => {
+  it("extracts the declaration number from real VNACCS filenames", () => {
+    expect(declarationNumbersFromFilename("ToKhaiHQ7N_107168431751.xlsx")).toEqual([
+      "107168431751",
+    ]);
+    expect(
+      declarationNumbersFromFilename("ToKhaiHQ7N_QDTQ_107168431751_signed.xlsx")
+    ).toEqual(["107168431751"]);
+  });
+
+  it("keeps each parsed workbook with its own declaration in a multi-declaration email", () => {
+    expect(
+      attachmentMatchesDeclaration({
+        filename: "ToKhaiHQ7N_107168431753.xlsx",
+        parsedDeclarationNo: "107168431753",
+        targetDeclarationNo: "107168431751",
+        declarationCount: 4,
+      })
+    ).toBe(false);
+    expect(
+      attachmentMatchesDeclaration({
+        filename: "ToKhaiHQ7N_107168431751.xlsx",
+        parsedDeclarationNo: "107168431751",
+        targetDeclarationNo: "107168431751",
+        declarationCount: 4,
+      })
+    ).toBe(true);
+  });
+
+  it("does not guess where an unnumbered file belongs when an email has several declarations", () => {
+    expect(
+      attachmentMatchesDeclaration({
+        filename: "chung-tu-khac.pdf",
+        targetDeclarationNo: "107168431751",
+        declarationCount: 4,
+      })
+    ).toBe(false);
+    expect(
+      attachmentMatchesDeclaration({
+        filename: "chung-tu-khac.pdf",
+        targetDeclarationNo: "107168431751",
+        declarationCount: 1,
+      })
+    ).toBe(true);
+  });
+
+  it("removes files from unrelated declaration families during legacy repair", () => {
+    const shipmentNumbers = ["107168431751"];
+    expect(
+      attachmentBelongsToDeclarationFamilies(
+        "ToKhaiHQ7N_107168497001.xlsx",
+        shipmentNumbers
+      )
+    ).toBe(false);
+    // A later revision of the same declaration family remains part of the same shipment.
+    expect(
+      attachmentBelongsToDeclarationFamilies(
+        "ToKhaiHQ7N_107168431753.xlsx",
+        shipmentNumbers
+      )
+    ).toBe(true);
   });
 });

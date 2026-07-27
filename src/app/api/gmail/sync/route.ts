@@ -12,6 +12,8 @@ import { parseTokhaiExcel, type ParsedDeclaration } from "@/lib/tokhai-parser";
 import { saveUploadedFile } from "@/lib/save-upload";
 import { prisma } from "@/lib/prisma";
 import {
+  attachmentBelongsToDeclarationFamilies,
+  attachmentMatchesDeclaration,
   generateShipmentCode,
   isClearanceDecisionFilename,
   mergeUniqueAttachments,
@@ -31,6 +33,7 @@ import { notifyNewShipmentAssignees, syncMissingActualCostAlerts } from "@/lib/n
 // never reach older backlog. Capping by new-message count instead means every run makes progress
 // until the whole mailbox is caught up, however many pages that takes.
 const NEW_MESSAGES_PER_SYNC = 150;
+const SHIPMENT_SYNC_MARKER = "[shipment-attachments-v2]";
 let syncInProgress = false;
 
 export const runtime = "nodejs";
@@ -136,10 +139,14 @@ async function recordProcessedEmail(data: {
   status: string;
   detail: string;
 }) {
-  const { gmailMessageId, ...rest } = data;
+  const versionedData = {
+    ...data,
+    detail: `${SHIPMENT_SYNC_MARKER} ${data.detail}`,
+  };
+  const { gmailMessageId, ...rest } = versionedData;
   await prisma.processedEmail.upsert({
     where: { gmailMessageId },
-    create: data,
+    create: versionedData,
     update: rest,
   });
 }
@@ -250,6 +257,210 @@ async function reconcileClearanceStatuses() {
   return result.count;
 }
 
+async function loadGmailAttachment(
+  gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>,
+  messageId: string,
+  part: AttachmentPart,
+  cache: Map<string, Buffer>
+) {
+  const cached = cache.get(part.attachmentId);
+  if (cached) return cached;
+
+  const response = await gmail.users.messages.attachments.get({
+    userId: "me",
+    messageId,
+    id: part.attachmentId,
+  });
+  const buffer = Buffer.from(response.data.data ?? "", "base64url");
+  cache.set(part.attachmentId, buffer);
+  return buffer;
+}
+
+async function syncDeclarationFromMessage(input: {
+  gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>;
+  messageId: string;
+  parsed: ParsedDeclaration;
+  attachmentParts: AttachmentPart[];
+  attachmentCache: Map<string, Buffer>;
+  subject: string | null;
+  user: NonNullable<Awaited<ReturnType<typeof getSyncActor>>>;
+}) {
+  const {
+    gmail,
+    messageId,
+    parsed,
+    attachmentParts,
+    attachmentCache,
+    subject,
+    user,
+  } = input;
+  const existing = await findMatchingShipment(parsed);
+  const isCleared = attachmentParts.some((part) =>
+    isClearanceDecisionFilename(part.filename)
+  );
+  const statusNote = isCleared
+    ? " Trạng thái: Thông quan."
+    : parsed.hasStorageInstruction
+      ? " Trạng thái: Đưa hàng về bảo quản."
+      : "";
+
+  const rawExistingAttachments: Attachment[] =
+    existing && Array.isArray(existing.attachments)
+      ? (existing.attachments as unknown as Attachment[])
+      : [];
+  const knownDeclarationNumbers = [
+    existing?.declarationNo,
+    ...(existing && Array.isArray(existing.declarationBranches)
+      ? (existing.declarationBranches as unknown[]).filter(
+          (number): number is string => typeof number === "string"
+        )
+      : []),
+    parsed.firstDeclarationNo,
+    parsed.declarationNo,
+  ].filter((number): number is string => Boolean(number));
+
+  // Older sync versions stored every workbook from an email on the first shipment. Reprocessing
+  // the message now removes files from unrelated declaration families before merging the right set.
+  const existingAttachments = rawExistingAttachments.filter((attachment) =>
+    attachmentBelongsToDeclarationFamilies(attachment.name, knownDeclarationNumbers)
+  );
+  const removedWrongClearance = rawExistingAttachments.some(
+    (attachment) =>
+      !attachmentBelongsToDeclarationFamilies(
+        attachment.name,
+        knownDeclarationNumbers
+      ) && isClearanceDecisionFilename(attachment.name)
+  );
+
+  const savedAttachments: Attachment[] = [];
+  for (const part of attachmentParts) {
+    const buffer = await loadGmailAttachment(
+      gmail,
+      messageId,
+      part,
+      attachmentCache
+    );
+    const saved = await saveUploadedFile(part.filename, buffer);
+    savedAttachments.push({ ...saved, uploadedAt: new Date().toISOString() });
+  }
+
+  if (existing) {
+    const mergedAttachments = mergeUniqueAttachments(
+      existingAttachments,
+      savedAttachments
+    );
+    const correctedCurrentStatus =
+      existing.status === "Thông quan" && removedWrongClearance && !isCleared
+        ? parsed.hasStorageInstruction
+          ? "Đưa hàng về bảo quản"
+          : "Đang làm thủ tục"
+        : existing.status;
+    const nextStatus = resolveSyncedShipmentStatus(correctedCurrentStatus, {
+      isCleared,
+      hasStorageInstruction: parsed.hasStorageInstruction,
+    });
+
+    let declarationBranches: string[] = Array.isArray(existing.declarationBranches)
+      ? (existing.declarationBranches as unknown as string[])
+      : [existing.declarationNo ?? parsed.declarationNo];
+    if (parsed.firstDeclarationNo) {
+      declarationBranches = mergeDeclarationBranch(
+        declarationBranches,
+        parsed.firstDeclarationNo
+      );
+    }
+    declarationBranches = mergeDeclarationBranch(
+      declarationBranches,
+      parsed.declarationNo
+    );
+    const canonicalDeclarationNo = declarationBranches[0];
+
+    await prisma.shipment.update({
+      where: { id: existing.id },
+      data: {
+        declarationNo: canonicalDeclarationNo,
+        declarationBranches,
+        channel: parsed.channel ?? existing.channel,
+        customsType: parsed.customsType ?? existing.customsType,
+        customsOffice: parsed.customsOffice ?? existing.customsOffice,
+        declarationDate: parsed.declarationDate ?? existing.declarationDate,
+        invoiceNo: parsed.invoiceNo ?? existing.invoiceNo,
+        goodsName: subject ?? existing.goodsName,
+        port: parsed.port ?? existing.port,
+        consultationDate: parsed.consultationDate ?? existing.consultationDate,
+        status: nextStatus,
+        attachments: mergedAttachments,
+      },
+    });
+    await Promise.all([
+      applyCostPresetsToShipment({ shipmentId: existing.id, userId: user.id }),
+      ensureShipmentWorkflowTasks({
+        shipmentId: existing.id,
+        createdByUserId: user.id,
+      }),
+    ]);
+
+    return {
+      shipmentId: existing.id,
+      status: "updated" as const,
+      detail: `Cập nhật lô hàng có số tờ khai ${parsed.declarationNo}.${statusNote}`,
+    };
+  }
+
+  let newBranches: string[] = [];
+  if (parsed.firstDeclarationNo) {
+    newBranches = mergeDeclarationBranch(
+      newBranches,
+      parsed.firstDeclarationNo
+    );
+  }
+  newBranches = mergeDeclarationBranch(newBranches, parsed.declarationNo);
+  const canonicalDeclarationNo = newBranches[0];
+  const customerId = await findOrCreateCustomer(parsed);
+
+  const shipment = await prisma.shipment.create({
+    data: {
+      shipmentCode: generateShipmentCode(),
+      customerName: parsed.customerName ?? "Chưa xác định",
+      customerId,
+      taxCode: parsed.taxCode,
+      declarationNo: canonicalDeclarationNo,
+      declarationBranches: newBranches,
+      declarationDate: parsed.declarationDate,
+      invoiceNo: parsed.invoiceNo,
+      customsType: parsed.customsType,
+      port: parsed.port,
+      goodsName: subject ?? parsed.goodsName,
+      channel: parsed.channel,
+      customsOffice: parsed.customsOffice,
+      consultationDate: parsed.consultationDate,
+      status: isCleared
+        ? "Thông quan"
+        : parsed.hasStorageInstruction
+          ? "Đưa hàng về bảo quản"
+          : undefined,
+      attachments: mergeUniqueAttachments(savedAttachments),
+    },
+  });
+  await Promise.all([
+    applyCostPresetsToShipment({ shipmentId: shipment.id, userId: user.id }),
+    ensureShipmentWorkflowTasks({
+      shipmentId: shipment.id,
+      createdByUserId: user.id,
+    }),
+  ]);
+  await notifyNewShipmentAssignees({
+    shipmentId: shipment.id,
+    actorUserId: user.id,
+  });
+
+  return {
+    shipmentId: shipment.id,
+    status: "created" as const,
+    detail: `Tạo lô hàng mới từ số tờ khai ${parsed.declarationNo}.${statusNote}`,
+  };
+}
+
 async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>, user: NonNullable<Awaited<ReturnType<typeof getSyncActor>>>) {
     // Set, not array: Gmail's search pagination isn't guaranteed collision-free across pages (seen
     // in practice returning the same message ID twice), and a duplicate ID in this list would hit
@@ -274,8 +485,10 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
       const processedIds = new Set(
         (await prisma.processedEmail.findMany({
           where: { gmailMessageId: { in: pageIds } },
-          select: { gmailMessageId: true },
-        })).map((email) => email.gmailMessageId)
+          select: { gmailMessageId: true, detail: true },
+        }))
+          .filter((email) => (email.detail ?? "").startsWith(SHIPMENT_SYNC_MARKER))
+          .map((email) => email.gmailMessageId)
       );
 
       for (const id of pageIds) {
@@ -299,9 +512,11 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
         const messageRes = await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" });
         const message = messageRes.data;
         const attachmentParts = collectAttachmentParts(message.payload);
-        const declarationPart = attachmentParts.find((p) => isDeclarationFile(p.filename));
+        const declarationParts = attachmentParts.filter((part) =>
+          isDeclarationFile(part.filename)
+        );
 
-        if (!declarationPart) {
+        if (declarationParts.length === 0) {
           skipped++;
           const detail = "Không tìm thấy file tờ khai (ToKhai) đính kèm trong email.";
           results.push({ messageId, status: "skipped", detail });
@@ -309,137 +524,107 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
           continue;
         }
 
-        const declarationAttachment = await gmail.users.messages.attachments.get({
-          userId: "me",
-          messageId,
-          id: declarationPart.attachmentId,
-        });
-        const declarationBuffer = Buffer.from(declarationAttachment.data.data ?? "", "base64url");
-        const parsed = await parseTokhaiExcel(declarationBuffer);
-        // The message commonly contains several ToKhai workbooks. The parser can use any declaration
-        // printout, but clearance is true when *any* attachment is the QDTQ decision—not only when the
-        // first workbook returned by Gmail happens to be QDTQ.
-        const isCleared = attachmentParts.some((part) => isClearanceDecisionFilename(part.filename));
-        const rawSubject = getSubject(message);
-        const subject = rawSubject ? extractGoodsName(rawSubject) : null;
+        const attachmentCache = new Map<string, Buffer>();
+        const parsedParts: { part: AttachmentPart; parsed: ParsedDeclaration }[] = [];
+        const unreadableFiles: string[] = [];
+        for (const part of declarationParts) {
+          const buffer = await loadGmailAttachment(
+            gmail,
+            messageId,
+            part,
+            attachmentCache
+          );
+          const parsed = await parseTokhaiExcel(buffer);
+          if (parsed) parsedParts.push({ part, parsed });
+          else unreadableFiles.push(part.filename);
+        }
 
-        if (!parsed) {
+        if (parsedParts.length === 0) {
           skipped++;
-          const detail = `File "${declarationPart.filename}" không đọc được số tờ khai — có thể không phải bản in tờ khai hợp lệ.`;
+          const detail = `Không đọc được số tờ khai trong ${unreadableFiles.length} file ToKhai đính kèm.`;
           results.push({ messageId, status: "skipped", detail });
-          await recordProcessedEmail({ gmailMessageId: messageId, status: "skipped", detail });
+          await recordProcessedEmail({
+            gmailMessageId: messageId,
+            status: "skipped",
+            detail,
+          });
           continue;
         }
 
-        const existing = await findMatchingShipment(parsed);
-        const statusNote = isCleared
-          ? " Trạng thái: Thông quan."
-          : parsed.hasStorageInstruction
-            ? " Trạng thái: Đưa hàng về bảo quản."
-            : "";
+        const rawSubject = getSubject(message);
+        const subject = rawSubject ? extractGoodsName(rawSubject) : null;
 
-        const existingAttachments: Attachment[] =
-          existing && Array.isArray(existing.attachments) ? (existing.attachments as unknown as Attachment[]) : [];
-        const existingNames = new Set(existingAttachments.map((a) => a.name));
+        // One email may contain several printouts for the same declaration (for example the
+        // declaration and QDTQ decision). Process that declaration once, with all of its own files.
+        const groups = new Map<
+          string,
+          { parsed: ParsedDeclaration; parts: AttachmentPart[] }
+        >();
+        for (const entry of parsedParts) {
+          const group = groups.get(entry.parsed.declarationNo);
+          if (group) group.parts.push(entry.part);
+          else {
+            groups.set(entry.parsed.declarationNo, {
+              parsed: entry.parsed,
+              parts: [entry.part],
+            });
+          }
+        }
 
-        // Re-running sync (e.g. after a bug fix) re-fetches the same message — skip attachments
-        // already saved for this shipment instead of writing duplicate files with duplicate entries.
-        const savedAttachments: Attachment[] = [];
-        for (const part of attachmentParts) {
-          if (existingNames.has(part.filename)) continue;
-          const attachmentRes = await gmail.users.messages.attachments.get({
-            userId: "me",
+        const parsedDeclarationByAttachmentId = new Map(
+          parsedParts.map(({ part, parsed }) => [
+            part.attachmentId,
+            parsed.declarationNo,
+          ])
+        );
+        const messageDetails: string[] = [];
+        let firstShipmentId: string | undefined;
+        let messageCreated = 0;
+
+        for (const group of groups.values()) {
+          const matchingParts = attachmentParts.filter((part) =>
+            attachmentMatchesDeclaration({
+              filename: part.filename,
+              parsedDeclarationNo:
+                parsedDeclarationByAttachmentId.get(part.attachmentId),
+              targetDeclarationNo: group.parsed.declarationNo,
+              declarationCount: groups.size,
+            })
+          );
+          const outcome = await syncDeclarationFromMessage({
+            gmail,
             messageId,
-            id: part.attachmentId,
+            parsed: group.parsed,
+            attachmentParts: matchingParts,
+            attachmentCache,
+            subject,
+            user,
           });
-          const buffer = Buffer.from(attachmentRes.data.data ?? "", "base64url");
-          const saved = await saveUploadedFile(part.filename, buffer);
-          savedAttachments.push({ ...saved, uploadedAt: new Date().toISOString() });
+          firstShipmentId ??= outcome.shipmentId;
+          if (outcome.status === "created") {
+            created++;
+            messageCreated++;
+          }
+          else updated++;
+          messageDetails.push(outcome.detail);
+          results.push({
+            messageId,
+            status: outcome.status,
+            detail: outcome.detail,
+          });
         }
 
-        if (existing) {
-          const mergedAttachments = mergeUniqueAttachments(existingAttachments, savedAttachments);
-
-          const nextStatus = resolveSyncedShipmentStatus(existing.status, {
-            isCleared,
-            hasStorageInstruction: parsed.hasStorageInstruction,
-          });
-
-          let declarationBranches: string[] = Array.isArray(existing.declarationBranches)
-            ? (existing.declarationBranches as unknown as string[])
-            : [existing.declarationNo ?? parsed.declarationNo];
-          if (parsed.firstDeclarationNo) {
-            declarationBranches = mergeDeclarationBranch(declarationBranches, parsed.firstDeclarationNo);
-          }
-          declarationBranches = mergeDeclarationBranch(declarationBranches, parsed.declarationNo);
-          const canonicalDeclarationNo = declarationBranches[0];
-
-          await prisma.shipment.update({
-            where: { id: existing.id },
-            data: {
-              declarationNo: canonicalDeclarationNo,
-              declarationBranches,
-              channel: parsed.channel ?? existing.channel,
-              customsType: parsed.customsType ?? existing.customsType,
-              customsOffice: parsed.customsOffice ?? existing.customsOffice,
-              declarationDate: parsed.declarationDate ?? existing.declarationDate,
-              invoiceNo: parsed.invoiceNo ?? existing.invoiceNo,
-              goodsName: subject ?? existing.goodsName,
-              port: parsed.port ?? existing.port,
-              consultationDate: parsed.consultationDate ?? existing.consultationDate,
-              status: nextStatus,
-              attachments: mergedAttachments,
-            },
-          });
-          await Promise.all([
-            applyCostPresetsToShipment({ shipmentId: existing.id, userId: user.id }),
-            ensureShipmentWorkflowTasks({ shipmentId: existing.id, createdByUserId: user.id }),
-          ]);
-
-          updated++;
-          const detail = `Cập nhật lô hàng có số tờ khai ${parsed.declarationNo}.${statusNote}`;
-          results.push({ messageId, status: "updated", detail });
-          await recordProcessedEmail({ gmailMessageId: messageId, shipmentId: existing.id, status: "updated", detail });
-        } else {
-          let newBranches: string[] = [];
-          if (parsed.firstDeclarationNo) {
-            newBranches = mergeDeclarationBranch(newBranches, parsed.firstDeclarationNo);
-          }
-          newBranches = mergeDeclarationBranch(newBranches, parsed.declarationNo);
-          const canonicalDeclarationNo = newBranches[0];
-          const customerId = await findOrCreateCustomer(parsed);
-
-          const shipment = await prisma.shipment.create({
-            data: {
-              shipmentCode: generateShipmentCode(),
-              customerName: parsed.customerName ?? "Chưa xác định",
-              customerId,
-              taxCode: parsed.taxCode,
-              declarationNo: canonicalDeclarationNo,
-              declarationBranches: newBranches,
-              declarationDate: parsed.declarationDate,
-              invoiceNo: parsed.invoiceNo,
-              customsType: parsed.customsType,
-              port: parsed.port,
-              goodsName: subject ?? parsed.goodsName,
-              channel: parsed.channel,
-              customsOffice: parsed.customsOffice,
-              consultationDate: parsed.consultationDate,
-              status: isCleared ? "Thông quan" : parsed.hasStorageInstruction ? "Đưa hàng về bảo quản" : undefined,
-              attachments: mergeUniqueAttachments(savedAttachments),
-            },
-          });
-          await Promise.all([
-            applyCostPresetsToShipment({ shipmentId: shipment.id, userId: user.id }),
-            ensureShipmentWorkflowTasks({ shipmentId: shipment.id, createdByUserId: user.id }),
-          ]);
-          await notifyNewShipmentAssignees({ shipmentId: shipment.id, actorUserId: user.id });
-
-          created++;
-          const detail = `Tạo lô hàng mới từ số tờ khai ${parsed.declarationNo}.${statusNote}`;
-          results.push({ messageId, status: "created", detail });
-          await recordProcessedEmail({ gmailMessageId: messageId, shipmentId: shipment.id, status: "created", detail });
+        if (unreadableFiles.length > 0) {
+          messageDetails.push(
+            `Bỏ qua ${unreadableFiles.length} file không đọc được: ${unreadableFiles.join(", ")}.`
+          );
         }
+        await recordProcessedEmail({
+          gmailMessageId: messageId,
+          shipmentId: firstShipmentId,
+          status: messageCreated > 0 ? "created" : "updated",
+          detail: messageDetails.join(" "),
+        });
       } catch (error) {
         // Deliberately does NOT write a ProcessedEmail row here: this is an unexpected failure
         // (network hiccup, transient DB error, etc.), not "this email will never be valid" — leaving

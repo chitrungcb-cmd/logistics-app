@@ -512,7 +512,6 @@ export default function ShipmentFinanceEditorModal({
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Nhà cung cấp</th>
                       <th className="px-3 py-2 text-right font-medium text-gray-500">Thành tiền</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Chi từ TK</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Trạng thái</th>
                     </tr></thead>
                     <tbody className="divide-y divide-gray-100">{costs.map((cost) => {
                       const amount = (Number(cost.unitPrice) || 0) * (Number(cost.quantity) || 0);
@@ -527,7 +526,6 @@ export default function ShipmentFinanceEditorModal({
                         <td className={`px-3 py-2 ${!isVendorlessCostCategory(cost.category) && !cost.vendorId ? "text-amber-600" : "text-gray-600"}`}>{vendorLabel}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-gray-900">{amount > 0 ? formatVnd(amount) : <span className="text-gray-300">—</span>}</td>
                         <td className="px-3 py-2 text-gray-600">{paidLabel}</td>
-                        <td className="px-3 py-2">{cost.presetId && !cost.isActual ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">Dự kiến</span> : cost.id ? ((cost.paidFromCompanyAccountId || cost.paidByUserId) ? <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">Đã chi</span> : <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-medium text-orange-700">Chưa chi</span>) : <span className="text-[11px] text-gray-400">Chưa nhập</span>}</td>
                       </tr>;
                     })}</tbody>
                   </table>

@@ -4,7 +4,9 @@ import {
   normalizeInvoiceNumber,
   type ParsedVendorInvoice,
 } from "@/lib/vendor-invoice-parser";
-import { AUTOMATIC_RECEIVABLE_DEBT_PREFIX } from "@/lib/shipment-debt-sync";
+import { AUTOMATIC_RECEIVABLE_DEBT_PREFIX, syncShipmentDebts } from "@/lib/shipment-debt-sync";
+import { sharesDeclarationFamily } from "@/lib/shipment-constants";
+import { syncPersonalAccountEntry } from "@/lib/personal-account-sync";
 
 export type ReconciliationStatus = "MATCHED" | "UNMATCHED" | "NEEDS_REVIEW";
 
@@ -31,6 +33,7 @@ export type OutputShipmentCandidate = {
   id: string;
   shipmentCode: string;
   declarationNo: string | null;
+  declarationBranches: unknown;
   declarationDate: Date | null;
   goodsName: string | null;
   customerName: string;
@@ -55,6 +58,29 @@ function amountsEqual(left: number, right: number) {
  * Ghép hóa đơn bán ra với lô hàng bằng khách mua và khoản phải thu tự động. Số invoice trên tờ khai
  * không được dùng ở đây vì đó là commercial invoice của hồ sơ hải quan, không phải hóa đơn NQ xuất.
  */
+/**
+ * Khớp hóa đơn bán ra với lô theo SỐ TỜ KHAI ghi trong nội dung hóa đơn (HĐ xe ô tô: "theo tờ khai
+ * nhập khẩu số ..."). Authoritative — số tờ khai định danh đúng một lô. Trả về lô khi có đúng một lô
+ * cùng "họ tờ khai" (cùng 11 số đầu) với một trong các số trên hóa đơn; nhiều/không có thì trả null.
+ */
+export function matchOutputInvoiceByDeclaration(
+  invoice: { declarationNumbers?: string[] },
+  candidates: OutputShipmentCandidate[]
+) {
+  const numbers = invoice.declarationNumbers ?? [];
+  if (numbers.length === 0) return null;
+  const matches = candidates.filter((candidate) =>
+    numbers.some((number) =>
+      sharesDeclarationFamily(
+        { declarationNo: candidate.declarationNo, declarationBranches: candidate.declarationBranches },
+        number
+      )
+    )
+  );
+  const uniqueIds = new Set(matches.map((match) => match.id));
+  return uniqueIds.size === 1 ? matches[0] : null;
+}
+
 export function matchOutputInvoiceToShipment(
   invoice: OutputInvoiceMatchSource,
   candidates: OutputShipmentCandidate[]
@@ -92,6 +118,7 @@ export async function loadOutputShipmentCandidates(): Promise<OutputShipmentCand
       id: true,
       shipmentCode: true,
       declarationNo: true,
+      declarationBranches: true,
       declarationDate: true,
       goodsName: true,
       customerName: true,
@@ -199,7 +226,29 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
   const vendor = parsed.invoiceDirection === "INPUT" ? await findOrCreateInvoiceVendor(parsed) : null;
 
   if (parsed.invoiceDirection === "OUTPUT") {
-    const shipment = await findMatchingOutputShipment(parsed);
+    const candidates = await loadOutputShipmentCandidates();
+    // Ưu tiên khớp theo số tờ khai ghi trong nội dung hóa đơn (đúng lô tuyệt đối). Khi khớp được,
+    // lấy tiền trước thuế của hóa đơn làm phần "Có hóa đơn" của phải thu rồi đồng bộ lại công nợ.
+    const byDeclaration = matchOutputInvoiceByDeclaration(parsed, candidates);
+    if (byDeclaration) {
+      if (typeof parsed.subtotal === "number" && parsed.subtotal > 0) {
+        await prisma.$transaction(async (tx) => {
+          await tx.shipment.update({
+            where: { id: byDeclaration.id },
+            data: { quoteInvoiceAmount: parsed.subtotal },
+          });
+          await syncPersonalAccountEntry(tx, byDeclaration.id);
+          await syncShipmentDebts(tx, byDeclaration.id);
+        });
+      }
+      return {
+        vendorId: null,
+        shipmentCostId: null,
+        shipmentId: byDeclaration.id,
+        status: "MATCHED" as ReconciliationStatus,
+      };
+    }
+    const shipment = matchOutputInvoiceToShipment(parsed, candidates);
     return {
       vendorId: null,
       shipmentCostId: null,
@@ -263,6 +312,9 @@ export async function reconcileStoredVendorInvoices() {
         invoice.buyerTaxCode
       ),
       isIssuedToNq: invoice.isIssuedToNq,
+      // Số tờ khai chỉ có khi parse XML lúc đồng bộ; bản lưu không giữ lại nên khớp lại dùng
+      // khách+tiền như cũ (không tự sửa số phải thu ở luồng này).
+      declarationNumbers: [],
     };
     const result = await reconcileParsedVendorInvoice(parsed);
     await prisma.vendorInvoice.update({

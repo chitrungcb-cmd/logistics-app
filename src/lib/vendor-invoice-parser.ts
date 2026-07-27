@@ -12,7 +12,24 @@ export type ParsedVendorInvoice = {
   currency: string;
   invoiceDirection: InvoiceDirection;
   isIssuedToNq: boolean | null;
+  // Số tờ khai hải quan trích từ mô tả dòng hàng (HĐ bán ra xe ô tô ghi "theo tờ khai nhập khẩu
+  // số ..."). Dùng để khớp đúng lô hàng; rỗng nếu nội dung không nhắc tới tờ khai.
+  declarationNumbers: string[];
 };
+
+/**
+ * Trích số tờ khai (10–13 chữ số) ngay sau chữ "khai" trong nội dung hóa đơn — ví dụ
+ * "theo tờ khai nhập khẩu số 10845474696". Bỏ qua các dãy số khác (số khung, model) vì chúng không
+ * đứng sau chữ "khai".
+ */
+export function extractDeclarationNumbers(text: string): string[] {
+  if (!text) return [];
+  const found = new Set<string>();
+  for (const match of text.matchAll(/khai[^\d]{0,40}?(\d{10,13})/gi)) {
+    found.add(match[1]);
+  }
+  return [...found];
+}
 
 export type InvoiceDirection = "INPUT" | "OUTPUT" | "UNRELATED" | "UNKNOWN";
 
@@ -185,6 +202,10 @@ export function parseVendorInvoiceXml(buffer: Buffer): ParsedVendorInvoice | nul
   const totalAmount = parseAmount(findTag(paymentSection || xml, ["TgTTTBSo", "TgTTTSo", "TotalAmount", "AmountDue"]));
   const currency = findTag(generalSection || xml, ["DVTTe", "Currency", "CurrencyCode"]) || "VND";
   const invoiceDirection = determineInvoiceDirection(sellerName, sellerTaxCode, buyerName, buyerTaxCode);
+  // Nội dung dòng hàng (chứa "theo tờ khai nhập khẩu số ...") — ưu tiên bảng hàng hóa, không có thì
+  // quét toàn bộ text hóa đơn.
+  const goodsSection = findSection(xml, ["DSHHDVu", "NDHHDVu", "GoodsList", "Items"]);
+  const declarationNumbers = extractDeclarationNumbers(cleanXmlValue(goodsSection ?? xml) ?? "");
 
   if (!invoiceNumber && !sellerTaxCode && !sellerName) return null;
   return {
@@ -201,5 +222,6 @@ export function parseVendorInvoiceXml(buffer: Buffer): ParsedVendorInvoice | nul
     currency,
     invoiceDirection,
     isIssuedToNq: invoiceDirection === "INPUT" ? true : invoiceDirection === "UNKNOWN" ? null : false,
+    declarationNumbers,
   };
 }

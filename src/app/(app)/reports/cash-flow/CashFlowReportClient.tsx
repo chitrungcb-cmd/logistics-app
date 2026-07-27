@@ -71,7 +71,8 @@ export default function CashFlowReportClient() {
     await load();
   }
 
-  const totalThu = report ? [...report.companyAccounts, ...report.persons].reduce((s, a) => s + a.thu, 0) : 0;
+  // Tổng phải phản ánh TOÀN BỘ tiền vào/ra, gồm cả khoản chưa gán tài khoản — để hai vế cân xứng.
+  const totalThu = report ? [...report.companyAccounts, ...report.persons].reduce((s, a) => s + a.thu, 0) + report.unassignedThu.amount : 0;
   const totalChi = report ? [...report.companyAccounts, ...report.persons].reduce((s, a) => s + a.chi, 0) + report.unassignedChi.amount : 0;
 
   return (

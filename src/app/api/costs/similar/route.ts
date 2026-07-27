@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { COST_CATEGORY_OPTIONS } from "@/lib/shipment-cost-constants";
 import { findSimilarShipments } from "@/lib/similar-shipments";
+import { hasModuleAccess } from "@/lib/module-permissions";
 
 const SIMILAR_LIMIT = 10;
 
@@ -13,7 +14,7 @@ const SIMILAR_LIMIT = 10;
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
-  if (user.role !== "ADMIN") return apiError("Bạn không có quyền xem dữ liệu chi phí.", 403);
+  if (!hasModuleAccess(user, "COSTS")) return apiError("Bạn không có quyền xem dữ liệu chi phí.", 403);
 
   const shipmentId = request.nextUrl.searchParams.get("shipmentId");
   if (!shipmentId) return apiError("Thiếu lô hàng.", 400);

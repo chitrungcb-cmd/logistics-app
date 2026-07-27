@@ -10,6 +10,7 @@ import {
 } from "@/lib/shipment-cost-constants";
 import { buildUpdateDetail } from "@/lib/cost-audit-log";
 import { syncShipmentDebts } from "@/lib/shipment-debt-sync";
+import { hasModuleAccess } from "@/lib/module-permissions";
 
 const UPDATABLE_FIELDS = [
   "category",
@@ -32,7 +33,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
-    if (user.role !== "ADMIN") return apiError("Bạn không có quyền sửa chi phí.", 403);
+    if (!hasModuleAccess(user, "COSTS")) return apiError("Bạn không có quyền sửa chi phí.", 403);
 
     const { costId } = await params;
     const existing = await prisma.shipmentCost.findUnique({
@@ -165,7 +166,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
-    if (user.role !== "ADMIN") return apiError("Bạn không có quyền xóa chi phí.", 403);
+    if (!hasModuleAccess(user, "COSTS")) return apiError("Bạn không có quyền xóa chi phí.", 403);
 
     const { costId } = await params;
     const existing = await prisma.shipmentCost.findUnique({ where: { id: costId } });

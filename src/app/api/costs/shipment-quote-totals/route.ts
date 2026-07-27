@@ -1,15 +1,16 @@
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { hasModuleAccess } from "@/lib/module-permissions";
 
-// Quote totals are financial data, so keep them behind the same ADMIN boundary as /api/costs.
+// Quote totals are financial data, so keep them behind the same COSTS permission as /api/costs.
 // Returning only the latest snapshot per shipment is enough for the cost overview to compute
 // revenue without exposing quote data through the general-purpose /api/shipments endpoint.
 export async function GET() {
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
-    if (user.role !== "ADMIN") return apiError("Bạn không có quyền xem tổng thu lô hàng.", 403);
+    if (!hasModuleAccess(user, "COSTS")) return apiError("Bạn không có quyền xem tổng thu lô hàng.", 403);
 
     const shipments = await prisma.shipment.findMany({
       select: {

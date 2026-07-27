@@ -20,10 +20,10 @@ import type { ShipmentDTO } from "@/lib/types";
 
 export default function ShipmentDetailClient({
   shipmentId,
-  role,
+  canViewCosts,
 }: {
   shipmentId: string;
-  role: string;
+  canViewCosts: boolean;
 }) {
   const [shipment, setShipment] = useState<ShipmentDTO | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -371,7 +371,7 @@ export default function ShipmentDetailClient({
         </section>
       </div>
 
-      {role === "ADMIN" && (
+      {canViewCosts && (
         <Link
           href={`/costs?shipmentId=${shipmentId}`}
           className="mt-6 inline-block text-sm text-blue-600 hover:underline"

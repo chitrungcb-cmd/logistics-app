@@ -2,13 +2,14 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { computeProfit } from "@/lib/shipment-cost-constants";
+import { hasModuleAccess } from "@/lib/module-permissions";
 
-// Whole page is ADMIN-only (see CLAUDE.md "Profit visibility") — this endpoint exposes costPrice-
-// derived profit, which ACCOUNTANT must never see, so there's no partial/stripped response for them.
+// Lãi/lỗ contains costPrice-derived data and is therefore protected by the explicit REPORTS
+// permission at both the page and API layers.
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
-  if (user.role !== "ADMIN") return apiError("Bạn không có quyền xem báo cáo lãi lỗ.", 403);
+  if (!hasModuleAccess(user, "REPORTS")) return apiError("Bạn không có quyền xem báo cáo lãi lỗ.", 403);
 
   const shipments = await prisma.shipment.findMany({
     where: { declarationDate: { not: null } },

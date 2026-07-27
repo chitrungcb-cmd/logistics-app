@@ -26,6 +26,7 @@ const ROLE_MODULES: Record<UserRole, readonly AppModule[]> = {
     "SHIPMENTS",
     "TASKS",
     "MESSAGES",
+    "COSTS",
     "OTHER_EXPENSES",
     "DEBTS",
     "REPORTS",
@@ -89,7 +90,14 @@ export function getApiModules(pathname: string, method: string): AppModule[] | n
   if (pathname.startsWith("/api/personal-account")) return ["PERSONAL_ACCOUNT"];
   if (pathname.startsWith("/api/gmail")) return ["SHIPMENTS"];
   if (pathname.startsWith("/api/reports")) return ["REPORTS"];
-  if (pathname.startsWith("/api/shipments")) return ["SHIPMENTS", "TASKS", "MESSAGES", "DEBTS"];
+  if (pathname.startsWith("/api/shipments")) {
+    const supportsCosts =
+      (method === "GET" && pathname === "/api/shipments") ||
+      /\/(?:finance-links|quote-lines)$/.test(pathname);
+    return supportsCosts
+      ? ["SHIPMENTS", "TASKS", "MESSAGES", "COSTS", "DEBTS"]
+      : ["SHIPMENTS", "TASKS", "MESSAGES", "DEBTS"];
+  }
   if (pathname.startsWith("/api/tasks")) return ["TASKS"];
   if (pathname.startsWith("/api/vendor-invoices")) return ["DEBTS", "PARTNERS", "REPORTS"];
   if (pathname.startsWith("/api/vendors")) return ["PARTNERS", "SETTINGS", "COSTS"];
@@ -98,7 +106,7 @@ export function getApiModules(pathname: string, method: string): AppModule[] | n
   }
   if (pathname.startsWith("/api/users")) {
     return method === "GET"
-      ? ["USERS", "TASKS", "MESSAGES", "CUSTOMERS", "PERSONAL_ACCOUNT"]
+      ? ["USERS", "TASKS", "MESSAGES", "CUSTOMERS", "COSTS", "PERSONAL_ACCOUNT"]
       : ["USERS"];
   }
   return null;

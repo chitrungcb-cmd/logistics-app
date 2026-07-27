@@ -20,7 +20,7 @@ function Balance({ value }: { value: number }) {
   return <span className={value >= 0 ? "text-blue-700" : "text-orange-700"}>{formatVnd(value)}</span>;
 }
 
-export default function CashFlowReportClient() {
+export default function CashFlowReportClient({ canManageAccounts }: { canManageAccounts: boolean }) {
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -112,20 +112,26 @@ export default function CashFlowReportClient() {
           <section className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="font-semibold text-gray-900">Tài khoản công ty</h2>
-              <div className="flex gap-2">
-                <input
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addAccount()}
-                  className="input w-64"
-                  placeholder="Tên TK (vd: VCB - Cty A)"
-                />
-                <button type="button" onClick={addAccount} disabled={busy || !newName.trim()} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                  + Thêm TK
-                </button>
-              </div>
+              {canManageAccounts && (
+                <div className="flex gap-2">
+                  <input
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addAccount()}
+                    className="input w-64"
+                    placeholder="Tên TK (vd: VCB - Cty A)"
+                  />
+                  <button type="button" onClick={addAccount} disabled={busy || !newName.trim()} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                    + Thêm TK
+                  </button>
+                </div>
+              )}
             </div>
-            <AccountTable rows={report.companyAccounts} onToggle={toggleAccount} showToggle />
+            <AccountTable
+              rows={report.companyAccounts}
+              onToggle={canManageAccounts ? toggleAccount : undefined}
+              showToggle={canManageAccounts}
+            />
           </section>
 
           <section className="rounded-xl border border-gray-200 bg-white p-5">

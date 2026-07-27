@@ -9,16 +9,15 @@ import {
   isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
 import { syncShipmentDebts } from "@/lib/shipment-debt-sync";
+import { hasModuleAccess } from "@/lib/module-permissions";
 
-// Flat ledger across every shipment — ADMIN only, end to end (see CLAUDE.md "Profit visibility").
-// This is the ONLY place ShipmentCost is created/edited/deleted in the whole app; the shipment
-// detail page deliberately shows nothing but a link here for ADMIN, to avoid a second surface that
-// needs its own permission checks.
+// Flat ledger across every shipment. Access follows the per-user COSTS module permission; every
+// handler repeats the database-backed check so direct API requests cannot bypass the page gate.
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
-    if (user.role !== "ADMIN") return apiError("Bạn không có quyền xem chi phí.", 403);
+    if (!hasModuleAccess(user, "COSTS")) return apiError("Bạn không có quyền xem chi phí.", 403);
 
     const params = request.nextUrl.searchParams;
     const shipmentId = params.get("shipmentId");
@@ -65,7 +64,7 @@ export async function POST(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
-    if (user.role !== "ADMIN") return apiError("Bạn không có quyền thêm chi phí.", 403);
+    if (!hasModuleAccess(user, "COSTS")) return apiError("Bạn không có quyền thêm chi phí.", 403);
 
     const body = await request.json();
     if (!body.shipmentId) return apiError("Vui lòng chọn lô hàng.", 400);

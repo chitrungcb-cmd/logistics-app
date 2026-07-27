@@ -2,15 +2,16 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { buildCashFlowReport } from "@/lib/cash-flow-report";
+import { hasModuleAccess } from "@/lib/module-permissions";
 
-// Báo cáo thu–chi theo tài khoản (ADMIN-only, như mọi dữ liệu chi phí).
+// Báo cáo thu–chi theo tài khoản dành cho người đã được cấp mô-đun REPORTS.
 // CHI: Σ costPrice thực tế nhóm theo "Chi từ TK" (paidFromCompanyAccountId / paidByUserId).
 // THU: Σ Payment nhóm theo "TK nhận tiền" (receivedToCompanyAccountId / receivedByUserId).
 // Mỗi tài khoản (công ty + từng người) hiện Thu / Chi / Số dư.
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
-  if (user.role !== "ADMIN") return apiError("Bạn không có quyền xem báo cáo này.", 403);
+  if (!hasModuleAccess(user, "REPORTS")) return apiError("Bạn không có quyền xem báo cáo này.", 403);
 
   const [accounts, users, chiByCompany, chiByPerson, chiUnassigned, thuByCompany, thuByPerson, thuUnassigned] = await Promise.all([
     prisma.companyAccount.findMany({ orderBy: [{ isActive: "desc" }, { name: "asc" }] }),

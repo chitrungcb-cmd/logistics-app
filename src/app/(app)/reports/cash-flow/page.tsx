@@ -1,10 +1,7 @@
-import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth";
+import { requireModuleAccess } from "@/lib/module-access";
 import CashFlowReportClient from "./CashFlowReportClient";
 
 export default async function CashFlowReportPage() {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
-  if (user.role !== "ADMIN") redirect("/reports");
-  return <CashFlowReportClient />;
+  const user = await requireModuleAccess("REPORTS");
+  return <CashFlowReportClient canManageAccounts={user.role === "ADMIN"} />;
 }

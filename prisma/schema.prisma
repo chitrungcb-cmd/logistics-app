@@ -87,8 +87,8 @@ enum CostCategory {
 
 // Detailed cost-line ledger for a shipment. costPrice (what NQ Logistics actually pays out) always
 // counts toward Tổng chi phí; sellPrice only counts toward Tổng thu when isAdditional is true — costs
-// already covered by the quote don't get counted twice. ADMIN-only data (see CLAUDE.md "Profit
-// visibility"): ACCOUNTANT must never see costPrice or anything profit-derived from it.
+// already covered by the quote don't get counted twice. Access is controlled by the explicit COSTS
+// and REPORTS module permissions at both page and API layers.
 model ShipmentCost {
   id             String          @id @default(cuid())
   shipment       Shipment        @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
@@ -233,8 +233,7 @@ model CostAuditLog {
 
 // A shipment can accumulate several quote revisions over time; only the most recent (by createdAt)
 // counts as the active quoteAmount for profit calculations — see mergeDeclarationBranch-style "latest
-// wins" precedent elsewhere in this codebase. Visible to ADMIN and ACCOUNTANT (customer-facing
-// quoting), unlike ShipmentCost.
+// wins" precedent elsewhere in this codebase. Visible through the relevant module permission.
 model Quote {
   id            String    @id @default(cuid())
   shipment      Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)

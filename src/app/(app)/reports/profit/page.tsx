@@ -1,11 +1,8 @@
-import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth";
+import { requireModuleAccess } from "@/lib/module-access";
 import ProfitReportClient from "./ProfitReportClient";
 
 export default async function ProfitReportPage() {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
-  if (user.role !== "ADMIN") redirect("/reports");
+  await requireModuleAccess("REPORTS");
 
   return <ProfitReportClient />;
 }

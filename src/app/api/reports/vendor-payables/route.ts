@@ -7,6 +7,7 @@ import {
   COST_CATEGORY_OPTIONS,
   VENDORLESS_COST_CATEGORIES,
 } from "@/lib/shipment-cost-constants";
+import { hasModuleAccess } from "@/lib/module-permissions";
 
 type DetailRow = {
   costId: string;
@@ -39,7 +40,7 @@ type VendorGroup = {
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
-  if (user.role !== "ADMIN") return apiError("Bạn không có quyền xem báo cáo phải trả.", 403);
+  if (!hasModuleAccess(user, "REPORTS")) return apiError("Bạn không có quyền xem báo cáo phải trả.", 403);
 
   const month = request.nextUrl.searchParams.get("month") || "";
   const category = request.nextUrl.searchParams.get("category") || "";

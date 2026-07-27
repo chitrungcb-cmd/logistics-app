@@ -1,12 +1,16 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { randomBytes } from "crypto";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError } from "@/lib/api-response";
-import { getGoogleAuthUrl, GOOGLE_OAUTH_STATE_COOKIE } from "@/lib/google";
+import {
+  getGoogleAuthUrl,
+  getGoogleRedirectUri,
+  GOOGLE_OAUTH_STATE_COOKIE,
+} from "@/lib/google";
 
 // ADMIN-only: connecting a mailbox decides whose email the whole company syncs shipments from.
-export async function GET() {
+export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
   if (user.role !== "ADMIN") return apiError("Chỉ Admin mới được kết nối Gmail.", 403);
@@ -21,5 +25,5 @@ export async function GET() {
     maxAge: 10 * 60,
   });
 
-  return NextResponse.redirect(getGoogleAuthUrl(state));
+  return NextResponse.redirect(getGoogleAuthUrl(state, getGoogleRedirectUri(request)));
 }

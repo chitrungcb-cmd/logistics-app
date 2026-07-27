@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { timingSafeEqual } from "crypto";
 import { google } from "googleapis";
 import { getCurrentUser } from "@/lib/auth";
-import { createOAuth2Client } from "@/lib/google";
+import { createOAuth2Client, getGoogleRedirectUri } from "@/lib/google";
 import { prisma } from "@/lib/prisma";
 import { GOOGLE_OAUTH_STATE_COOKIE } from "@/lib/google";
 import { encryptSecret } from "@/lib/secret-encryption";
@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const client = createOAuth2Client();
+    const client = createOAuth2Client(getGoogleRedirectUri(request));
     const { tokens } = await client.getToken(code);
 
     if (!tokens.refresh_token) {

@@ -1,22 +1,35 @@
 import { google } from "googleapis";
+import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "@/lib/secret-encryption";
+import { resolveGoogleRedirectUri } from "@/lib/oauth-redirect";
 
 const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 export const GOOGLE_OAUTH_STATE_COOKIE = process.env.NODE_ENV === "production"
   ? "__Host-google-oauth-state"
   : "google-oauth-state";
 
-export function createOAuth2Client() {
+export function createOAuth2Client(redirectUri = process.env.GOOGLE_REDIRECT_URI) {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
+    redirectUri
   );
 }
 
-export function getGoogleAuthUrl(state: string) {
-  const client = createOAuth2Client();
+export function getGoogleRedirectUri(request: NextRequest) {
+  return resolveGoogleRedirectUri({
+    configuredAppUrl: process.env.APP_URL,
+    configuredRedirectUri: process.env.GOOGLE_REDIRECT_URI,
+    requestUrl: request.url,
+    forwardedHost: request.headers.get("x-forwarded-host"),
+    forwardedProto: request.headers.get("x-forwarded-proto"),
+    host: request.headers.get("host"),
+  });
+}
+
+export function getGoogleAuthUrl(state: string, redirectUri?: string) {
+  const client = createOAuth2Client(redirectUri);
   return client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",

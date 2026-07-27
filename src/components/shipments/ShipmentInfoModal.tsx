@@ -10,7 +10,38 @@ import {
   statusBadgeClass,
   type Attachment,
 } from "@/lib/shipment-constants";
+import { COST_CATEGORY_LABELS } from "@/lib/shipment-cost-constants";
 import type { ShipmentDTO } from "@/lib/types";
+
+type PayableCost = {
+  id: string;
+  category: string;
+  customLabel: string | null;
+  costPrice: number;
+  isPaid: boolean;
+  paidAt: string | null;
+  vendorName: string | null;
+  paidByName: string | null;
+  paidConfirmedByName: string | null;
+  canTick: boolean;
+};
+
+type ShipmentDebt = {
+  id: string;
+  type: "RECEIVABLE" | "PAYABLE";
+  partnerName: string;
+  totalAmount: number;
+  paidAmount: number;
+  remainingAmount: number;
+  dueDate: string | null;
+  status: string;
+  canEditDate: boolean;
+  costs: PayableCost[];
+};
+
+function formatVnd(amount: number) {
+  return amount.toLocaleString("vi-VN") + " đ";
+}
 
 export default function ShipmentInfoModal({
   shipmentId,
@@ -23,6 +54,10 @@ export default function ShipmentInfoModal({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState<Attachment | null>(null);
+  const [debts, setDebts] = useState<ShipmentDebt[]>([]);
+  const [savingDebtId, setSavingDebtId] = useState<string | null>(null);
+  const [debtError, setDebtError] = useState<string | null>(null);
+  const [togglingCostId, setTogglingCostId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +87,73 @@ export default function ShipmentInfoModal({
       cancelled = true;
     };
   }, [shipmentId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/shipments/${shipmentId}/debts`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        // 403 (FIELD_STAFF) hoặc lỗi → không hiện mục công nợ; không chặn phần còn lại.
+        if (!cancelled && json?.success) setDebts(json.data);
+      })
+      .catch(() => {
+        /* mục công nợ là bổ sung, lỗi tải bỏ qua */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shipmentId]);
+
+  async function toggleCostPaid(debtId: string, cost: PayableCost, nextPaid: boolean) {
+    setTogglingCostId(cost.id);
+    setDebtError(null);
+    try {
+      const res = await fetch(`/api/debts/${debtId}/payable-costs/${cost.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isPaid: nextPaid }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Không thể cập nhật.");
+      setDebts((current) =>
+        current.map((debt) =>
+          debt.id === debtId
+            ? {
+                ...debt,
+                costs: debt.costs.map((c) =>
+                  c.id === cost.id
+                    ? { ...c, isPaid: json.data.isPaid, paidAt: json.data.paidAt, paidConfirmedByName: json.data.paidConfirmedBy?.name ?? null }
+                    : c
+                ),
+              }
+            : debt
+        )
+      );
+    } catch (toggleError) {
+      setDebtError(toggleError instanceof Error ? toggleError.message : "Đã có lỗi xảy ra.");
+    } finally {
+      setTogglingCostId(null);
+    }
+  }
+
+  async function saveDebtDate(debtId: string, dueDate: string) {
+    setSavingDebtId(debtId);
+    setDebtError(null);
+    try {
+      const res = await fetch(`/api/debts/${debtId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dueDate: dueDate || null }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Không thể lưu ngày thanh toán.");
+      setDebts((current) => current.map((debt) => (debt.id === debtId ? { ...debt, dueDate: dueDate || null } : debt)));
+    } catch (saveError) {
+      setDebtError(saveError instanceof Error ? saveError.message : "Đã có lỗi xảy ra.");
+    } finally {
+      setSavingDebtId(null);
+    }
+  }
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -127,6 +229,77 @@ export default function ShipmentInfoModal({
                   <h3 className="mb-4 text-base font-semibold text-gray-900">Thông tin chi tiết</h3>
                   <ShipmentDetailsTable shipment={shipment} />
                 </section>
+
+                {debts.length > 0 && (
+                  <section className="rounded-lg border border-gray-200 bg-white p-5">
+                    <h3 className="mb-3 text-base font-semibold text-gray-900">Công nợ</h3>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {debts.map((debt) => {
+                        const isReceivable = debt.type === "RECEIVABLE";
+                        return (
+                          <div
+                            key={debt.id}
+                            className={`rounded-lg border p-4 ${isReceivable ? "border-blue-200 bg-blue-50/50" : "border-emerald-200 bg-emerald-50/50"}`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className={`text-sm font-semibold ${isReceivable ? "text-blue-800" : "text-emerald-800"}`}>
+                                {isReceivable ? "Phải thu" : "Phải trả"}
+                              </span>
+                              <a href={`/debts/${debt.id}`} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline">
+                                Mở chi tiết →
+                              </a>
+                            </div>
+                            <p className="mt-0.5 text-xs text-gray-500">{debt.partnerName}</p>
+                            <dl className="mt-2 space-y-1 text-sm">
+                              <div className="flex justify-between"><dt className="text-gray-500">Tổng tiền</dt><dd className="font-medium text-gray-900">{formatVnd(debt.totalAmount)}</dd></div>
+                              <div className="flex justify-between"><dt className="text-gray-500">Đã thanh toán</dt><dd className="font-medium text-green-700">{formatVnd(debt.paidAmount)}</dd></div>
+                              <div className="flex justify-between border-t border-gray-200/70 pt-1"><dt className="text-gray-600">Còn lại</dt><dd className="font-semibold text-gray-900">{formatVnd(debt.remainingAmount)}</dd></div>
+                            </dl>
+                            <label className="mt-3 block">
+                              <span className="mb-1 block text-xs font-medium text-gray-600">Ngày thanh toán</span>
+                              <input
+                                type="date"
+                                defaultValue={debt.dueDate ? debt.dueDate.slice(0, 10) : ""}
+                                disabled={!debt.canEditDate || savingDebtId === debt.id}
+                                onChange={(event) => saveDebtDate(debt.id, event.target.value)}
+                                className="input w-full disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
+                                title="Chọn ngày thanh toán"
+                              />
+                            </label>
+
+                            {!isReceivable && debt.costs.length > 0 && (
+                              <div className="mt-3 border-t border-emerald-200/70 pt-2">
+                                <p className="mb-1 text-xs font-medium text-gray-600">
+                                  Chi phí ({debt.costs.filter((c) => c.isPaid).length}/{debt.costs.length} đã trả) — tích khi đã thanh toán
+                                </p>
+                                <ul className="space-y-1">
+                                  {debt.costs.map((cost) => (
+                                    <li key={cost.id} className="flex items-center gap-2 text-sm">
+                                      <input
+                                        type="checkbox"
+                                        checked={cost.isPaid}
+                                        disabled={!cost.canTick || togglingCostId === cost.id}
+                                        onChange={(event) => toggleCostPaid(debt.id, cost, event.target.checked)}
+                                        className="h-4 w-4 shrink-0 cursor-pointer accent-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+                                        title={cost.canTick ? "Tích khi đã thanh toán" : "Chỉ người phụ trách khoản này mới tích được"}
+                                      />
+                                      <span className="min-w-0 flex-1 truncate text-gray-700">
+                                        {cost.customLabel || COST_CATEGORY_LABELS[cost.category] || cost.category}
+                                        {cost.paidByName ? <span className="text-gray-400"> · {cost.paidByName}</span> : null}
+                                      </span>
+                                      <span className="shrink-0 font-medium text-gray-900">{formatVnd(cost.costPrice)}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {debtError && <p className="mt-2 text-sm text-red-600">{debtError}</p>}
+                  </section>
+                )}
 
                 <section className="rounded-lg border border-gray-200 bg-white p-5">
                   <h3 className="mb-3 text-base font-semibold text-gray-900">Chứng từ đính kèm</h3>

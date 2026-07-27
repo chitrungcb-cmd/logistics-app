@@ -152,6 +152,27 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
     loadDebt();
   }, [loadDebt]);
 
+  // Cả cặp công nợ (phải thu + phải trả) của lô — để xem cả hai ngay tại đây, khỏi mở riêng từng cái.
+  const [pairDebts, setPairDebts] = useState<
+    Array<{ id: string; type: "RECEIVABLE" | "PAYABLE"; totalAmount: number; paidAmount: number; remainingAmount: number }>
+  >([]);
+  const shipmentIdForPair = debt?.shipment?.id;
+  useEffect(() => {
+    if (!shipmentIdForPair) return;
+    let cancelled = false;
+    fetch(`/api/shipments/${shipmentIdForPair}/debts`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && json?.success) setPairDebts(json.data);
+      })
+      .catch(() => {
+        /* panel bổ sung, lỗi tải bỏ qua */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shipmentIdForPair]);
+
   useEffect(() => {
     fetch("/api/company-accounts")
       .then((res) => res.json())
@@ -428,6 +449,47 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
         </div>
         <p className="mt-1 text-sm text-gray-500">{DEBT_TYPE_LABELS[debt.type]}</p>
       </div>
+
+      {debt.shipment && pairDebts.some((d) => d.id === debt.id) && (
+        <div className="mb-6 grid gap-3 sm:grid-cols-2">
+          {(["RECEIVABLE", "PAYABLE"] as const).map((type) => {
+            const d = pairDebts.find((x) => x.type === type);
+            const isCurrent = d?.id === debt.id;
+            const isReceivable = type === "RECEIVABLE";
+            const card = (
+              <div
+                className={`rounded-lg border p-4 ${
+                  isReceivable ? "border-blue-200 bg-blue-50/60" : "border-emerald-200 bg-emerald-50/60"
+                } ${isCurrent ? "ring-2 ring-offset-1 " + (isReceivable ? "ring-blue-400" : "ring-emerald-400") : d ? "cursor-pointer hover:brightness-95" : "opacity-60"}`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`text-sm font-semibold ${isReceivable ? "text-blue-800" : "text-emerald-800"}`}>
+                    {isReceivable ? "Phải thu" : "Phải trả"}
+                  </span>
+                  {isCurrent && <span className="text-[10px] font-medium text-gray-500">Đang xem</span>}
+                </div>
+                {d ? (
+                  <dl className="mt-2 space-y-1 text-sm">
+                    <div className="flex justify-between"><dt className="text-gray-500">Tổng</dt><dd className="font-medium text-gray-900">{formatVnd(d.totalAmount)}</dd></div>
+                    <div className="flex justify-between"><dt className="text-gray-500">Đã thanh toán</dt><dd className="font-medium text-green-700">{formatVnd(d.paidAmount)}</dd></div>
+                    <div className="flex justify-between border-t border-gray-200/70 pt-1"><dt className="text-gray-600">Còn lại</dt><dd className="font-semibold text-gray-900">{formatVnd(d.remainingAmount)}</dd></div>
+                  </dl>
+                ) : (
+                  <p className="mt-2 text-sm text-gray-400">Chưa có</p>
+                )}
+              </div>
+            );
+            if (d && !isCurrent) {
+              return (
+                <button key={type} type="button" onClick={() => router.push(`/debts/${d.id}`)} className="text-left">
+                  {card}
+                </button>
+              );
+            }
+            return <div key={type}>{card}</div>;
+          })}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <section className="rounded-lg border border-gray-200 bg-white p-6 lg:col-span-2">

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import CreateGroupModal from "./CreateGroupModal";
+import NewDirectMessageModal from "./NewDirectMessageModal";
 
 const CONVERSATIONS_POLL_MS = 30000;
 const MESSAGES_POLL_MS = 10000;
@@ -79,6 +80,7 @@ export default function MessagesClient({ currentUserId }: { currentUserId: strin
   const [mentionedUserIds, setMentionedUserIds] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [showNewDirectModal, setShowNewDirectModal] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -269,13 +271,22 @@ export default function MessagesClient({ currentUserId }: { currentUserId: strin
       <div className="flex w-72 shrink-0 flex-col border-r border-gray-200 bg-white">
         <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
           <h2 className="text-base font-semibold text-gray-900">Tin nhắn</h2>
-          <button
-            type="button"
-            onClick={() => setShowCreateGroupModal(true)}
-            className="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
-          >
-            + Tạo nhóm
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowNewDirectModal(true)}
+              className="rounded-md border border-blue-600 px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50"
+            >
+              + Nhắn riêng
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCreateGroupModal(true)}
+              className="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
+            >
+              + Tạo nhóm
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           {sortedConversations.length === 0 && (
@@ -460,6 +471,23 @@ export default function MessagesClient({ currentUserId }: { currentUserId: strin
           onClose={() => setShowCreateGroupModal(false)}
           onCreated={(conversationId) => {
             setShowCreateGroupModal(false);
+            fetch("/api/conversations")
+              .then((res) => res.json())
+              .then((json) => {
+                if (json.success) setConversations(json.data);
+                selectConversation(conversationId);
+              })
+              .catch(() => {});
+          }}
+        />
+      )}
+
+      {showNewDirectModal && (
+        <NewDirectMessageModal
+          currentUserId={currentUserId}
+          onClose={() => setShowNewDirectModal(false)}
+          onCreated={(conversationId) => {
+            setShowNewDirectModal(false);
             fetch("/api/conversations")
               .then((res) => res.json())
               .then((json) => {

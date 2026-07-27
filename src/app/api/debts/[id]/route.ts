@@ -96,10 +96,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     const existing = await prisma.debt.findUnique({ where: { id }, include: { payments: { select: { amount: true } } } });
     if (!existing) return apiError("Không tìm thấy công nợ.", 404);
-    if (user.role !== "ADMIN" && isAutomaticPayableDebt(existing.sourceKey)) {
-      return apiError("Bạn không có quyền sửa công nợ chi phí tự động.", 403);
+    // ACCOUNTANT được sửa ngày thanh toán (dueDate)/ghi chú của công nợ Phải trả tự động; chỉ số tiền
+    // và lô hàng mới giữ riêng cho ADMIN (khối bên dưới chặn với mọi công nợ tự động).
+    const touchesAmountOrShipment = "totalAmount" in body || "shipmentId" in body;
+    if (user.role !== "ADMIN" && isAutomaticPayableDebt(existing.sourceKey) && touchesAmountOrShipment) {
+      return apiError("Chỉ quản trị viên được sửa số tiền/lô hàng của công nợ chi phí tự động.", 403);
     }
-    if (isAutomaticDebt(existing.sourceKey) && ("totalAmount" in body || "shipmentId" in body)) {
+    if (isAutomaticDebt(existing.sourceKey) && touchesAmountOrShipment) {
       return apiError("Số tiền và lô hàng của công nợ tự động được cập nhật từ tài chính lô hàng.", 400);
     }
 

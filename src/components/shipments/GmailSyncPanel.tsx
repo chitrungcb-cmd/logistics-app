@@ -25,6 +25,8 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
   const [summary, setSummary] = useState<SyncSummary | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [serverSyncConfigured, setServerSyncConfigured] = useState(false);
+  const [reconnectRequired, setReconnectRequired] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const isSyncingRef = useRef(false);
   const [error, setError] = useState<string | null>(() =>
     typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("gmail_error")
@@ -45,6 +47,8 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
           setEmail(json.data.email);
           setLastSyncedAt(json.data.lastSyncedAt ? new Date(json.data.lastSyncedAt) : null);
           setServerSyncConfigured(Boolean(json.data.serverSyncConfigured));
+          setReconnectRequired(Boolean(json.data.reconnectRequired));
+          setConnectionError(json.data.connectionError || null);
         }
       } catch {
         setIsConnected(false);
@@ -90,8 +94,11 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
           <p className="mt-0.5 text-xs text-gray-500">
             {isConnected
               ? `Đã kết nối Gmail: ${email} · tự đọc tờ khai và hóa đơn đầu vào/đầu ra`
-              : "Chưa kết nối Gmail — tự động tạo/cập nhật lô hàng và đối chiếu hóa đơn đính kèm trong email."}
+              : reconnectRequired
+                ? `Gmail ${email || ""} cần được kết nối lại để tiếp tục tự động cập nhật.`
+                : "Chưa kết nối Gmail — tự động tạo/cập nhật lô hàng và đối chiếu hóa đơn đính kèm trong email."}
           </p>
+          {connectionError && <p className="mt-1 text-xs font-medium text-red-600">{connectionError}</p>}
         </div>
         {isConnected ? (
           <div className="flex items-center gap-3 text-right">
@@ -119,7 +126,7 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
             href="/api/gmail/auth"
             className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
-            Kết nối Gmail
+            {reconnectRequired ? "Kết nối lại Gmail" : "Kết nối Gmail"}
           </a>
         )}
       </div>

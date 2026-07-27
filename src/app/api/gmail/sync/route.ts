@@ -3,7 +3,11 @@ import { timingSafeEqual } from "crypto";
 import { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
-import { getAuthorizedGmailClient } from "@/lib/google";
+import {
+  getAuthorizedGmailClient,
+  verifyGmailClient,
+} from "@/lib/google";
+import { isExpiredGmailTokenError } from "@/lib/gmail-errors";
 import { parseTokhaiExcel, type ParsedDeclaration } from "@/lib/tokhai-parser";
 import { saveUploadedFile } from "@/lib/save-upload";
 import { prisma } from "@/lib/prisma";
@@ -503,6 +507,15 @@ export async function POST(request: NextRequest) {
     const gmail = await getAuthorizedGmailClient();
     if (!gmail) {
       return apiError("Chưa kết nối Gmail. Hãy bấm \"Kết nối Gmail\" trước.", 400);
+    }
+    try {
+      await verifyGmailClient(gmail);
+    } catch (error) {
+      if (isExpiredGmailTokenError(error)) {
+        return apiError("Phiên Gmail đã hết hạn hoặc bị thu hồi. Hãy kết nối lại Gmail.", 401);
+      }
+      console.error("Gmail credential verification failed:", error);
+      return apiError("Không thể xác thực Gmail lúc này. Vui lòng thử lại.", 502);
     }
 
     if (syncInProgress) {

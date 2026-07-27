@@ -1,5 +1,10 @@
 import { getCurrentUser } from "@/lib/auth";
-import { getGmailAuthRecord } from "@/lib/google";
+import {
+  getAuthorizedGmailClient,
+  getGmailAuthRecord,
+  verifyGmailClient,
+} from "@/lib/google";
+import { isExpiredGmailTokenError } from "@/lib/gmail-errors";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { prisma } from "@/lib/prisma";
 
@@ -20,11 +25,30 @@ export async function GET() {
       .filter((value): value is Date => value instanceof Date)
       .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
 
+    let connected = false;
+    let reconnectRequired = false;
+    let connectionError: string | null = null;
+    if (auth) {
+      try {
+        const gmail = await getAuthorizedGmailClient();
+        if (!gmail) throw new Error("Không tìm thấy cấu hình Gmail.");
+        await verifyGmailClient(gmail);
+        connected = true;
+      } catch (error) {
+        reconnectRequired = isExpiredGmailTokenError(error);
+        connectionError = reconnectRequired
+          ? "Phiên Gmail đã hết hạn hoặc bị Google thu hồi. Hãy kết nối lại Gmail."
+          : "Không thể xác thực Gmail lúc này. Hãy thử kết nối lại.";
+      }
+    }
+
     return apiSuccess({
-      connected: !!auth,
+      connected,
       email: auth?.email ?? null,
       lastSyncedAt,
       serverSyncConfigured: Boolean(process.env.CRON_SECRET),
+      reconnectRequired,
+      connectionError,
     });
   } catch (error) {
     console.error("GET /api/gmail/status failed:", error);

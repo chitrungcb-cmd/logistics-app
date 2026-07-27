@@ -49,3 +49,11 @@ export async function getAuthorizedGmailClient() {
   client.setCredentials({ refresh_token: refreshToken });
   return google.gmail({ version: "v1", auth: client });
 }
+
+/** Forces one authenticated Gmail request so stale refresh tokens fail before a sync is accepted. */
+export async function verifyGmailClient(
+  gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>
+) {
+  const profile = await gmail.users.getProfile({ userId: "me" });
+  return profile.data.emailAddress ?? null;
+}

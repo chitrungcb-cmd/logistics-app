@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCustomsGate, presetGateMatchesPort, getGoodsKeyword } from "@/lib/goods-keyword";
+import { normalizeCustomsGate, presetGateMatchesPort, getGoodsKeyword, getGoodsQuantity, isPerLotUnit } from "@/lib/goods-keyword";
 import { selectApplicablePresets } from "@/lib/cost-presets";
 import type { CostCategory } from "@/generated/prisma/enums";
 
@@ -90,5 +90,23 @@ describe("goods keyword still groups the goods name", () => {
   it("máy nghiền đá cũ → MÁY NGHIỀN", () => {
     expect(getGoodsKeyword("Máy nghiền đá cũ")).toBe("MÁY NGHIỀN");
     expect(getGoodsKeyword("10 MÁY NGHIỀN ĐÁ")).toBe("MÁY NGHIỀN");
+  });
+});
+
+describe("số lượng theo tên hàng + đơn vị tính", () => {
+  it("lấy số đứng đầu tên hàng làm số lượng", () => {
+    expect(getGoodsQuantity("10 MÁY NGHIỀN ĐÁ")).toBe(10);
+    expect(getGoodsQuantity("20 ĐẦU KÉO")).toBe(20);
+    expect(getGoodsQuantity("Máy nghiền đá cũ")).toBe(1); // không có số đầu
+    expect(getGoodsQuantity(null)).toBe(1);
+  });
+
+  it("đơn vị 'Lô'/để trống = cho cả lô; máy/xe = theo số lượng", () => {
+    expect(isPerLotUnit("Lô")).toBe(true);
+    expect(isPerLotUnit("lô")).toBe(true);
+    expect(isPerLotUnit("")).toBe(true);
+    expect(isPerLotUnit(null)).toBe(true);
+    expect(isPerLotUnit("máy")).toBe(false);
+    expect(isPerLotUnit("xe")).toBe(false);
   });
 });

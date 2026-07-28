@@ -48,9 +48,19 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (vendorId && !(await prisma.vendor.findUnique({ where: { id: vendorId }, select: { id: true } }))) {
       return apiError("Nhà cung cấp không hợp lệ.", 400);
     }
+    const unit = body.unit === undefined ? existing.unit : (typeof body.unit === "string" && body.unit.trim() ? body.unit.trim() : null);
+    const paidFromCompanyAccountId = body.paidFromCompanyAccountId === undefined
+      ? existing.paidFromCompanyAccountId
+      : (typeof body.paidFromCompanyAccountId === "string" && body.paidFromCompanyAccountId ? body.paidFromCompanyAccountId : null);
+    const paidByUserId = paidFromCompanyAccountId
+      ? null
+      : body.paidByUserId === undefined
+        ? existing.paidByUserId
+        : (typeof body.paidByUserId === "string" && body.paidByUserId ? body.paidByUserId : null);
+
     const preset = await prisma.costPreset.update({
       where: { id },
-      data: { goodsName, goodsKeyword, customsGate, category, effectiveFrom, unitPrice, quantity, customLabel, note: body.note ?? existing.note, vendorId, isActive: body.isActive ?? existing.isActive },
+      data: { goodsName, goodsKeyword, customsGate, category, effectiveFrom, unitPrice, quantity, customLabel, unit, paidByUserId, paidFromCompanyAccountId, note: body.note ?? existing.note, vendorId, isActive: body.isActive ?? existing.isActive },
     });
     const matchedShipments = await applyPresetToExistingShipments(preset.id, user.id);
     return apiSuccess({ preset, matchedShipments });

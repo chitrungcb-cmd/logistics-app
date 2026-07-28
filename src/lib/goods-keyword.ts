@@ -11,6 +11,26 @@ export function getGoodsKeyword(goodsName: string | null | undefined): string | 
 }
 
 /**
+ * Số lượng đơn vị (máy/xe/...) suy từ số đứng đầu tên hàng, vd "10 MÁY NGHIỀN ĐÁ" → 10,
+ * "20 ĐẦU KÉO" → 20. Không có số đầu → 1.
+ */
+export function getGoodsQuantity(goodsName: string | null | undefined): number {
+  const match = (goodsName ?? "").trim().match(/^(\d+)\b/);
+  const n = match ? parseInt(match[1], 10) : 1;
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/**
+ * Đơn vị tính "cho cả lô" (không nhân theo số lượng hàng): để trống hoặc "Lô". Các đơn vị khác
+ * (máy, xe, cái...) được tính theo số lượng trong tên hàng.
+ */
+export function isPerLotUnit(unit: string | null | undefined): boolean {
+  const u = (unit ?? "").trim();
+  if (u === "") return true;
+  return normalizeCustomsGate(u) === "LO";
+}
+
+/**
  * Chuẩn hóa tên cửa khẩu về chuỗi chỉ gồm chữ/số IN HOA (bỏ dấu, bỏ khoảng trắng/ký tự đặc biệt) để
  * so khớp bảng giá theo cửa khẩu với `Shipment.port` (là chuỗi tự do như "CUA KHAU TRA LINH (CAO BANG)").
  */

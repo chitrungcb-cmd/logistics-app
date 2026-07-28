@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { getGoodsKeyword, presetGateMatchesPort } from "@/lib/goods-keyword";
+import { getGoodsKeyword, getGoodsQuantity, isPerLotUnit, presetGateMatchesPort } from "@/lib/goods-keyword";
 import { COST_CATEGORY_LABELS, isVendorlessCostCategory } from "@/lib/shipment-cost-constants";
 import type { CostCategory } from "@/generated/prisma/enums";
 
@@ -57,6 +57,10 @@ export async function applyCostPresetsToShipment(params: {
   let applied = 0;
   for (const preset of presets) {
     const vendorId = isVendorlessCostCategory(preset.category) ? null : preset.vendorId;
+    // Số lượng: đơn vị "cho cả lô" (Lô/để trống) giữ số lượng cấu hình; đơn vị theo món (máy, xe...)
+    // nhân theo số lượng suy từ tên hàng (vd "10 MÁY NGHIỀN" → 10).
+    const quantity = isPerLotUnit(preset.unit) ? preset.quantity : getGoodsQuantity(shipment.goodsName);
+    const costPrice = preset.unitPrice * quantity;
     const existing = await prisma.shipmentCost.findUnique({
       where: { shipmentId_presetId: { shipmentId: shipment.id, presetId: preset.id } },
     });
@@ -68,9 +72,12 @@ export async function applyCostPresetsToShipment(params: {
           data: {
             category: preset.category,
             unitPrice: preset.unitPrice,
-            quantity: preset.quantity,
-            costPrice: preset.unitPrice * preset.quantity,
+            quantity,
+            costPrice,
             customLabel: preset.customLabel,
+            unit: preset.unit,
+            paidByUserId: preset.paidByUserId,
+            paidFromCompanyAccountId: preset.paidFromCompanyAccountId,
             note: preset.note,
             vendorId,
           },
@@ -85,9 +92,12 @@ export async function applyCostPresetsToShipment(params: {
         presetId: preset.id,
         category: preset.category,
         unitPrice: preset.unitPrice,
-        quantity: preset.quantity,
-        costPrice: preset.unitPrice * preset.quantity,
+        quantity,
+        costPrice,
         customLabel: preset.customLabel,
+        unit: preset.unit,
+        paidByUserId: preset.paidByUserId,
+        paidFromCompanyAccountId: preset.paidFromCompanyAccountId,
         note: preset.note,
         vendorId,
         isActual: false,

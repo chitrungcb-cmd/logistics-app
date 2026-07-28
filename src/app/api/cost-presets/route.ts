@@ -20,7 +20,11 @@ export async function GET() {
   if (user.role !== "ADMIN") return apiError("Bạn không có quyền xem bảng giá chi phí.", 403);
   return apiSuccess(
     await prisma.costPreset.findMany({
-      include: { vendor: { select: { id: true, name: true, type: true } } },
+      include: {
+        vendor: { select: { id: true, name: true, type: true } },
+        paidBy: { select: { id: true, name: true } },
+        paidFromCompanyAccount: { select: { id: true, name: true } },
+      },
       orderBy: [{ goodsName: "asc" }, { category: "asc" }],
     })
   );
@@ -51,11 +55,21 @@ export async function POST(request: NextRequest) {
       return apiError("Nhà cung cấp không hợp lệ.", 400);
     }
     if (!Number.isFinite(unitPrice) || unitPrice < 0) return apiError("Đơn giá không hợp lệ.", 400);
+    const unit = typeof body.unit === "string" && body.unit.trim() ? body.unit.trim() : null;
+    // Tài khoản chi: chi từ TK công ty ưu tiên; nếu không thì TK cá nhân của người. Đúng một trong hai.
+    const paidFromCompanyAccountId = typeof body.paidFromCompanyAccountId === "string" && body.paidFromCompanyAccountId ? body.paidFromCompanyAccountId : null;
+    const paidByUserId = paidFromCompanyAccountId ? null : (typeof body.paidByUserId === "string" && body.paidByUserId ? body.paidByUserId : null);
+    if (paidFromCompanyAccountId && !(await prisma.companyAccount.findUnique({ where: { id: paidFromCompanyAccountId }, select: { id: true } }))) {
+      return apiError("Tài khoản công ty không hợp lệ.", 400);
+    }
+    if (paidByUserId && !(await prisma.user.findUnique({ where: { id: paidByUserId }, select: { id: true } }))) {
+      return apiError("Người chi không hợp lệ.", 400);
+    }
 
     const preset = await prisma.costPreset.upsert({
       where: { goodsKeyword_customsGate_category_effectiveFrom: { goodsKeyword, customsGate, category: body.category, effectiveFrom } },
-      create: { goodsName, goodsKeyword, customsGate, category: body.category, effectiveFrom, unitPrice, quantity, customLabel, note: body.note || null, vendorId },
-      update: { goodsName, unitPrice, quantity, customLabel, note: body.note || null, vendorId, isActive: true },
+      create: { goodsName, goodsKeyword, customsGate, category: body.category, effectiveFrom, unitPrice, quantity, customLabel, unit, paidByUserId, paidFromCompanyAccountId, note: body.note || null, vendorId },
+      update: { goodsName, unitPrice, quantity, customLabel, unit, paidByUserId, paidFromCompanyAccountId, note: body.note || null, vendorId, isActive: true },
     });
     const matchedShipments = await applyPresetToExistingShipments(preset.id, user.id);
     return apiSuccess({ preset, matchedShipments }, 201);

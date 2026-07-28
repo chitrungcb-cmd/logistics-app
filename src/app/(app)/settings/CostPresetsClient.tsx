@@ -19,11 +19,30 @@ type Preset = {
   unitPrice: number;
   quantity: number;
   customLabel: string | null;
+  unit: string | null;
+  paidByUserId: string | null;
+  paidFromCompanyAccountId: string | null;
+  paidBy: { id: string; name: string } | null;
+  paidFromCompanyAccount: { id: string; name: string } | null;
   note: string | null;
   isActive: boolean;
   vendorId: string | null;
   vendor: { id: string; name: string; type: string | null } | null;
 };
+
+type NamedOption = { id: string; name: string; isActive?: boolean };
+
+// "Tài khoản chi" gộp thành một chuỗi để dùng 1 dropdown: "company:<id>" | "user:<id>" | "".
+function payAccountValue(p: { paidFromCompanyAccountId: string | null; paidByUserId: string | null }) {
+  if (p.paidFromCompanyAccountId) return `company:${p.paidFromCompanyAccountId}`;
+  if (p.paidByUserId) return `user:${p.paidByUserId}`;
+  return "";
+}
+function splitPayAccount(value: string) {
+  if (value.startsWith("company:")) return { paidFromCompanyAccountId: value.slice(8), paidByUserId: null };
+  if (value.startsWith("user:")) return { paidFromCompanyAccountId: null, paidByUserId: value.slice(5) };
+  return { paidFromCompanyAccountId: null, paidByUserId: null };
+}
 
 // effectiveFrom "từ đầu" = mốc 1970 (thời điểm <= 0).
 function isEpoch(iso: string) {
@@ -41,6 +60,8 @@ type Line = {
   id: string;
   category: string;
   customLabel: string;
+  unit: string;
+  payAccount: string;
   unitPrice: string;
   quantity: string;
   vendorId: string | null;
@@ -48,7 +69,7 @@ type Line = {
 };
 
 function newLine(category: string = COST_CATEGORY_OPTIONS[0] as string): Line {
-  return { key: `l-${crypto.randomUUID()}`, id: "", category, customLabel: "", unitPrice: "", quantity: "1", vendorId: null, vendorName: "" };
+  return { key: `l-${crypto.randomUUID()}`, id: "", category, customLabel: "", unit: "", payAccount: "", unitPrice: "", quantity: "1", vendorId: null, vendorName: "" };
 }
 
 function emptyForm() {
@@ -72,6 +93,8 @@ function groupKeyOf(p: { goodsKeyword: string; customsGate: string; effectiveFro
 
 export default function CostPresetsClient() {
   const [presets, setPresets] = useState<Preset[]>([]);
+  const [companyAccounts, setCompanyAccounts] = useState<NamedOption[]>([]);
+  const [users, setUsers] = useState<NamedOption[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -91,6 +114,8 @@ export default function CostPresetsClient() {
     loadPresets()
       .catch((err) => setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra."))
       .finally(() => setIsLoading(false));
+    fetch("/api/company-accounts").then((r) => r.json()).then((j) => { if (j.success) setCompanyAccounts(j.data); }).catch(() => {});
+    fetch("/api/users").then((r) => r.json()).then((j) => { if (j.success) setUsers(j.data); }).catch(() => {});
   }, []);
 
   // Gộp bảng giá theo (nhóm hàng, cửa khẩu, mốc thời gian) — mỗi cụm là một mốc giá sửa được cả cụm.
@@ -139,6 +164,8 @@ export default function CostPresetsClient() {
         id: p.id,
         category: p.category,
         customLabel: p.customLabel || "",
+        unit: p.unit || "",
+        payAccount: payAccountValue(p),
         unitPrice: String(p.unitPrice),
         quantity: String(p.quantity),
         vendorId: isVendorlessCostCategory(p.category) ? null : p.vendorId,
@@ -178,6 +205,8 @@ export default function CostPresetsClient() {
           effectiveFrom: form.effectiveFrom || null,
           category: line.category,
           customLabel: line.customLabel.trim() || null,
+          unit: line.unit.trim() || null,
+          ...splitPayAccount(line.payAccount),
           unitPrice: line.unitPrice,
           quantity: Number(line.quantity) || 1,
           vendorId: isVendorlessCostCategory(line.category) ? null : line.vendorId,
@@ -247,12 +276,14 @@ export default function CostPresetsClient() {
         </div>
 
         <div className="mt-4 overflow-x-auto rounded-lg border border-gray-200">
-          <table className="min-w-[880px] w-full text-sm">
+          <table className="min-w-[1080px] w-full text-sm">
             <thead className="bg-gray-50 text-left text-gray-500">
               <tr>
                 <th className="px-3 py-2 font-medium">Hạng mục</th>
                 <th className="px-3 py-2 font-medium">Nhãn tùy chọn</th>
                 <th className="px-3 py-2 font-medium">Nhà cung cấp</th>
+                <th className="px-3 py-2 font-medium">ĐVT</th>
+                <th className="px-3 py-2 font-medium">Tài khoản chi</th>
                 <th className="px-3 py-2 font-medium">Đơn giá</th>
                 <th className="px-3 py-2 font-medium">SL</th>
                 <th className="px-3 py-2 font-medium text-right">Thành tiền</th>
@@ -279,6 +310,14 @@ export default function CostPresetsClient() {
                         <VendorCombobox vendorName={line.vendorName} vendorId={line.vendorId} onChange={({ vendorName, vendorId }) => updateLine(line.key, { vendorName, vendorId })} />
                       )}
                     </td>
+                    <td className="px-3 py-2"><input value={line.unit} onChange={(e) => updateLine(line.key, { unit: e.target.value })} className="input w-20" placeholder="lần, xe" /></td>
+                    <td className="px-3 py-2">
+                      <select value={line.payAccount} onChange={(e) => updateLine(line.key, { payAccount: e.target.value })} className="input min-w-36">
+                        <option value="">— Chọn TK —</option>
+                        {companyAccounts.length > 0 && <optgroup label="Tài khoản công ty">{companyAccounts.map((a) => <option key={a.id} value={`company:${a.id}`}>{a.name}</option>)}</optgroup>}
+                        {users.length > 0 && <optgroup label="Cá nhân">{users.map((u) => <option key={u.id} value={`user:${u.id}`}>{u.name}</option>)}</optgroup>}
+                      </select>
+                    </td>
                     <td className="px-3 py-2"><MoneyInput value={line.unitPrice} onValueChange={(raw) => updateLine(line.key, { unitPrice: raw })} className="input w-32" /></td>
                     <td className="px-3 py-2"><input type="number" min="0.01" step="any" value={line.quantity} onChange={(e) => updateLine(line.key, { quantity: e.target.value })} className="input w-16" /></td>
                     <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-gray-900">{formatVnd(lineTotal)}</td>
@@ -289,7 +328,7 @@ export default function CostPresetsClient() {
             </tbody>
             <tfoot>
               <tr className="border-t border-gray-200 bg-gray-50">
-                <td colSpan={5} className="px-3 py-2 text-right text-sm font-medium text-gray-600">Tổng chi phí cố định</td>
+                <td colSpan={7} className="px-3 py-2 text-right text-sm font-medium text-gray-600">Tổng chi phí cố định</td>
                 <td className="px-3 py-2 text-right font-bold text-blue-700">{formatVnd(formTotal)}</td>
                 <td></td>
               </tr>
@@ -339,7 +378,8 @@ export default function CostPresetsClient() {
                       <td className="px-5 py-2 text-gray-800">{p.customLabel || COST_CATEGORY_LABELS[p.category]}</td>
                       <td className="px-5 py-2 text-gray-500">{COST_CATEGORY_LABELS[p.category]}</td>
                       <td className="px-5 py-2 text-gray-600">{isVendorlessCostCategory(p.category) ? "" : p.vendor?.name || <span className="text-amber-600">Chưa gắn NCC</span>}</td>
-                      <td className="px-5 py-2 text-gray-600">{formatVnd(p.unitPrice)} × {p.quantity}</td>
+                      <td className="px-5 py-2 text-gray-600">{p.paidFromCompanyAccount?.name || p.paidBy?.name || <span className="text-gray-300">—</span>}</td>
+                      <td className="px-5 py-2 text-gray-600">{formatVnd(p.unitPrice)} × {p.quantity}{p.unit ? ` ${p.unit}` : ""}</td>
                       <td className="px-5 py-2 text-right font-medium text-gray-900">{formatVnd(p.unitPrice * p.quantity)}</td>
                     </tr>
                   ))}

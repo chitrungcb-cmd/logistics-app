@@ -6,7 +6,7 @@ import {
 } from "@/lib/vendor-invoice-parser";
 import { AUTOMATIC_RECEIVABLE_DEBT_PREFIX, syncShipmentDebts } from "@/lib/shipment-debt-sync";
 import { sharesDeclarationFamily } from "@/lib/shipment-constants";
-import { syncPersonalAccountEntry } from "@/lib/personal-account-sync";
+import { syncPersonalAccountEntry, resolveQuoteTotal } from "@/lib/personal-account-sync";
 
 export type ReconciliationStatus = "MATCHED" | "UNMATCHED" | "NEEDS_REVIEW";
 
@@ -285,9 +285,10 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
 
 /**
  * Đặt phần "Có hóa đơn" của phải thu một lô = TỔNG tiền trước thuế của mọi hóa đơn bán ra đã gắn
- * vào lô (shipmentId set, shipmentCostId null = hóa đơn đầu ra), rồi đồng bộ lại công nợ. Idempotent:
- * gọi lại luôn ra cùng kết quả, và cộng đúng khi một lô có nhiều hóa đơn bán ra. Giữ nguyên phần
- * "Không hóa đơn" (quoteNoInvoiceAmount) để nhập tay.
+ * vào lô (shipmentId set, shipmentCostId null = hóa đơn đầu ra). Đồng thời ghi một bản Quote mới
+ * (= VAT(có HĐ) + không HĐ) để Tổng thu / lãi-lỗ trên trang Chi phí lô hàng và công nợ phải thu đều
+ * phản ánh hóa đơn. Idempotent: cộng đúng khi một lô có nhiều HĐ, và chỉ ghi Quote khi tổng đổi để
+ * không tạo bản trùng. Giữ nguyên phần "Không hóa đơn" (quoteNoInvoiceAmount) để nhập tay.
  */
 export async function recomputeShipmentInvoicedReceivable(shipmentId: string) {
   await prisma.$transaction(async (tx) => {
@@ -300,6 +301,25 @@ export async function recomputeShipmentInvoicedReceivable(shipmentId: string) {
       where: { id: shipmentId },
       data: { quoteInvoiceAmount: sum > 0 ? sum : null },
     });
+
+    const shipment = await tx.shipment.findUnique({
+      where: { id: shipmentId },
+      select: {
+        quoteInvoiceAmount: true,
+        quoteNoInvoiceAmount: true,
+        quoteLines: { select: { amount: true, hasInvoice: true } },
+        quotes: { orderBy: { createdAt: "desc" }, take: 1, select: { quoteAmount: true } },
+      },
+    });
+    if (shipment) {
+      const total = resolveQuoteTotal(shipment);
+      if ((shipment.quotes[0]?.quoteAmount ?? 0) !== total) {
+        await tx.quote.create({
+          data: { shipmentId, quoteAmount: total, note: "Cập nhật từ hóa đơn bán ra." },
+        });
+      }
+    }
+
     await syncPersonalAccountEntry(tx, shipmentId);
     await syncShipmentDebts(tx, shipmentId);
   });

@@ -7,7 +7,6 @@ type Entry = {
   id: string;
   amount: number;
   paymentDate: string | null;
-  receivingAccount: string | null;
   assignedUserId: string | null;
   note: string | null;
   shipment: {
@@ -74,7 +73,7 @@ export default function PersonalAccountClient({ role }: { role: string }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "paid" | "unpaid">("all");
   const [saveStatus, setSaveStatus] = useState<Record<string, SaveStatus>>({});
-  const [drafts, setDrafts] = useState<Record<string, { receivingAccount: string; note: string }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { note: string }>>({});
   const savedTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
@@ -134,13 +133,12 @@ export default function PersonalAccountClient({ role }: { role: string }) {
   function draftFor(entry: Entry) {
     return (
       drafts[entry.id] ?? {
-        receivingAccount: entry.receivingAccount || "",
         note: entry.note || "",
       }
     );
   }
 
-  function updateDraft(entry: Entry, patch: Partial<{ receivingAccount: string; note: string }>) {
+  function updateDraft(entry: Entry, patch: Partial<{ note: string }>) {
     setDrafts((current) => ({ ...current, [entry.id]: { ...draftFor(entry), ...patch } }));
   }
 
@@ -155,7 +153,6 @@ export default function PersonalAccountClient({ role }: { role: string }) {
         entry.shipment.goodsName,
         entry.shipment.customerName,
         entry.shipment.shipmentCode,
-        entry.receivingAccount,
         entry.assignedUser?.name,
       ]
         .filter(Boolean)
@@ -224,7 +221,7 @@ export default function PersonalAccountClient({ role }: { role: string }) {
         <p className="mt-1 text-sm text-gray-500">
           Phần báo giá <span className="font-medium text-orange-700">không hóa đơn</span> của từng lô hàng được tự động
           liên kết về đây. Số tiền đồng bộ từ tab Báo giá trong Chi phí lô hàng; trạng thái thanh toán lấy theo các
-          khoản thu phần không hóa đơn ghi trong Công nợ. Điền tay số TK nhận tiền và người phụ trách.
+          khoản thu phần không hóa đơn ghi trong Công nợ. Mỗi khoản được quản lý theo người phụ trách.
         </p>
       </div>
 
@@ -264,7 +261,7 @@ export default function PersonalAccountClient({ role }: { role: string }) {
           </p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-gray-200">
-            <table className="min-w-[1100px] divide-y divide-gray-200 text-sm">
+            <table className="min-w-[960px] divide-y divide-gray-200 text-sm">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-3 py-2 text-left text-gray-500">Ngày thanh toán</th>
@@ -273,7 +270,6 @@ export default function PersonalAccountClient({ role }: { role: string }) {
                   <th className="px-3 py-2 text-left text-gray-500">Tên hàng</th>
                   <th className="px-3 py-2 text-right text-gray-500">Số tiền</th>
                   <th className="px-3 py-2 text-right text-gray-500">Còn lại</th>
-                  <th className="px-3 py-2 text-left text-gray-500">Số TK nhận tiền</th>
                   <th className="px-3 py-2 text-left text-gray-500">Người phụ trách</th>
                   <th className="px-3 py-2 text-left text-gray-500">Ghi chú</th>
                   <th className="px-3 py-2 text-left text-gray-500">Trạng thái</th>
@@ -315,20 +311,6 @@ export default function PersonalAccountClient({ role }: { role: string }) {
                       <td className="whitespace-nowrap px-3 py-2 text-right font-semibold text-orange-700">{formatVnd(entry.amount)}</td>
                       <td className={`whitespace-nowrap px-3 py-2 text-right font-medium ${entry.remainingAmount > 0 ? "text-red-700" : "text-emerald-700"}`}>
                         {entry.remainingAmount > 0 ? formatVnd(entry.remainingAmount) : "Đã thu đủ"}
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          value={draft.receivingAccount}
-                          onChange={(event) => updateDraft(entry, { receivingAccount: event.target.value })}
-                          onBlur={() => {
-                            if ((entry.receivingAccount || "") !== draft.receivingAccount) {
-                              saveEntry(entry.id, { receivingAccount: draft.receivingAccount || null });
-                            }
-                          }}
-                          onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
-                          className="input w-40"
-                          placeholder="Số TK nhận tiền"
-                        />
                       </td>
                       <td className="px-3 py-2">
                         <select

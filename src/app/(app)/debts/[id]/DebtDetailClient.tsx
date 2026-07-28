@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -43,7 +43,6 @@ type DebtDetail = {
   totalAmount: number;
   invoiceAmount: number | null;
   noInvoiceAmount: number | null;
-  dueDate: string | null;
   status: string;
   note: string | null;
   createdAt: string;
@@ -51,7 +50,6 @@ type DebtDetail = {
   vendor: { id: string; name: string } | null;
   shipment: {
     id: string;
-    shipmentCode: string;
     customerName: string;
     goodsName: string | null;
     declarationNo: string | null;
@@ -64,6 +62,8 @@ type DebtDetail = {
     invoiceDirection: "INPUT" | "OUTPUT" | "UNRELATED" | "UNKNOWN";
     invoiceNumber: string | null;
     invoiceDate: string | null;
+    subtotal: number | null;
+    taxAmount: number | null;
     totalAmount: number | null;
     currency: string;
     attachmentName: string;
@@ -93,6 +93,11 @@ type PayableCost = {
 
 function formatVnd(amount: number) {
   return amount.toLocaleString("vi-VN") + " đ";
+}
+
+function formatInvoiceMoney(amount: number | null, currency: string) {
+  if (amount === null) return "—";
+  return currency === "VND" ? formatVnd(amount) : `${amount.toLocaleString("vi-VN")} ${currency}`;
 }
 
 // "TK nhận tiền": giá trị gộp "company:<id>" | "user:<id>" | "" để dùng trong 1 dropdown, tách ra khi lưu.
@@ -130,13 +135,20 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
   const [isFinanceOpen, setIsFinanceOpen] = useState(false);
 
   const [isEditOpen, setIsEditOpen] = useState(false);
-  const [editForm, setEditForm] = useState({ totalAmount: "", dueDate: "", note: "" });
+  const [editForm, setEditForm] = useState({ totalAmount: "", note: "" });
   const [editError, setEditError] = useState<string | null>(null);
 
   // Fold the {paidAmount, remainingAmount, status} an API returns back into debt state — shared by
   // add-payment, delete-payment and edit-debt so the recompute isn't spelled out three times.
   function applyStats(stats: DebtStats) {
     setDebt((prev) => (prev ? { ...prev, ...stats } : prev));
+    setPairDebts((prev) =>
+      prev.map((item) =>
+        item.id === debtId
+          ? { ...item, paidAmount: stats.paidAmount, remainingAmount: stats.remainingAmount }
+          : item
+      )
+    );
   }
 
   const loadDebt = useCallback(() => {
@@ -159,21 +171,21 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
     Array<{ id: string; type: "RECEIVABLE" | "PAYABLE"; totalAmount: number; paidAmount: number; remainingAmount: number }>
   >([]);
   const shipmentIdForPair = debt?.shipment?.id;
-  useEffect(() => {
-    if (!shipmentIdForPair) return;
-    let cancelled = false;
-    fetch(`/api/shipments/${shipmentIdForPair}/debts`)
+  const loadPairDebts = useCallback((shipmentId: string) => {
+    return fetch(`/api/shipments/${shipmentId}/debts`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
-        if (!cancelled && json?.success) setPairDebts(json.data);
+        if (json?.success) setPairDebts(json.data);
       })
       .catch(() => {
         /* panel bổ sung, lỗi tải bỏ qua */
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [shipmentIdForPair]);
+  }, []);
+
+  useEffect(() => {
+    if (!shipmentIdForPair) return;
+    void loadPairDebts(shipmentIdForPair);
+  }, [loadPairDebts, shipmentIdForPair]);
 
   useEffect(() => {
     fetch("/api/company-accounts")
@@ -356,7 +368,6 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
     if (!debt) return;
     setEditForm({
       totalAmount: String(debt.totalAmount),
-      dueDate: debt.dueDate ? debt.dueDate.slice(0, 10) : "",
       note: debt.note || "",
     });
     setEditError(null);
@@ -376,7 +387,6 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...(debt?.sourceKey ? {} : { totalAmount: editForm.totalAmount }),
-          dueDate: editForm.dueDate || null,
           note: editForm.note,
         }),
       });
@@ -403,7 +413,7 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
     );
   }
 
-  const badge = debtStatusBadge(debt.status, debt.dueDate);
+  const badge = debtStatusBadge(debt.status, null);
   const breakdown = computeInvoiceSplitBreakdown(debt);
   const invoiceBeforeTax = breakdown
     ? Math.round(breakdown.invoiceAmount / (1 + INVOICE_VAT_RATE))
@@ -418,385 +428,488 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
         ? debt.shipment?.customerName || "Khách hàng lô hàng"
         : "Chi phí lô hàng"
       : "—");
+  const paidPercent =
+    debt.totalAmount > 0 ? Math.min(100, Math.round((debt.paidAmount / debt.totalAmount) * 100)) : 0;
+  const receivableDebt = pairDebts.find((item) => item.type === "RECEIVABLE");
+  const payableDebt = pairDebts.find((item) => item.type === "PAYABLE");
+  const estimatedMargin =
+    receivableDebt && payableDebt ? receivableDebt.totalAmount - payableDebt.totalAmount : null;
+  const payableCostTotal = (debt.payableCosts ?? []).reduce((sum, cost) => sum + cost.costPrice, 0);
+  const paidCostTotal = (debt.payableCosts ?? [])
+    .filter((cost) => cost.isPaid)
+    .reduce((sum, cost) => sum + cost.costPrice, 0);
+  const unpaidCostTotal = payableCostTotal - paidCostTotal;
 
   return (
-    <div className="p-8">
-      <div className="mb-6">
-        <Link href="/debts" className="text-sm text-blue-600 hover:underline">
-          ← Quay lại danh sách công nợ
-        </Link>
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold text-gray-900">{partnerName}</h1>
-            <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>
-              {badge.label}
-            </span>
-            {debt.sourceKey && (
-              <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
-                Tự động từ lô hàng
+    <div className="mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6 lg:p-8">
+      <Link href="/debts" className="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-700">
+        ← Quay lại danh sách công nợ
+      </Link>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-start">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold uppercase tracking-wide text-gray-500">
+                Công nợ {DEBT_TYPE_LABELS[debt.type].toLowerCase()}
               </span>
+              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${badge.className}`}>
+                {badge.label}
+              </span>
+              {debt.sourceKey && (
+                <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                  Đồng bộ tự động
+                </span>
+              )}
+            </div>
+            <h1 className="mt-2 break-words text-2xl font-bold text-gray-950 sm:text-3xl">{partnerName}</h1>
+            {debt.shipment && (
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-600">
+                <ShipmentLink shipmentId={debt.shipment.id} className="font-semibold text-blue-700 hover:underline">
+                  TK {debt.shipment.declarationNo || "Chưa có số tờ khai"}
+                </ShipmentLink>
+                <span>{debt.shipment.goodsName || "Chưa có tên hàng"}</span>
+                {debt.shipment.declarationDate && (
+                  <span>Ngày TK {new Date(debt.shipment.declarationDate).toLocaleDateString("vi-VN")}</span>
+                )}
+              </div>
             )}
           </div>
-          <div className="flex gap-2">
+
+          <div className="flex flex-wrap gap-2 lg:justify-end">
+            {debt.remainingAmount > 0 && (
+              <button
+                type="button"
+                onClick={openPaymentForm}
+                className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+              >
+                + Ghi nhận thanh toán
+              </button>
+            )}
             <button
               type="button"
               onClick={openEdit}
-              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"
             >
-              Sửa
+              Sửa thông tin
             </button>
             {!debt.sourceKey && (
               <button
                 type="button"
                 onClick={handleDeleteDebt}
-                className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50"
+                className="rounded-lg border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50"
               >
-                Xóa nợ
+                Xóa công nợ
               </button>
             )}
           </div>
         </div>
-        <p className="mt-1 text-sm text-gray-500">{DEBT_TYPE_LABELS[debt.type]}</p>
-      </div>
+      </section>
+
+      <section aria-label="Tổng quan công nợ" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Tổng công nợ" value={formatVnd(debt.totalAmount)} tone="neutral" />
+        <MetricCard label="Đã thanh toán" value={formatVnd(debt.paidAmount)} tone="success" />
+        <MetricCard
+          label={debt.type === "RECEIVABLE" ? "Còn phải thu" : "Còn phải trả"}
+          value={formatVnd(debt.remainingAmount)}
+          tone={debt.remainingAmount > 0 ? "danger" : "success"}
+        />
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-gray-500">Tiến độ thanh toán</p>
+            <span className="text-sm font-bold text-gray-900">{paidPercent}%</span>
+          </div>
+          <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-gray-100">
+            <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${paidPercent}%` }} />
+          </div>
+          <p className="mt-3 text-xs text-gray-500">{debt.payments.length} lần thanh toán đã ghi nhận</p>
+        </div>
+      </section>
 
       {debt.shipment && pairDebts.some((d) => d.id === debt.id) && (
-        <div className="mb-6 grid gap-3 sm:grid-cols-2">
-          {(["RECEIVABLE", "PAYABLE"] as const).map((type) => {
-            const d = pairDebts.find((x) => x.type === type);
-            const isCurrent = d?.id === debt.id;
-            const isReceivable = type === "RECEIVABLE";
-            const card = (
-              <div
-                className={`rounded-lg border p-4 ${
-                  isReceivable ? "border-blue-200 bg-blue-50/60" : "border-emerald-200 bg-emerald-50/60"
-                } ${isCurrent ? "ring-2 ring-offset-1 " + (isReceivable ? "ring-blue-400" : "ring-emerald-400") : d ? "cursor-pointer hover:brightness-95" : "opacity-60"}`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className={`text-sm font-semibold ${isReceivable ? "text-blue-800" : "text-emerald-800"}`}>
-                    {isReceivable ? "Phải thu" : "Phải trả"}
-                  </span>
-                  {isCurrent && <span className="text-[10px] font-medium text-gray-500">Đang xem</span>}
-                </div>
-                {d ? (
-                  <dl className="mt-2 space-y-1 text-sm">
-                    <div className="flex justify-between"><dt className="text-gray-500">Tổng</dt><dd className="font-medium text-gray-900">{formatVnd(d.totalAmount)}</dd></div>
-                    <div className="flex justify-between"><dt className="text-gray-500">Đã thanh toán</dt><dd className="font-medium text-green-700">{formatVnd(d.paidAmount)}</dd></div>
-                    <div className="flex justify-between border-t border-gray-200/70 pt-1"><dt className="text-gray-600">Còn lại</dt><dd className="font-semibold text-gray-900">{formatVnd(d.remainingAmount)}</dd></div>
-                  </dl>
-                ) : (
-                  <p className="mt-2 text-sm text-gray-400">Chưa có</p>
-                )}
-              </div>
-            );
-            if (d && !isCurrent) {
-              return (
-                <button key={type} type="button" onClick={() => router.push(`/debts/${d.id}`)} className="text-left">
-                  {card}
-                </button>
-              );
-            }
-            return <div key={type}>{card}</div>;
-          })}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <section className="rounded-lg border border-gray-200 bg-white p-6 lg:col-span-2">
-          <h2 className="mb-4 text-base font-semibold text-gray-900">Thông tin công nợ</h2>
-          <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
-            <Info label="Tổng tiền" value={formatVnd(debt.totalAmount)} />
-            <Info label="Đã thanh toán" value={formatVnd(debt.paidAmount)} />
-            <Info label="Còn lại" value={formatVnd(debt.remainingAmount)} />
-            <Info
-              label="Hạn thanh toán"
-              value={debt.dueDate ? new Date(debt.dueDate).toLocaleDateString("vi-VN") : null}
-            />
+        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-gray-400">Lô hàng liên quan</dt>
-              <dd className="mt-0.5 text-sm text-gray-900">
-                {debt.shipment ? (
-                  <ShipmentLink shipmentId={debt.shipment.id} className="text-blue-600 hover:underline">
-                    {debt.shipment.goodsName || debt.shipment.shipmentCode}
-                  </ShipmentLink>
-                ) : (
-                  "—"
-                )}
-              </dd>
+              <h2 className="text-base font-semibold text-gray-950">Đối chiếu tài chính theo tờ khai</h2>
+              <p className="mt-1 text-sm text-gray-500">So sánh phải thu và phải trả của cùng số tờ khai.</p>
             </div>
-            <Info label="Ghi chú" value={debt.note} />
-            {debt.sourceKey && <Info label="Nguồn" value="Đồng bộ tự động từ tài chính lô hàng" />}
-          </dl>
-
-          {breakdown && (
-            <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <PortionCard
-                label={`Có hóa đơn (VAT ${invoiceVatPercent}%)`}
-                total={breakdown.invoiceAmount}
-                beforeTax={invoiceBeforeTax}
-                taxAmount={invoiceTaxAmount}
-                taxRatePercent={invoiceVatPercent}
-                paid={breakdown.paidInvoice}
-                remaining={breakdown.remainingInvoice}
-                className="border-green-200 bg-green-50/60"
-                accent="text-green-800"
-              />
-              <PortionCard
-                label="Không hóa đơn"
-                total={breakdown.noInvoiceAmount}
-                paid={breakdown.paidNoInvoice}
-                remaining={breakdown.remainingNoInvoice}
-                className="border-orange-200 bg-orange-50/60"
-                accent="text-orange-800"
-              />
-            </div>
-          )}
-
-          {debt.shipment && (
-            <div className="mt-6 rounded-lg border border-blue-100 bg-blue-50/50 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-gray-900">Chi phí và hóa đơn liên kết</h3>
-                {isAdmin && (
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setIsFinanceOpen(true)}
-                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700"
-                    >
-                      Xem báo giá &amp; chi phí
-                    </button>
-                    <Link
-                      href={`/costs?shipmentId=${debt.shipment.id}`}
-                      className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-blue-700 shadow-sm ring-1 ring-blue-200 hover:bg-blue-50"
-                    >
-                      Mở chi phí lô hàng
-                    </Link>
-                  </div>
-                )}
-              </div>
-              {debt.linkedInvoices.length === 0 ? (
-                <p className="mt-3 text-sm text-gray-400">Chưa có hóa đơn được xác định thuộc lô hàng này.</p>
-              ) : (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {debt.linkedInvoices.map((invoice) => {
-                    const fileUrl = invoice.pdfUrl || invoice.xmlUrl || invoice.attachmentUrl;
-                    return (
-                      <AttachmentPreviewButton
-                        key={invoice.id}
-                        url={fileUrl}
-                        name={invoice.attachmentName}
-                        className="rounded-md bg-white px-3 py-2 text-xs text-gray-700 shadow-sm ring-1 ring-gray-200 hover:ring-blue-300"
-                      >
-                        <span className={`mr-1.5 font-semibold ${invoice.invoiceDirection === "OUTPUT" ? "text-blue-700" : "text-emerald-700"}`}>
-                          {invoice.invoiceDirection === "OUTPUT" ? "Bán ra" : "Đầu vào"}
-                        </span>
-                        HĐ {invoice.invoiceNumber || "chưa rõ số"}
-                        {invoice.totalAmount !== null && ` · ${formatVnd(invoice.totalAmount)}`}
-                      </AttachmentPreviewButton>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {debt.type === "PAYABLE" && (debt.payableCosts?.length ?? 0) > 0 && (
-            <div className="mt-6">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-gray-900">Chi phí — tích khi đã thanh toán</h3>
-                <span className="text-xs text-gray-500">
-                  {debt.payableCosts!.filter((c) => c.isPaid).length}/{debt.payableCosts!.length} đã trả
-                </span>
-              </div>
-              <div className="overflow-x-auto rounded-md border border-gray-200">
-                <table className="min-w-full divide-y divide-gray-200 text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Hạng mục</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Nhà cung cấp</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-500">Số tiền</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">TK chi</th>
-                      <th className="px-3 py-2 text-center font-medium text-gray-500">Đã thanh toán</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {debt.payableCosts!.map((cost) => {
-                      const paymentAccount = resolveCostPaymentAccount(cost);
-                      const canTick =
-                        isAdmin ||
-                        cost.paidBy?.id === currentUserId ||
-                        Boolean(cost.paidFromCompanyAccount);
-                      return (
-                        <tr key={cost.id} className={cost.isPaid ? "bg-green-50/40" : ""}>
-                          <td className="px-3 py-2 text-gray-800">
-                            {cost.customLabel || COST_CATEGORY_LABELS[cost.category] || cost.category}
-                          </td>
-                          <td className="px-3 py-2 text-gray-600">
-                            {isVendorlessCostCategory(cost.category) ? (
-                              <span className="text-gray-400">Không áp dụng</span>
-                            ) : cost.vendor?.name ? (
-                              cost.vendor.name
-                            ) : (
-                              <span className="text-amber-600">Chưa gắn NCC</span>
-                            )}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-gray-900">{formatVnd(cost.costPrice)}</td>
-                          <td className="px-3 py-2 text-gray-600">
-                            {paymentAccount?.label || <span className="text-amber-600">Chưa chọn TK chi</span>}
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="flex flex-col items-center gap-0.5">
-                              <input
-                                type="checkbox"
-                                checked={cost.isPaid}
-                                disabled={!canTick || togglingCostId === cost.id}
-                                onChange={(e) => handleToggleCostPaid(cost, e.target.checked)}
-                                className="h-4 w-4 cursor-pointer accent-green-600 disabled:cursor-not-allowed disabled:opacity-40"
-                                title={canTick ? "Tích khi đã thanh toán" : "Chỉ người phụ trách TK chi mới tích được"}
-                              />
-                              {cost.isPaid && cost.paidAt && (
-                                <>
-                                  <input
-                                    type="date"
-                                    value={cost.paidAt.slice(0, 10)}
-                                    disabled={!canTick || togglingCostId === cost.id}
-                                    onChange={(event) =>
-                                      handleToggleCostPaid(cost, true, event.target.value)
-                                    }
-                                    className="input h-7 w-32 px-1.5 py-0.5 text-[11px] disabled:cursor-not-allowed disabled:bg-gray-100"
-                                    title="Sửa ngày thanh toán"
-                                  />
-                                  {cost.paidConfirmedBy?.name && (
-                                    <span className="text-[10px] text-green-700">
-                                      Xác nhận: {cost.paidConfirmedBy.name}
-                                    </span>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              {paidCostError && <p className="mt-2 text-sm text-red-600">{paidCostError}</p>}
-            </div>
-          )}
-
-          <div className="mt-6">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-900">Lịch sử thanh toán</h3>
-              <button
-                type="button"
-                onClick={openPaymentForm}
-                className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                + Ghi nhận thanh toán
-              </button>
-            </div>
-
-            {debt.payments.length === 0 ? (
-              <p className="text-sm text-gray-400">Chưa có thanh toán nào.</p>
-            ) : (
-              <div className="overflow-x-auto rounded-md border border-gray-200">
-                <table className="min-w-full divide-y divide-gray-200 text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Ngày</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Số tiền</th>
-                      {breakdown && <th className="px-3 py-2 text-left font-medium text-gray-500">Phần</th>}
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Phương thức</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">TK nhận tiền</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Ghi chú</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Biên lai</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {debt.payments.map((p) => (
-                      <tr key={p.id}>
-                        <td className="px-3 py-2 text-gray-600">
-                          {new Date(p.paymentDate).toLocaleDateString("vi-VN")}
-                        </td>
-                        <td className="px-3 py-2 font-medium text-gray-900">{formatVnd(p.amount)}</td>
-                        {breakdown && (
-                          <td className="px-3 py-2">
-                            {p.portion ? (
-                              <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${p.portion === "INVOICE" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}>
-                                {DEBT_PORTION_LABELS[p.portion]}
-                              </span>
-                            ) : (
-                              <span className="text-gray-400">—</span>
-                            )}
-                          </td>
-                        )}
-                        <td className="px-3 py-2 text-gray-600">{p.method || "—"}</td>
-                        <td className="px-3 py-2">
-                          {p.receivedToCompanyAccount ? (
-                            <span className="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">{p.receivedToCompanyAccount.name}</span>
-                          ) : p.receivedBy ? (
-                            <span className="inline-flex rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">{p.receivedBy.name}</span>
-                          ) : (
-                            <span className="text-gray-400">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-gray-600">{p.note || "—"}</td>
-                        <td className="px-3 py-2">
-                          {p.attachmentUrl ? (
-                            <AttachmentPreviewButton
-                              url={p.attachmentUrl}
-                              className="text-blue-600 hover:underline"
-                            >
-                              📎 Xem
-                            </AttachmentPreviewButton>
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-2">
-                          <button
-                            type="button"
-                            onClick={() => openEditPayment(p)}
-                            className="text-xs font-medium text-blue-600 hover:underline"
-                          >
-                            ✏️ Sửa
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeletePayment(p.id)}
-                            className="ml-3 text-xs font-medium text-red-600 hover:underline"
-                          >
-                            🗑 Xóa
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {estimatedMargin !== null && (
+              <div className="rounded-lg bg-violet-50 px-4 py-2 text-right">
+                <p className="text-xs font-medium text-violet-600">Chênh lệch thu − chi</p>
+                <p className={`text-base font-bold ${estimatedMargin >= 0 ? "text-violet-800" : "text-red-700"}`}>
+                  {formatVnd(estimatedMargin)}
+                </p>
               </div>
             )}
           </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {(["RECEIVABLE", "PAYABLE"] as const).map((type) => {
+              const d = pairDebts.find((x) => x.type === type);
+              const isCurrent = d?.id === debt.id;
+              const isReceivable = type === "RECEIVABLE";
+              const card = (
+                <div
+                  className={`h-full rounded-lg border p-4 ${
+                    isReceivable ? "border-blue-200 bg-blue-50/60" : "border-emerald-200 bg-emerald-50/60"
+                  } ${isCurrent ? (isReceivable ? "ring-2 ring-blue-400" : "ring-2 ring-emerald-400") : d ? "hover:brightness-95" : "opacity-60"}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`text-sm font-semibold ${isReceivable ? "text-blue-800" : "text-emerald-800"}`}>
+                      {isReceivable ? "Khách hàng phải trả NQ" : "NQ phải trả chi phí"}
+                    </span>
+                    {isCurrent && (
+                      <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-gray-600">
+                        Đang xem
+                      </span>
+                    )}
+                  </div>
+                  {d ? (
+                    <dl className="mt-3 grid grid-cols-3 gap-3 text-sm">
+                      <PairMetric label="Tổng" value={d.totalAmount} />
+                      <PairMetric label={isReceivable ? "Đã thu" : "Đã trả"} value={d.paidAmount} valueClassName="text-emerald-700" />
+                      <PairMetric label="Còn lại" value={d.remainingAmount} valueClassName="text-gray-950" />
+                    </dl>
+                  ) : (
+                    <p className="mt-3 text-sm text-gray-400">Chưa phát sinh công nợ.</p>
+                  )}
+                </div>
+              );
+              if (d && !isCurrent) {
+                return (
+                  <button key={type} type="button" onClick={() => router.push(`/debts/${d.id}`)} className="text-left">
+                    {card}
+                  </button>
+                );
+              }
+              return <div key={type}>{card}</div>;
+            })}
+          </div>
         </section>
+      )}
 
-        <section className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-base font-semibold text-gray-900">Tóm tắt</h2>
-          <dl className="space-y-3">
-            <div className="flex justify-between text-sm">
-              <dt className="text-gray-500">Tổng tiền</dt>
-              <dd className="font-medium text-gray-900">{formatVnd(debt.totalAmount)}</dd>
-            </div>
-            <div className="flex justify-between text-sm">
-              <dt className="text-gray-500">Đã thanh toán</dt>
-              <dd className="font-medium text-green-700">{formatVnd(debt.paidAmount)}</dd>
-            </div>
-            <div className="flex justify-between border-t border-gray-200 pt-3 text-sm">
-              <dt className="font-medium text-gray-700">Còn lại</dt>
-              <dd className="font-semibold text-gray-900">{formatVnd(debt.remainingAmount)}</dd>
-            </div>
-          </dl>
+      <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 px-5 py-4 sm:px-6">
+          <h2 className="text-base font-semibold text-gray-950">Thông tin tờ khai và đối tác</h2>
+          <p className="mt-1 text-sm text-gray-500">Thông tin nhận diện dùng để đối chiếu công nợ, chi phí và hóa đơn.</p>
+        </div>
+        <dl className="grid grid-cols-1 gap-px bg-gray-100 sm:grid-cols-2 xl:grid-cols-4">
+          <Info
+            label="Số tờ khai"
+            value={
+              debt.shipment ? (
+                <ShipmentLink shipmentId={debt.shipment.id} className="font-semibold text-blue-700 hover:underline">
+                  {debt.shipment.declarationNo || "Chưa có số tờ khai"}
+                </ShipmentLink>
+              ) : null
+            }
+          />
+          <Info
+            label="Ngày tờ khai"
+            value={debt.shipment?.declarationDate ? new Date(debt.shipment.declarationDate).toLocaleDateString("vi-VN") : null}
+          />
+          <Info label={debt.type === "RECEIVABLE" ? "Khách hàng" : "Nhà cung cấp"} value={partnerName} />
+          <Info label="Loại công nợ" value={DEBT_TYPE_LABELS[debt.type]} />
+          <Info label="Tên hàng" value={debt.shipment?.goodsName} className="xl:col-span-2" />
+          <Info label="Số invoice trên tờ khai" value={debt.shipment?.invoiceNo} />
+          <Info label="Nguồn dữ liệu" value={debt.sourceKey ? "Đồng bộ từ tài chính lô hàng" : "Nhập trực tiếp"} />
+          <Info label="Ghi chú" value={debt.note} className="sm:col-span-2 xl:col-span-4" />
+        </dl>
+      </section>
+
+      {breakdown && (
+        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-4">
+            <h2 className="text-base font-semibold text-gray-950">Cơ cấu công nợ</h2>
+            <p className="mt-1 text-sm text-gray-500">Tách rõ phần có hóa đơn, tiền trước thuế, VAT và phần không hóa đơn.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <PortionCard
+              label={`Có hóa đơn (VAT ${invoiceVatPercent}%)`}
+              total={breakdown.invoiceAmount}
+              beforeTax={invoiceBeforeTax}
+              taxAmount={invoiceTaxAmount}
+              taxRatePercent={invoiceVatPercent}
+              paid={breakdown.paidInvoice}
+              remaining={breakdown.remainingInvoice}
+              paidLabel={debt.type === "RECEIVABLE" ? "Đã thu" : "Đã trả"}
+              className="border-green-200 bg-green-50/60"
+              accent="text-green-800"
+            />
+            <PortionCard
+              label="Không hóa đơn"
+              total={breakdown.noInvoiceAmount}
+              paid={breakdown.paidNoInvoice}
+              remaining={breakdown.remainingNoInvoice}
+              paidLabel={debt.type === "RECEIVABLE" ? "Đã thu" : "Đã trả"}
+              className="border-orange-200 bg-orange-50/60"
+              accent="text-orange-800"
+            />
+          </div>
         </section>
-      </div>
+      )}
+
+      {debt.shipment && (
+        <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-5 py-4 sm:px-6">
+            <div>
+              <h2 className="text-base font-semibold text-gray-950">Hóa đơn liên kết</h2>
+              <p className="mt-1 text-sm text-gray-500">Đối chiếu hóa đơn đầu vào/đầu ra với tờ khai và công nợ.</p>
+            </div>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setIsFinanceOpen(true)}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+              >
+                Mở báo giá &amp; chi phí lô hàng
+              </button>
+            )}
+          </div>
+          {debt.linkedInvoices.length === 0 ? (
+            <div className="px-6 py-10 text-center">
+              <p className="text-sm font-medium text-gray-600">Chưa có hóa đơn liên kết với tờ khai này.</p>
+              <p className="mt-1 text-xs text-gray-400">Hệ thống sẽ hiển thị tại đây khi xác định được đúng hóa đơn.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead className="bg-gray-50/80">
+                  <tr>
+                    <th className="px-5 py-3 text-left font-semibold text-gray-600">Loại</th>
+                    <th className="px-5 py-3 text-left font-semibold text-gray-600">Số / ngày hóa đơn</th>
+                    <th className="px-5 py-3 text-right font-semibold text-gray-600">Trước thuế</th>
+                    <th className="px-5 py-3 text-right font-semibold text-gray-600">Thuế VAT</th>
+                    <th className="px-5 py-3 text-right font-semibold text-gray-600">Tổng gồm thuế</th>
+                    <th className="px-5 py-3 text-center font-semibold text-gray-600">Tệp</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {debt.linkedInvoices.map((invoice) => {
+                    const fileUrl = invoice.pdfUrl || invoice.xmlUrl || invoice.attachmentUrl;
+                    const isOutput = invoice.invoiceDirection === "OUTPUT";
+                    const isInput = invoice.invoiceDirection === "INPUT";
+                    return (
+                      <tr key={invoice.id} className="hover:bg-gray-50/70">
+                        <td className="px-5 py-3">
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${isOutput ? "bg-blue-50 text-blue-700" : isInput ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
+                            {isOutput ? "Bán ra" : isInput ? "Đầu vào" : "Chưa xác định"}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="font-medium text-gray-900">{invoice.invoiceNumber || "Chưa rõ số"}</div>
+                          <div className="mt-0.5 text-xs text-gray-500">
+                            {invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString("vi-VN") : "Chưa có ngày hóa đơn"}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-3 text-right text-gray-700">
+                          {formatInvoiceMoney(invoice.subtotal, invoice.currency)}
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-3 text-right text-gray-700">
+                          {formatInvoiceMoney(invoice.taxAmount, invoice.currency)}
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-3 text-right font-semibold text-gray-950">
+                          {formatInvoiceMoney(invoice.totalAmount, invoice.currency)}
+                        </td>
+                        <td className="px-5 py-3 text-center">
+                          <AttachmentPreviewButton
+                            url={fileUrl}
+                            name={invoice.attachmentName}
+                            className="font-medium text-blue-700 hover:underline"
+                          >
+                            Xem tệp
+                          </AttachmentPreviewButton>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {debt.type === "PAYABLE" && (debt.payableCosts?.length ?? 0) > 0 && (
+        <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-5 py-4 sm:px-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-gray-950">Theo dõi thanh toán từng khoản chi</h2>
+                <p className="mt-1 text-sm text-gray-500">Kiểm tra nhà cung cấp, tài khoản chi và ngày đã thanh toán.</p>
+              </div>
+              <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600">
+                {debt.payableCosts!.filter((cost) => cost.isPaid).length}/{debt.payableCosts!.length} khoản đã trả
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <CostSummary label="Tổng chi phí" value={payableCostTotal} />
+              <CostSummary label="Đã thanh toán" value={paidCostTotal} tone="success" />
+              <CostSummary label="Chưa thanh toán" value={unpaidCostTotal} tone="danger" />
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50/80">
+                <tr>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">Hạng mục</th>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">Nhà cung cấp</th>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">SL / ĐVT</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">Số tiền</th>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">TK chi</th>
+                  <th className="px-5 py-3 text-center font-semibold text-gray-600">Trạng thái / ngày trả</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {debt.payableCosts!.map((cost) => {
+                  const paymentAccount = resolveCostPaymentAccount(cost);
+                  const canTick = isAdmin || cost.paidBy?.id === currentUserId || Boolean(cost.paidFromCompanyAccount);
+                  return (
+                    <tr key={cost.id} className={cost.isPaid ? "bg-emerald-50/30" : "hover:bg-gray-50/60"}>
+                      <td className="px-5 py-3 font-medium text-gray-900">
+                        {cost.customLabel || COST_CATEGORY_LABELS[cost.category] || cost.category}
+                      </td>
+                      <td className="px-5 py-3 text-gray-600">
+                        {isVendorlessCostCategory(cost.category) ? (
+                          <span className="text-gray-400">Không áp dụng</span>
+                        ) : cost.vendor?.name ? (
+                          cost.vendor.name
+                        ) : (
+                          <span className="font-medium text-amber-600">Chưa gắn NCC</span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3 text-gray-600">
+                        {cost.quantity.toLocaleString("vi-VN")} {cost.unit || ""}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3 text-right font-semibold text-gray-950">{formatVnd(cost.costPrice)}</td>
+                      <td className="px-5 py-3 text-gray-600">
+                        {paymentAccount?.label || <span className="font-medium text-amber-600">Chưa chọn TK chi</span>}
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex min-w-36 flex-col items-center gap-1.5">
+                          <label className="inline-flex items-center gap-2 text-xs font-medium text-gray-600">
+                            <input
+                              type="checkbox"
+                              checked={cost.isPaid}
+                              disabled={!canTick || togglingCostId === cost.id}
+                              onChange={(event) => handleToggleCostPaid(cost, event.target.checked)}
+                              className="h-4 w-4 cursor-pointer accent-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+                              title={canTick ? "Tích khi đã thanh toán" : "Chỉ người phụ trách TK chi mới tích được"}
+                            />
+                            {cost.isPaid ? "Đã thanh toán" : "Chưa thanh toán"}
+                          </label>
+                          {cost.isPaid && cost.paidAt && (
+                            <>
+                              <input
+                                type="date"
+                                value={cost.paidAt.slice(0, 10)}
+                                disabled={!canTick || togglingCostId === cost.id}
+                                onChange={(event) => handleToggleCostPaid(cost, true, event.target.value)}
+                                className="input h-8 w-36 px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-gray-100"
+                                title="Sửa ngày thanh toán"
+                              />
+                              {cost.paidConfirmedBy?.name && (
+                                <span className="text-[11px] text-emerald-700">Xác nhận: {cost.paidConfirmedBy.name}</span>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {paidCostError && <p className="border-t border-red-100 bg-red-50 px-6 py-3 text-sm text-red-700">{paidCostError}</p>}
+        </section>
+      )}
+
+      <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-5 py-4 sm:px-6">
+          <div>
+            <h2 className="text-base font-semibold text-gray-950">Lịch sử thanh toán</h2>
+            <p className="mt-1 text-sm text-gray-500">Mỗi lần thu hoặc trả tiền được lưu thành một giao dịch riêng.</p>
+          </div>
+          <button
+            type="button"
+            onClick={openPaymentForm}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+          >
+            + Ghi nhận thanh toán
+          </button>
+        </div>
+        {debt.payments.length === 0 ? (
+          <div className="px-6 py-10 text-center text-sm text-gray-400">Chưa có giao dịch thanh toán nào.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50/80">
+                <tr>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">Ngày thanh toán</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">Số tiền</th>
+                  {breakdown && <th className="px-5 py-3 text-left font-semibold text-gray-600">Phân loại</th>}
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">Phương thức</th>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">
+                    {debt.type === "RECEIVABLE" ? "TK nhận tiền" : "TK thanh toán"}
+                  </th>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">Ghi chú</th>
+                  <th className="px-5 py-3 text-center font-semibold text-gray-600">Biên lai</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {debt.payments.map((payment) => (
+                  <tr key={payment.id} className="hover:bg-gray-50/60">
+                    <td className="whitespace-nowrap px-5 py-3 text-gray-700">
+                      {new Date(payment.paymentDate).toLocaleDateString("vi-VN")}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3 text-right font-semibold text-gray-950">{formatVnd(payment.amount)}</td>
+                    {breakdown && (
+                      <td className="px-5 py-3">
+                        {payment.portion ? (
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${payment.portion === "INVOICE" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}>
+                            {DEBT_PORTION_LABELS[payment.portion]}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                    )}
+                    <td className="px-5 py-3 text-gray-600">{payment.method || "—"}</td>
+                    <td className="px-5 py-3">
+                      {payment.receivedToCompanyAccount ? (
+                        <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">{payment.receivedToCompanyAccount.name}</span>
+                      ) : payment.receivedBy ? (
+                        <span className="inline-flex rounded-full bg-purple-50 px-2.5 py-1 text-xs font-medium text-purple-700">{payment.receivedBy.name}</span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="max-w-xs px-5 py-3 text-gray-600">{payment.note || "—"}</td>
+                    <td className="px-5 py-3 text-center">
+                      {payment.attachmentUrl ? (
+                        <AttachmentPreviewButton url={payment.attachmentUrl} className="font-medium text-blue-700 hover:underline">
+                          Xem biên lai
+                        </AttachmentPreviewButton>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3 text-right">
+                      <button type="button" onClick={() => openEditPayment(payment)} className="text-xs font-semibold text-blue-700 hover:underline">
+                        Sửa
+                      </button>
+                      <button type="button" onClick={() => handleDeletePayment(payment.id)} className="ml-3 text-xs font-semibold text-red-600 hover:underline">
+                        Xóa
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {isFormOpen && (
         <div
@@ -864,7 +977,9 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
                 </select>
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-gray-700">TK nhận tiền</span>
+                <span className="mb-1 block text-sm font-medium text-gray-700">
+                  {debt.type === "RECEIVABLE" ? "TK nhận tiền" : "TK thanh toán"}
+                </span>
                 <select
                   value={form.receivingAccount}
                   onChange={(e) => setForm((prev) => ({ ...prev, receivingAccount: e.target.value }))}
@@ -960,15 +1075,6 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
                 </span>
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-gray-700">Hạn thanh toán</span>
-                <input
-                  type="date"
-                  value={editForm.dueDate}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, dueDate: e.target.value }))}
-                  className="input"
-                />
-              </label>
-              <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Ghi chú</span>
                 <textarea
                   value={editForm.note}
@@ -1003,20 +1109,85 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
           shipment={debt.shipment}
           onClose={() => {
             setIsFinanceOpen(false);
-            void loadDebt();
+            void Promise.all([loadDebt(), loadPairDebts(debt.shipment!.id)]);
           }}
-          onCostsChanged={() => void loadDebt()}
+          onCostsChanged={() => void Promise.all([loadDebt(), loadPairDebts(debt.shipment!.id)])}
         />
       )}
     </div>
   );
 }
 
-function Info({ label, value }: { label: string; value: string | null | undefined }) {
+function MetricCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "neutral" | "success" | "danger";
+}) {
+  const toneClasses = {
+    neutral: "border-gray-200 text-gray-950",
+    success: "border-emerald-200 text-emerald-700",
+    danger: "border-red-200 text-red-700",
+  };
+  return (
+    <div className={`rounded-xl border bg-white p-5 shadow-sm ${toneClasses[tone]}`}>
+      <p className="text-sm font-medium text-gray-500">{label}</p>
+      <p className="mt-3 text-2xl font-bold tracking-tight">{value}</p>
+    </div>
+  );
+}
+
+function PairMetric({
+  label,
+  value,
+  valueClassName = "text-gray-900",
+}: {
+  label: string;
+  value: number;
+  valueClassName?: string;
+}) {
   return (
     <div>
-      <dt className="text-xs font-medium uppercase tracking-wide text-gray-400">{label}</dt>
-      <dd className="mt-0.5 text-sm text-gray-900">{value || "—"}</dd>
+      <dt className="text-xs text-gray-500">{label}</dt>
+      <dd className={`mt-1 whitespace-nowrap font-semibold ${valueClassName}`}>{formatVnd(value)}</dd>
+    </div>
+  );
+}
+
+function CostSummary({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: number;
+  tone?: "neutral" | "success" | "danger";
+}) {
+  const valueClassName = tone === "success" ? "text-emerald-700" : tone === "danger" ? "text-red-700" : "text-gray-950";
+  return (
+    <div className="rounded-lg border border-gray-200 bg-gray-50/60 px-4 py-3">
+      <p className="text-xs font-medium text-gray-500">{label}</p>
+      <p className={`mt-1 text-lg font-bold ${valueClassName}`}>{formatVnd(value)}</p>
+    </div>
+  );
+}
+
+function Info({
+  label,
+  value,
+  className = "",
+}: {
+  label: string;
+  value: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`bg-white px-5 py-4 sm:px-6 ${className}`}>
+      <dt className="text-xs font-semibold uppercase tracking-wide text-gray-400">{label}</dt>
+      <dd className="mt-1.5 break-words text-sm font-medium text-gray-900">{value || "—"}</dd>
     </div>
   );
 }
@@ -1029,6 +1200,7 @@ function PortionCard({
   taxRatePercent,
   paid,
   remaining,
+  paidLabel,
   className,
   accent,
 }: {
@@ -1039,6 +1211,7 @@ function PortionCard({
   taxRatePercent?: number;
   paid: number;
   remaining: number;
+  paidLabel: "Đã thu" | "Đã trả";
   className: string;
   accent: string;
 }) {
@@ -1048,7 +1221,7 @@ function PortionCard({
         <span className={`text-sm font-semibold ${accent}`}>{label}</span>
         {remaining <= 0 && total > 0 && (
           <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
-            Đã thu đủ
+            {paidLabel} đủ
           </span>
         )}
       </div>
@@ -1074,7 +1247,7 @@ function PortionCard({
           <dd className="font-semibold text-gray-900">{formatVnd(total)}</dd>
         </div>
         <div className="flex justify-between">
-          <dt className="text-gray-500">Đã thu</dt>
+          <dt className="text-gray-500">{paidLabel}</dt>
           <dd className="font-medium text-green-700">{formatVnd(paid)}</dd>
         </div>
         <div className="flex justify-between border-t border-gray-200/70 pt-1">

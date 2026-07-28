@@ -22,7 +22,6 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       shipment: {
         select: {
           id: true,
-          shipmentCode: true,
           goodsName: true,
           declarationNo: true,
           declarationDate: true,
@@ -120,7 +119,6 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         shipment: {
           select: {
             id: true,
-            shipmentCode: true,
             goodsName: true,
             declarationNo: true,
             declarationDate: true,

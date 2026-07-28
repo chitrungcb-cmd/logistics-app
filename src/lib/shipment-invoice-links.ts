@@ -15,6 +15,7 @@ const invoiceSelect = {
   invoiceSymbol: true,
   invoiceDate: true,
   subtotal: true,
+  taxAmount: true,
   totalAmount: true,
   currency: true,
   attachmentName: true,

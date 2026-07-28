@@ -5,8 +5,8 @@ import { apiError, apiSuccess } from "@/lib/api-response";
 import { sumPayments } from "@/lib/debt-constants";
 import { resolveCostPaymentAccount } from "@/lib/cost-payment-account";
 
-// Công nợ (phải thu + phải trả) của một lô hàng, dùng cho cửa sổ Thông tin lô hàng. FIELD_STAFF
-// không được xem công nợ; ADMIN và ACCOUNTANT đều xem + sửa được ngày thanh toán (canEditDate).
+// Công nợ (phải thu + phải trả) của một lô hàng, dùng cho cửa sổ Thông tin lô hàng.
+// FIELD_STAFF không được xem công nợ.
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
@@ -71,8 +71,6 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       debt.type === "RECEIVABLE"
         ? debt.customer?.companyName || debt.shipment?.customerName || "Khách hàng"
         : debt.vendor?.name || "Chi phí lô hàng";
-    // Cả ADMIN và ACCOUNTANT đều sửa được ngày thanh toán (FIELD_STAFF đã bị chặn ở đầu hàm).
-    const canEditDate = true;
     return {
       id: debt.id,
       type: debt.type,
@@ -80,9 +78,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       totalAmount: debt.totalAmount,
       paidAmount,
       remainingAmount: debt.totalAmount - paidAmount,
-      dueDate: debt.dueDate,
       status: debt.status,
-      canEditDate,
       costs: debt.type === "PAYABLE" ? payableCosts : [],
     };
   });

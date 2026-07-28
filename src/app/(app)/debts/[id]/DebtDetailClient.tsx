@@ -111,7 +111,21 @@ const emptyPaymentForm = {
   attachmentUrl: null as string | null,
 };
 
-export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { debtId: string; isAdmin: boolean; currentUserId: string }) {
+export default function DebtDetailClient({
+  debtId,
+  isAdmin,
+  currentUserId,
+  displayMode = "page",
+  onClose,
+  onSelectDebt,
+}: {
+  debtId: string;
+  isAdmin: boolean;
+  currentUserId: string;
+  displayMode?: "page" | "modal";
+  onClose?: () => void;
+  onSelectDebt?: (debtId: string) => void;
+}) {
   const router = useRouter();
   const [debt, setDebt] = useState<DebtDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -330,7 +344,11 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
       alert(json.error || "Không thể xóa công nợ.");
       return;
     }
-    router.push("/debts");
+    if (displayMode === "modal" && onClose) {
+      onClose();
+    } else {
+      router.push("/debts");
+    }
   }
 
   function openPaymentForm() {
@@ -406,9 +424,15 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
     return (
       <div className="p-8">
         <p className="text-red-600">{error || "Không tìm thấy công nợ."}</p>
-        <Link href="/debts" className="mt-4 inline-block text-blue-600 hover:underline">
-          ← Quay lại danh sách
-        </Link>
+        {displayMode === "modal" && onClose ? (
+          <button type="button" onClick={onClose} className="mt-4 text-blue-600 hover:underline">
+            Đóng cửa sổ
+          </button>
+        ) : (
+          <Link href="/debts" className="mt-4 inline-block text-blue-600 hover:underline">
+            ← Quay lại danh sách
+          </Link>
+        )}
       </div>
     );
   }
@@ -441,10 +465,12 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
   const unpaidCostTotal = payableCostTotal - paidCostTotal;
 
   return (
-    <div className="mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6 lg:p-8">
-      <Link href="/debts" className="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-700">
-        ← Quay lại danh sách công nợ
-      </Link>
+    <div className={`mx-auto max-w-[1600px] space-y-6 ${displayMode === "modal" ? "p-4 sm:p-6" : "p-4 sm:p-6 lg:p-8"}`}>
+      {displayMode === "page" && (
+        <Link href="/debts" className="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-700">
+          ← Quay lại danh sách công nợ
+        </Link>
+      )}
 
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
         <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-start">
@@ -465,9 +491,15 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
             <h1 className="mt-2 break-words text-2xl font-bold text-gray-950 sm:text-3xl">{partnerName}</h1>
             {debt.shipment && (
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-600">
-                <ShipmentLink shipmentId={debt.shipment.id} className="font-semibold text-blue-700 hover:underline">
-                  TK {debt.shipment.declarationNo || "Chưa có số tờ khai"}
-                </ShipmentLink>
+                {displayMode === "modal" ? (
+                  <span className="font-semibold text-blue-700">
+                    TK {debt.shipment.declarationNo || "Chưa có số tờ khai"}
+                  </span>
+                ) : (
+                  <ShipmentLink shipmentId={debt.shipment.id} className="font-semibold text-blue-700 hover:underline">
+                    TK {debt.shipment.declarationNo || "Chưa có số tờ khai"}
+                  </ShipmentLink>
+                )}
                 <span>{debt.shipment.goodsName || "Chưa có tên hàng"}</span>
                 {debt.shipment.declarationDate && (
                   <span>Ngày TK {new Date(debt.shipment.declarationDate).toLocaleDateString("vi-VN")}</span>
@@ -576,7 +608,12 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
               );
               if (d && !isCurrent) {
                 return (
-                  <button key={type} type="button" onClick={() => router.push(`/debts/${d.id}`)} className="text-left">
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => (onSelectDebt ? onSelectDebt(d.id) : router.push(`/debts/${d.id}`))}
+                    className="text-left"
+                  >
                     {card}
                   </button>
                 );
@@ -597,9 +634,15 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
             label="Số tờ khai"
             value={
               debt.shipment ? (
-                <ShipmentLink shipmentId={debt.shipment.id} className="font-semibold text-blue-700 hover:underline">
-                  {debt.shipment.declarationNo || "Chưa có số tờ khai"}
-                </ShipmentLink>
+                displayMode === "modal" ? (
+                  <span className="font-semibold text-blue-700">
+                    {debt.shipment.declarationNo || "Chưa có số tờ khai"}
+                  </span>
+                ) : (
+                  <ShipmentLink shipmentId={debt.shipment.id} className="font-semibold text-blue-700 hover:underline">
+                    {debt.shipment.declarationNo || "Chưa có số tờ khai"}
+                  </ShipmentLink>
+                )
               ) : null
             }
           />

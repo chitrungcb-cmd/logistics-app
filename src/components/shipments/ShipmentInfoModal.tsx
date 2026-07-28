@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import AttachmentPreviewModal from "@/components/shipments/AttachmentPreviewModal";
 import Badge from "@/components/shipments/Badge";
 import ShipmentDetailsTable from "@/components/shipments/ShipmentDetailsTable";
@@ -13,6 +14,14 @@ import {
 } from "@/lib/shipment-constants";
 import { COST_CATEGORY_LABELS } from "@/lib/shipment-cost-constants";
 import type { ShipmentDTO } from "@/lib/types";
+
+const DebtDetailClient = dynamic(
+  () => import("@/app/(app)/debts/[id]/DebtDetailClient"),
+  {
+    ssr: false,
+    loading: () => <p className="p-10 text-center text-sm text-gray-400">Đang tải chi tiết công nợ...</p>,
+  }
+);
 
 type PayableCost = {
   id: string;
@@ -34,10 +43,13 @@ type ShipmentDebt = {
   totalAmount: number;
   paidAmount: number;
   remainingAmount: number;
-  dueDate: string | null;
   status: string;
-  canEditDate: boolean;
   costs: PayableCost[];
+};
+
+type Viewer = {
+  id: string;
+  role: string;
 };
 
 function formatVnd(amount: number) {
@@ -56,7 +68,8 @@ export default function ShipmentInfoModal({
   const [error, setError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState<Attachment | null>(null);
   const [debts, setDebts] = useState<ShipmentDebt[]>([]);
-  const [savingDebtId, setSavingDebtId] = useState<string | null>(null);
+  const [selectedDebtId, setSelectedDebtId] = useState<string | null>(null);
+  const [viewer, setViewer] = useState<Viewer | null>(null);
   const [debtError, setDebtError] = useState<string | null>(null);
   const [togglingCostId, setTogglingCostId] = useState<string | null>(null);
 
@@ -89,21 +102,32 @@ export default function ShipmentInfoModal({
     };
   }, [shipmentId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/shipments/${shipmentId}/debts`)
+  const loadDebts = useCallback(() => {
+    return fetch(`/api/shipments/${shipmentId}/debts`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         // 403 (FIELD_STAFF) hoặc lỗi → không hiện mục công nợ; không chặn phần còn lại.
-        if (!cancelled && json?.success) setDebts(json.data);
+        if (json?.success) setDebts(json.data);
       })
       .catch(() => {
         /* mục công nợ là bổ sung, lỗi tải bỏ qua */
       });
-    return () => {
-      cancelled = true;
-    };
   }, [shipmentId]);
+
+  useEffect(() => {
+    void loadDebts();
+  }, [loadDebts]);
+
+  useEffect(() => {
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((json) => {
+        if (json?.success && json.data?.user) setViewer(json.data.user);
+      })
+      .catch(() => {
+        /* API chi tiết công nợ vẫn tự kiểm tra quyền; chỉ ẩn thao tác quản trị khi chưa tải được người dùng. */
+      });
+  }, []);
 
   async function toggleCostPaid(debtId: string, cost: PayableCost, nextPaid: boolean) {
     setTogglingCostId(cost.id);
@@ -137,33 +161,20 @@ export default function ShipmentInfoModal({
     }
   }
 
-  async function saveDebtDate(debtId: string, dueDate: string) {
-    setSavingDebtId(debtId);
-    setDebtError(null);
-    try {
-      const res = await fetch(`/api/debts/${debtId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dueDate: dueDate || null }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || "Không thể lưu ngày thanh toán.");
-      setDebts((current) => current.map((debt) => (debt.id === debtId ? { ...debt, dueDate: dueDate || null } : debt)));
-    } catch (saveError) {
-      setDebtError(saveError instanceof Error ? saveError.message : "Đã có lỗi xảy ra.");
-    } finally {
-      setSavingDebtId(null);
-    }
-  }
-
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (selectedDebtId) {
+        setSelectedDebtId(null);
+        void loadDebts();
+      } else {
+        onClose();
+      }
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [loadDebts, onClose, selectedDebtId]);
 
   return (
     <>
@@ -246,9 +257,13 @@ export default function ShipmentInfoModal({
                               <span className={`text-sm font-semibold ${isReceivable ? "text-blue-800" : "text-emerald-800"}`}>
                                 {isReceivable ? "Phải thu" : "Phải trả"}
                               </span>
-                              <a href={`/debts/${debt.id}`} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedDebtId(debt.id)}
+                                className="text-xs font-medium text-blue-600 hover:underline"
+                              >
                                 Mở chi tiết →
-                              </a>
+                              </button>
                             </div>
                             <p className="mt-0.5 text-xs text-gray-500">{debt.partnerName}</p>
                             <dl className="mt-2 space-y-1 text-sm">
@@ -256,18 +271,6 @@ export default function ShipmentInfoModal({
                               <div className="flex justify-between"><dt className="text-gray-500">Đã thanh toán</dt><dd className="font-medium text-green-700">{formatVnd(debt.paidAmount)}</dd></div>
                               <div className="flex justify-between border-t border-gray-200/70 pt-1"><dt className="text-gray-600">Còn lại</dt><dd className="font-semibold text-gray-900">{formatVnd(debt.remainingAmount)}</dd></div>
                             </dl>
-                            <label className="mt-3 block">
-                              <span className="mb-1 block text-xs font-medium text-gray-600">Ngày thanh toán</span>
-                              <input
-                                type="date"
-                                defaultValue={debt.dueDate ? debt.dueDate.slice(0, 10) : ""}
-                                disabled={!debt.canEditDate || savingDebtId === debt.id}
-                                onChange={(event) => saveDebtDate(debt.id, event.target.value)}
-                                className="input w-full disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
-                                title="Chọn ngày thanh toán"
-                              />
-                            </label>
-
                             {!isReceivable && debt.costs.length > 0 && (
                               <div className="mt-3 border-t border-emerald-200/70 pt-2">
                                 <p className="mb-1 text-xs font-medium text-gray-600">
@@ -355,6 +358,63 @@ export default function ShipmentInfoModal({
         attachment={previewing}
         onClose={() => setPreviewing(null)}
       />
+
+      {selectedDebtId && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-2 sm:p-5"
+          onClick={() => {
+            setSelectedDebtId(null);
+            void loadDebts();
+          }}
+          role="presentation"
+        >
+          <div
+            className="flex max-h-[95vh] w-full max-w-[1500px] flex-col overflow-hidden rounded-xl bg-gray-50 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="debt-detail-modal-title"
+          >
+            <header className="flex shrink-0 items-center justify-between gap-4 border-b border-gray-200 bg-white px-5 py-3 sm:px-6">
+              <div>
+                <h2 id="debt-detail-modal-title" className="text-lg font-semibold text-gray-950">
+                  Chi tiết công nợ
+                </h2>
+                <p className="mt-0.5 text-xs text-gray-500">Xem và cập nhật ngay tại cửa sổ lô hàng.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDebtId(null);
+                  void loadDebts();
+                }}
+                className="rounded-md p-2 text-xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                aria-label="Đóng cửa sổ chi tiết công nợ"
+              >
+                ×
+              </button>
+            </header>
+            <div className="flex-1 overflow-y-auto">
+              {viewer ? (
+                <DebtDetailClient
+                  key={selectedDebtId}
+                  debtId={selectedDebtId}
+                  isAdmin={viewer.role === "ADMIN"}
+                  currentUserId={viewer.id}
+                  displayMode="modal"
+                  onClose={() => {
+                    setSelectedDebtId(null);
+                    void loadDebts();
+                  }}
+                  onSelectDebt={setSelectedDebtId}
+                />
+              ) : (
+                <p className="p-10 text-center text-sm text-gray-400">Đang xác định quyền truy cập...</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

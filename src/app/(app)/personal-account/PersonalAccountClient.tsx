@@ -6,7 +6,6 @@ import ShipmentLink from "@/components/shipments/ShipmentLink";
 type Entry = {
   id: string;
   amount: number;
-  paymentDate: string | null;
   assignedUserId: string | null;
   note: string | null;
   shipment: {
@@ -38,10 +37,6 @@ function formatVnd(amount: number) {
 function formatDate(value: string | null) {
   if (!value) return "—";
   return new Date(value).toLocaleDateString("vi-VN");
-}
-
-function dateInputValue(value: string | null) {
-  return value ? new Date(value).toISOString().slice(0, 10) : "";
 }
 
 function monthKey(value: string) {
@@ -221,7 +216,8 @@ export default function PersonalAccountClient({ role }: { role: string }) {
         <p className="mt-1 text-sm text-gray-500">
           Phần báo giá <span className="font-medium text-orange-700">không hóa đơn</span> của từng lô hàng được tự động
           liên kết về đây. Số tiền đồng bộ từ tab Báo giá trong Chi phí lô hàng; trạng thái thanh toán lấy theo các
-          khoản thu phần không hóa đơn ghi trong Công nợ. Mỗi khoản được quản lý theo người phụ trách.
+          khoản thu phần không hóa đơn ghi trong Công nợ. Ngày thanh toán chỉ được ghi nhận tại Công nợ; mỗi khoản
+          được quản lý theo người phụ trách.
         </p>
       </div>
 
@@ -278,24 +274,19 @@ export default function PersonalAccountClient({ role }: { role: string }) {
               <tbody className="divide-y divide-gray-100">
                 {filtered.map((entry) => {
                   const draft = draftFor(entry);
-                  // Có thanh toán từ Công nợ → hiển thị ngày thực thu (chỉ đọc), không cho sửa tay
-                  // để hai module không lệch nhau. Chưa có công nợ đồng bộ mới cho điền tay ngày.
-                  const hasDebtPayment = entry.paidAmount > 0 && entry.paidStatus !== "unpaid" && !entry.paymentDate;
                   return (
                     <tr key={entry.id} className={entry.paidStatus === "paid" ? "" : "bg-red-50/40"}>
                       <td className="px-3 py-2">
-                        {hasDebtPayment ? (
+                        {entry.effectivePaymentDate ? (
                           <span className="block w-36 text-gray-700">
                             {formatDate(entry.effectivePaymentDate)}
                             <span className="block text-[10px] text-gray-400">Thu qua Công nợ</span>
                           </span>
                         ) : (
-                          <input
-                            type="date"
-                            value={dateInputValue(entry.paymentDate)}
-                            onChange={(event) => saveEntry(entry.id, { paymentDate: event.target.value || null })}
-                            className="input w-36"
-                          />
+                          <span className="block w-36 text-gray-400">
+                            —
+                            <span className="block text-[10px]">Chưa ghi nhận tại Công nợ</span>
+                          </span>
                         )}
                       </td>
                       <td className="whitespace-nowrap px-3 py-2">

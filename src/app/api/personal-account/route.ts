@@ -6,12 +6,9 @@ import { AUTOMATIC_RECEIVABLE_DEBT_PREFIX } from "@/lib/shipment-debt-sync";
 
 /**
  * Gắn trạng thái thanh toán cho từng dòng từ các khoản thu phần KHÔNG HÓA ĐƠN đã ghi trong Công nợ
- * (công nợ phải thu tự đồng bộ của cùng lô). Đây là nguồn chính — trước đây bảng chỉ dựa vào ô ngày
- * điền tay nên không phản ánh khi khách đã trả qua module Công nợ.
+ * (công nợ phải thu tự đồng bộ của cùng lô). Công nợ là nguồn duy nhất cho ngày và trạng thái.
  */
-async function attachPaymentStatus<T extends { shipmentId: string; amount: number; paymentDate: Date | null }>(
-  entries: T[]
-) {
+async function attachPaymentStatus<T extends { shipmentId: string; amount: number }>(entries: T[]) {
   if (entries.length === 0) return [];
   const debts = await prisma.debt.findMany({
     where: {
@@ -31,7 +28,6 @@ async function attachPaymentStatus<T extends { shipmentId: string; amount: numbe
     ...computePersonalAccountPayment({
       amount: entry.amount,
       noInvoicePayments: paymentsByShipment.get(entry.shipmentId) ?? [],
-      manualPaymentDate: entry.paymentDate,
     }),
   }));
 }

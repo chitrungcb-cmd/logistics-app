@@ -12,8 +12,8 @@ function optionalText(value: unknown, maxLength: number) {
   return text.length <= maxLength ? text || null : undefined;
 }
 
-// `amount` cố tình không sửa được ở đây — nó luôn được đồng bộ từ phần báo giá không hóa đơn của
-// lô hàng (syncPersonalAccountEntry); chỉ các trường điền tay mới nhận từ client.
+// `amount` luôn được đồng bộ từ báo giá không hóa đơn. Ngày thanh toán chỉ được ghi nhận qua
+// Công nợ; endpoint này chỉ nhận các trường quản lý nội bộ của dòng.
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const user = await getCurrentUser();
@@ -21,22 +21,15 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền sửa tài khoản cá nhân.", 403);
     const { id } = await params;
     const body = await request.json();
+    if ("paymentDate" in body) {
+      return apiError("Ngày thanh toán chỉ được ghi nhận tại mô-đun Công nợ.", 400);
+    }
     const data: {
-      paymentDate?: Date | null;
       receivingAccount?: string | null;
       assignedUserId?: string | null;
       note?: string | null;
     } = {};
 
-    if ("paymentDate" in body) {
-      if (body.paymentDate == null || body.paymentDate === "") {
-        data.paymentDate = null;
-      } else {
-        const paymentDate = new Date(body.paymentDate);
-        if (Number.isNaN(paymentDate.getTime())) return apiError("Ngày thanh toán không hợp lệ.", 400);
-        data.paymentDate = paymentDate;
-      }
-    }
     if ("receivingAccount" in body) {
       const receivingAccount = optionalText(body.receivingAccount, 200);
       if (receivingAccount === undefined) return apiError("Số tài khoản nhận tiền không hợp lệ.", 400);
@@ -84,7 +77,6 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       ...computePersonalAccountPayment({
         amount: entry.amount,
         noInvoicePayments: debt?.payments ?? [],
-        manualPaymentDate: entry.paymentDate,
       }),
     });
   } catch (error) {

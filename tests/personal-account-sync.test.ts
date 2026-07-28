@@ -60,7 +60,6 @@ describe("personal-account payment status from debt", () => {
         { amount: 30_000_000, paymentDate: "2026-07-08" },
         { amount: 15_112_000, paymentDate: "2026-07-18" },
       ],
-      manualPaymentDate: null,
     });
     expect(result.paidStatus).toBe("paid");
     expect(result.paidAmount).toBe(45_112_000);
@@ -73,39 +72,20 @@ describe("personal-account payment status from debt", () => {
     const result = computePersonalAccountPayment({
       amount: 45_112_000,
       noInvoicePayments: [{ amount: 30_000_000, paymentDate: "2026-07-08" }],
-      manualPaymentDate: null,
     });
     expect(result.paidStatus).toBe("partial");
     expect(result.paidAmount).toBe(30_000_000);
     expect(result.remainingAmount).toBe(15_112_000);
   });
 
-  it("falls back to the manual paymentDate only when there is no synced debt", () => {
-    const paidManually = computePersonalAccountPayment({
-      amount: 5_000_000,
-      noInvoicePayments: [],
-      manualPaymentDate: "2026-07-01",
-    });
-    expect(paidManually.paidStatus).toBe("paid");
-    expect(paidManually.paidAmount).toBe(5_000_000);
-
-    const unpaid = computePersonalAccountPayment({
-      amount: 5_000_000,
-      noInvoicePayments: [],
-      manualPaymentDate: null,
-    });
-    expect(unpaid.paidStatus).toBe("unpaid");
-    expect(unpaid.remainingAmount).toBe(5_000_000);
-  });
-
-  it("lets the debt override a stale manual date (debt is the source of truth)", () => {
-    // Có khoản thu thật trong Công nợ nhưng chưa đủ → partial, bỏ qua ngày điền tay cũ.
+  it("stays unpaid and has no payment date when Công nợ has no payment", () => {
     const result = computePersonalAccountPayment({
-      amount: 45_112_000,
-      noInvoicePayments: [{ amount: 30_000_000, paymentDate: "2026-07-08" }],
-      manualPaymentDate: "2026-06-01",
+      amount: 5_000_000,
+      noInvoicePayments: [],
     });
-    expect(result.paidStatus).toBe("partial");
-    expect(result.effectivePaymentDate?.slice(0, 10)).toBe("2026-07-08");
+    expect(result.paidStatus).toBe("unpaid");
+    expect(result.paidAmount).toBe(0);
+    expect(result.remainingAmount).toBe(5_000_000);
+    expect(result.effectivePaymentDate).toBeNull();
   });
 });

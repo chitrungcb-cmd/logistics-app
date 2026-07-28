@@ -17,24 +17,19 @@ export const PERSONAL_ACCOUNT_ENTRY_INCLUDE = {
 
 /**
  * Trạng thái thanh toán của một dòng tài khoản cá nhân, suy ra từ các khoản thanh toán phần KHÔNG
- * HÓA ĐƠN đã ghi trong Công nợ (nguồn chính). Ô "Ngày thanh toán" điền tay chỉ còn là fallback cho
- * lô chưa có công nợ đồng bộ (báo giá/chi phí chưa đủ để tạo cặp công nợ) — khi đó coi như đã thu
- * đủ nếu có ngày. Trả về cả số đã thu / còn lại để bảng hiển thị "thu một phần".
+ * HÓA ĐƠN đã ghi trong Công nợ. Đây là nguồn duy nhất cho ngày và trạng thái thanh toán. Trả về cả
+ * số đã thu / còn lại để bảng hiển thị "thu một phần".
  */
 export function computePersonalAccountPayment(params: {
   amount: number;
   noInvoicePayments: Array<{ amount: number; paymentDate: Date | string }>;
-  manualPaymentDate: Date | string | null;
 }): {
   paidAmount: number;
   remainingAmount: number;
   paidStatus: "paid" | "partial" | "unpaid";
   effectivePaymentDate: string | null;
 } {
-  const debtPaid = params.noInvoicePayments.reduce((sum, p) => sum + p.amount, 0);
-  const hasDebtPayments = params.noInvoicePayments.length > 0;
-  const manualFallback = params.manualPaymentDate ? params.amount : 0;
-  const paidAmount = hasDebtPayments ? debtPaid : manualFallback;
+  const paidAmount = params.noInvoicePayments.reduce((sum, p) => sum + p.amount, 0);
   const remainingAmount = Math.max(0, params.amount - paidAmount);
 
   const paidStatus =
@@ -44,17 +39,12 @@ export function computePersonalAccountPayment(params: {
         ? "partial"
         : "unpaid";
 
-  const latestDebtDate = hasDebtPayments
+  const latestDebtDate = params.noInvoicePayments.length > 0
     ? params.noInvoicePayments
         .map((p) => new Date(p.paymentDate).getTime())
         .reduce((a, b) => Math.max(a, b), 0)
     : null;
-  const effectivePaymentDate =
-    latestDebtDate != null
-      ? new Date(latestDebtDate).toISOString()
-      : params.manualPaymentDate
-        ? new Date(params.manualPaymentDate).toISOString()
-        : null;
+  const effectivePaymentDate = latestDebtDate != null ? new Date(latestDebtDate).toISOString() : null;
 
   return { paidAmount, remainingAmount, paidStatus, effectivePaymentDate };
 }

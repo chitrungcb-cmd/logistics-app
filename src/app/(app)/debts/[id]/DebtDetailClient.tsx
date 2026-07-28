@@ -12,8 +12,9 @@ import {
   type DebtPortionValue,
 } from "@/lib/debt-constants";
 import AttachmentPreviewButton from "@/components/shipments/AttachmentPreviewButton";
-import { COST_CATEGORY_LABELS } from "@/lib/shipment-cost-constants";
+import { COST_CATEGORY_LABELS, isVendorlessCostCategory } from "@/lib/shipment-cost-constants";
 import { INVOICE_VAT_RATE } from "@/lib/personal-account-sync";
+import { resolveCostPaymentAccount } from "@/lib/cost-payment-account";
 import ShipmentFinanceEditorModal from "@/components/shipments/ShipmentFinanceEditorModal";
 import MoneyInput from "@/components/MoneyInput";
 import ShipmentLink from "@/components/shipments/ShipmentLink";
@@ -86,6 +87,7 @@ type PayableCost = {
   paidAt: string | null;
   vendor: { name: string } | null;
   paidBy: { id: string; name: string } | null;
+  paidFromCompanyAccount: { id: string; name: string } | null;
   paidConfirmedBy: { name: string } | null;
 };
 
@@ -138,7 +140,7 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
   }
 
   const loadDebt = useCallback(() => {
-    return fetch(`/api/debts/${debtId}`)
+    return fetch(`/api/debts/${debtId}`, { cache: "no-store" })
       .then((res) => res.json())
       .then((json) => {
         if (!json.success) throw new Error(json.error || "Không thể tải công nợ.");
@@ -612,21 +614,35 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Hạng mục</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-500">Nhà cung cấp</th>
                       <th className="px-3 py-2 text-right font-medium text-gray-500">Số tiền</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-500">Do ai chi</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-500">TK chi</th>
                       <th className="px-3 py-2 text-center font-medium text-gray-500">Đã thanh toán</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {debt.payableCosts!.map((cost) => {
-                      const canTick = isAdmin || cost.paidBy?.id === currentUserId;
+                      const paymentAccount = resolveCostPaymentAccount(cost);
+                      const canTick =
+                        isAdmin ||
+                        cost.paidBy?.id === currentUserId ||
+                        Boolean(cost.paidFromCompanyAccount);
                       return (
                         <tr key={cost.id} className={cost.isPaid ? "bg-green-50/40" : ""}>
                           <td className="px-3 py-2 text-gray-800">
                             {cost.customLabel || COST_CATEGORY_LABELS[cost.category] || cost.category}
                           </td>
-                          <td className="px-3 py-2 text-gray-600">{cost.vendor?.name || "—"}</td>
+                          <td className="px-3 py-2 text-gray-600">
+                            {isVendorlessCostCategory(cost.category) ? (
+                              <span className="text-gray-400">Không áp dụng</span>
+                            ) : cost.vendor?.name ? (
+                              cost.vendor.name
+                            ) : (
+                              <span className="text-amber-600">Chưa gắn NCC</span>
+                            )}
+                          </td>
                           <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-gray-900">{formatVnd(cost.costPrice)}</td>
-                          <td className="px-3 py-2 text-gray-600">{cost.paidBy?.name || <span className="text-amber-600">Chưa gán</span>}</td>
+                          <td className="px-3 py-2 text-gray-600">
+                            {paymentAccount?.label || <span className="text-amber-600">Chưa chọn TK chi</span>}
+                          </td>
                           <td className="px-3 py-2">
                             <div className="flex flex-col items-center gap-0.5">
                               <input
@@ -635,7 +651,7 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
                                 disabled={!canTick || togglingCostId === cost.id}
                                 onChange={(e) => handleToggleCostPaid(cost, e.target.checked)}
                                 className="h-4 w-4 cursor-pointer accent-green-600 disabled:cursor-not-allowed disabled:opacity-40"
-                                title={canTick ? "Tích khi đã thanh toán" : "Chỉ người phụ trách khoản này mới tích được"}
+                                title={canTick ? "Tích khi đã thanh toán" : "Chỉ người phụ trách TK chi mới tích được"}
                               />
                               {cost.isPaid && cost.paidAt && (
                                 <>
@@ -985,8 +1001,11 @@ export default function DebtDetailClient({ debtId, isAdmin, currentUserId }: { d
       {isFinanceOpen && debt.shipment && (
         <ShipmentFinanceEditorModal
           shipment={debt.shipment}
-          onClose={() => setIsFinanceOpen(false)}
-          onCostsChanged={loadDebt}
+          onClose={() => {
+            setIsFinanceOpen(false);
+            void loadDebt();
+          }}
+          onCostsChanged={() => void loadDebt()}
         />
       )}
     </div>

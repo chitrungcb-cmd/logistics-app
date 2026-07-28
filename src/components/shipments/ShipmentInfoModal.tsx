@@ -22,7 +22,7 @@ type PayableCost = {
   isPaid: boolean;
   paidAt: string | null;
   vendorName: string | null;
-  paidByName: string | null;
+  paymentAccountLabel: string | null;
   paidConfirmedByName: string | null;
   canTick: boolean;
 };
@@ -286,7 +286,10 @@ export default function ShipmentInfoModal({
                                       />
                                       <span className="min-w-0 flex-1 truncate text-gray-700">
                                         {cost.customLabel || COST_CATEGORY_LABELS[cost.category] || cost.category}
-                                        {cost.paidByName ? <span className="text-gray-400"> · {cost.paidByName}</span> : null}
+                                        {cost.vendorName ? <span className="text-gray-400"> · {cost.vendorName}</span> : null}
+                                        {cost.paymentAccountLabel ? (
+                                          <span className="text-gray-400"> · {cost.paymentAccountLabel}</span>
+                                        ) : null}
                                       </span>
                                       <span className="shrink-0 font-medium text-gray-900">{formatVnd(cost.costPrice)}</span>
                                     </li>

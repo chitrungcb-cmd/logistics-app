@@ -431,14 +431,14 @@ export default function PersonalAccountClient({ role }: { role: string }) {
 
       {role === "ADMIN" && (
         <section className="rounded-xl border border-gray-200 bg-white p-5">
-          <h2 className="mb-1 font-semibold text-gray-900">Chi phí theo người chi</h2>
+          <h2 className="mb-1 font-semibold text-gray-900">Chi phí theo TK chi cá nhân</h2>
           <p className="mb-3 text-xs text-gray-500">
-            Tổng chi phí lô hàng gom theo &quot;Do ai chi&quot; đã chọn ở bảng chi phí. Chỉ ADMIN xem được.
+            Tổng chi phí lô hàng gom theo TK chi cá nhân đã chọn ở bảng chi phí. Chỉ ADMIN xem được.
           </p>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 text-left text-gray-500">
-                <th className="py-2">Người chi</th>
+                <th className="py-2">TK chi cá nhân</th>
                 <th className="py-2 text-right">Số khoản</th>
                 <th className="py-2 text-right">Tổng đã chi</th>
               </tr>
@@ -452,7 +452,7 @@ export default function PersonalAccountClient({ role }: { role: string }) {
                 </tr>
               ))}
               {costByPayer.length === 0 && (
-                <tr><td colSpan={3} className="py-6 text-center text-gray-400">Chưa gán &quot;Do ai chi&quot; cho khoản chi phí nào.</td></tr>
+                <tr><td colSpan={3} className="py-6 text-center text-gray-400">Chưa chọn TK chi cá nhân cho khoản chi phí nào.</td></tr>
               )}
             </tbody>
           </table>

@@ -3,8 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 
-// Tích "đã thanh toán" cho một dòng chi phí trong công nợ Phải trả. Chỉ ADMIN hoặc đúng người được
-// gán chi khoản đó ("Do ai chi" = paidBy) mới được tích. Không đụng tới số tiền/giá vốn.
+// Tích "đã thanh toán" cho một dòng chi phí trong công nợ Phải trả. ADMIN, đúng TK chi cá nhân,
+// hoặc ACCOUNTANT với TK công ty được xác nhận. Không đụng tới số tiền/giá vốn.
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; costId: string }> }
@@ -25,6 +25,7 @@ export async function PATCH(
         id: true,
         shipmentId: true,
         paidByUserId: true,
+        paidFromCompanyAccountId: true,
         isPaid: true,
         paidAt: true,
       },
@@ -32,9 +33,12 @@ export async function PATCH(
     if (!cost || cost.shipmentId !== debt.shipmentId) {
       return apiError("Khoản chi phí không thuộc công nợ này.", 404);
     }
-    // Chỉ người phụ trách khoản đó hoặc ADMIN được xác nhận.
-    if (user.role !== "ADMIN" && cost.paidByUserId !== user.id) {
-      return apiError("Chỉ người phụ trách khoản này mới được xác nhận đã thanh toán.", 403);
+    const canConfirm =
+      user.role === "ADMIN" ||
+      cost.paidByUserId === user.id ||
+      (user.role === "ACCOUNTANT" && cost.paidFromCompanyAccountId !== null);
+    if (!canConfirm) {
+      return apiError("Chỉ người phụ trách TK chi mới được xác nhận đã thanh toán.", 403);
     }
 
     const body = await request.json();

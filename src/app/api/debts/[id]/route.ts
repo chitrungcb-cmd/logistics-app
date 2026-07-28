@@ -62,6 +62,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
             paidAt: true,
             vendor: { select: { name: true } },
             paidBy: { select: { id: true, name: true } },
+            paidFromCompanyAccount: { select: { id: true, name: true } },
             paidConfirmedBy: { select: { name: true } },
           },
         })

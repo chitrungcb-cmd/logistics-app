@@ -363,7 +363,7 @@ export default function CostPresetsClient() {
                   <span className="ml-2 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
                     {effectiveLabel(g.effectiveFrom)}
                   </span>
-                  <span className="ml-2 text-xs text-gray-400">nhóm khớp: {g.goodsKeyword}</span>
+                  <span className="ml-2 text-xs text-gray-400">nhóm hàng: {g.goodsKeyword}</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-sm font-bold text-blue-700">Tổng {formatVnd(total)}</span>

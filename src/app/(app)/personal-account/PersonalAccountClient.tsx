@@ -139,20 +139,33 @@ export default function PersonalAccountClient({ role }: { role: string }) {
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return entries.filter((entry) => {
-      if (statusFilter === "paid" && entry.paidStatus === "unpaid") return false;
-      if (statusFilter === "unpaid" && entry.paidStatus === "paid") return false;
-      if (!query) return true;
-      return [
-        entry.shipment.declarationNo,
-        entry.shipment.goodsName,
-        entry.shipment.customerName,
-        entry.shipment.shipmentCode,
-        entry.assignedUser?.name,
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query));
-    });
+    return entries
+      .filter((entry) => {
+        if (statusFilter === "paid" && entry.paidStatus === "unpaid") return false;
+        if (statusFilter === "unpaid" && entry.paidStatus === "paid") return false;
+        if (!query) return true;
+        return [
+          entry.shipment.declarationNo,
+          entry.shipment.goodsName,
+          entry.shipment.customerName,
+          entry.shipment.shipmentCode,
+          entry.assignedUser?.name,
+        ]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(query));
+      })
+      .sort((a, b) => {
+        const parsedATime = a.shipment.declarationDate ? new Date(a.shipment.declarationDate).getTime() : Number.NaN;
+        const parsedBTime = b.shipment.declarationDate ? new Date(b.shipment.declarationDate).getTime() : Number.NaN;
+        const aTime = Number.isFinite(parsedATime) ? parsedATime : Number.NEGATIVE_INFINITY;
+        const bTime = Number.isFinite(parsedBTime) ? parsedBTime : Number.NEGATIVE_INFINITY;
+        if (aTime !== bTime) return bTime - aTime;
+        return (b.shipment.declarationNo || b.shipment.shipmentCode).localeCompare(
+          a.shipment.declarationNo || a.shipment.shipmentCode,
+          "vi",
+          { numeric: true }
+        );
+      });
   }, [entries, search, statusFilter]);
 
   const totals = useMemo(() => {
@@ -257,25 +270,41 @@ export default function PersonalAccountClient({ role }: { role: string }) {
           </p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-gray-200">
-            <table className="min-w-[960px] divide-y divide-gray-200 text-sm">
+            <table className="min-w-[1040px] divide-y divide-gray-200 text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-left text-gray-500">Ngày thanh toán</th>
-                  <th className="px-3 py-2 text-left text-gray-500">Số tờ khai</th>
+                  <th className="px-3 py-2 text-center text-gray-500">STT</th>
                   <th className="px-3 py-2 text-left text-gray-500">Ngày tờ khai</th>
+                  <th className="px-3 py-2 text-left text-gray-500">Số tờ khai</th>
                   <th className="px-3 py-2 text-left text-gray-500">Tên hàng</th>
                   <th className="px-3 py-2 text-right text-gray-500">Số tiền</th>
                   <th className="px-3 py-2 text-right text-gray-500">Còn lại</th>
+                  <th className="px-3 py-2 text-left text-gray-500">Ngày thanh toán</th>
                   <th className="px-3 py-2 text-left text-gray-500">Người phụ trách</th>
                   <th className="px-3 py-2 text-left text-gray-500">Ghi chú</th>
                   <th className="px-3 py-2 text-left text-gray-500">Trạng thái</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filtered.map((entry) => {
+                {filtered.map((entry, index) => {
                   const draft = draftFor(entry);
                   return (
                     <tr key={entry.id} className={entry.paidStatus === "paid" ? "" : "bg-red-50/40"}>
+                      <td className="px-3 py-2 text-center text-gray-500">{index + 1}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-gray-700">{formatDate(entry.shipment.declarationDate)}</td>
+                      <td className="whitespace-nowrap px-3 py-2">
+                        <ShipmentLink shipmentId={entry.shipment.id} className="font-medium text-blue-700 hover:underline">
+                          {entry.shipment.declarationNo || entry.shipment.shipmentCode}
+                        </ShipmentLink>
+                        <span className="block text-xs text-gray-400">{entry.shipment.customerName}</span>
+                      </td>
+                      <td className="max-w-64 px-3 py-2 text-gray-700">
+                        <span className="line-clamp-2">{entry.shipment.goodsName || "—"}</span>
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-right font-semibold text-orange-700">{formatVnd(entry.amount)}</td>
+                      <td className={`whitespace-nowrap px-3 py-2 text-right font-medium ${entry.remainingAmount > 0 ? "text-red-700" : "text-emerald-700"}`}>
+                        {entry.remainingAmount > 0 ? formatVnd(entry.remainingAmount) : "Đã thu đủ"}
+                      </td>
                       <td className="px-3 py-2">
                         {entry.effectivePaymentDate ? (
                           <span className="block w-36 text-gray-700">
@@ -288,20 +317,6 @@ export default function PersonalAccountClient({ role }: { role: string }) {
                             <span className="block text-[10px]">Chưa ghi nhận tại Công nợ</span>
                           </span>
                         )}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2">
-                        <ShipmentLink shipmentId={entry.shipment.id} className="font-medium text-blue-700 hover:underline">
-                          {entry.shipment.declarationNo || entry.shipment.shipmentCode}
-                        </ShipmentLink>
-                        <span className="block text-xs text-gray-400">{entry.shipment.customerName}</span>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2 text-gray-700">{formatDate(entry.shipment.declarationDate)}</td>
-                      <td className="max-w-64 px-3 py-2 text-gray-700">
-                        <span className="line-clamp-2">{entry.shipment.goodsName || "—"}</span>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2 text-right font-semibold text-orange-700">{formatVnd(entry.amount)}</td>
-                      <td className={`whitespace-nowrap px-3 py-2 text-right font-medium ${entry.remainingAmount > 0 ? "text-red-700" : "text-emerald-700"}`}>
-                        {entry.remainingAmount > 0 ? formatVnd(entry.remainingAmount) : "Đã thu đủ"}
                       </td>
                       <td className="px-3 py-2">
                         <select

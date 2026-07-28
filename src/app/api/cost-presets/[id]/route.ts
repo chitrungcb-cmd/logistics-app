@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { COST_CATEGORY_OPTIONS, isVendorlessCostCategory } from "@/lib/shipment-cost-constants";
 import { getGoodsKeyword } from "@/lib/goods-keyword";
-import { applyPresetToExistingShipments } from "@/lib/cost-presets";
+import { applyPresetToExistingShipments, PRESET_EPOCH } from "@/lib/cost-presets";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -20,6 +20,22 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (!goodsKeyword) return apiError("Tên hàng không hợp lệ.", 400);
     const category = body.category ?? existing.category;
     if (!COST_CATEGORY_OPTIONS.includes(category)) return apiError("Hạng mục chi phí không hợp lệ.", 400);
+    const customsGate = typeof body.customsGate === "string" ? body.customsGate.trim() : existing.customsGate;
+    const customLabel = body.customLabel === undefined
+      ? existing.customLabel
+      : typeof body.customLabel === "string" && body.customLabel.trim() ? body.customLabel.trim() : null;
+    let effectiveFrom = existing.effectiveFrom;
+    if (body.effectiveFrom !== undefined) {
+      if (body.effectiveFrom === "" || body.effectiveFrom === null) {
+        effectiveFrom = PRESET_EPOCH;
+      } else if (typeof body.effectiveFrom === "string" && /^\d{4}-\d{2}-\d{2}/.test(body.effectiveFrom)) {
+        const parsed = new Date(`${body.effectiveFrom.slice(0, 10)}T00:00:00.000Z`);
+        if (Number.isNaN(parsed.getTime())) return apiError("Ngày áp dụng không hợp lệ.", 400);
+        effectiveFrom = parsed;
+      } else {
+        return apiError("Ngày áp dụng không hợp lệ.", 400);
+      }
+    }
     const unitPrice = body.unitPrice === undefined ? existing.unitPrice : Number(body.unitPrice);
     const quantity = body.quantity === undefined ? existing.quantity : Number(body.quantity);
     const vendorId = isVendorlessCostCategory(category)
@@ -34,7 +50,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
     const preset = await prisma.costPreset.update({
       where: { id },
-      data: { goodsName, goodsKeyword, category, unitPrice, quantity, note: body.note ?? existing.note, vendorId, isActive: body.isActive ?? existing.isActive },
+      data: { goodsName, goodsKeyword, customsGate, category, effectiveFrom, unitPrice, quantity, customLabel, note: body.note ?? existing.note, vendorId, isActive: body.isActive ?? existing.isActive },
     });
     const matchedShipments = await applyPresetToExistingShipments(preset.id, user.id);
     return apiSuccess({ preset, matchedShipments });

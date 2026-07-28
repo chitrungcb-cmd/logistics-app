@@ -193,9 +193,17 @@ model CostPreset {
   id            String         @id @default(cuid())
   goodsName     String
   goodsKeyword  String
+  // Cửa khẩu áp dụng (so khớp với Shipment.port đã chuẩn hóa). "" = áp cho MỌI cửa khẩu (mặc định
+  // dùng khi không có bộ giá riêng cho cửa khẩu của lô). Bộ giá theo cửa khẩu cụ thể được ưu tiên.
+  customsGate   String         @default("")
   category      CostCategory
   unitPrice     Float
   quantity      Float          @default(1)
+  // Nhãn hạng mục tùy chỉnh (vd "Lái xe chuyên trách" cho hạng mục "Khác"); áp sang ShipmentCost.customLabel.
+  customLabel   String?
+  // Mốc áp dụng: giá này có hiệu lực cho lô có NGÀY TỜ KHAI >= effectiveFrom. Mỗi (nhóm hàng, cửa khẩu,
+  // hạng mục) có thể có nhiều mốc; lô lấy mốc gần nhất TRƯỚC ngày tờ khai. "Từ đầu" = 1970-01-01.
+  effectiveFrom DateTime
   note          String?
   vendor        Vendor?        @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   vendorId      String?
@@ -204,7 +212,7 @@ model CostPreset {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
-  @@unique([goodsKeyword, category])
+  @@unique([goodsKeyword, customsGate, category, effectiveFrom])
   @@index([vendorId])
 }
 

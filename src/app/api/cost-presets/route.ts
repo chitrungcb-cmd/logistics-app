@@ -4,7 +4,15 @@ import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { COST_CATEGORY_OPTIONS, isVendorlessCostCategory } from "@/lib/shipment-cost-constants";
 import { getGoodsKeyword } from "@/lib/goods-keyword";
-import { applyPresetToExistingShipments } from "@/lib/cost-presets";
+import { applyPresetToExistingShipments, PRESET_EPOCH } from "@/lib/cost-presets";
+
+/** Ngày "áp dụng từ" từ chuỗi yyyy-mm-dd; rỗng = "từ đầu" (PRESET_EPOCH). */
+function parseEffectiveFrom(value: unknown): Date | null {
+  if (value == null || value === "") return PRESET_EPOCH;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(value)) return null;
+  const date = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -28,6 +36,10 @@ export async function POST(request: NextRequest) {
     const goodsKeyword = getGoodsKeyword(goodsName);
     if (!goodsKeyword) return apiError("Vui lòng nhập tên hàng.", 400);
     if (!COST_CATEGORY_OPTIONS.includes(body.category)) return apiError("Hạng mục chi phí không hợp lệ.", 400);
+    const customsGate = typeof body.customsGate === "string" ? body.customsGate.trim() : "";
+    const customLabel = typeof body.customLabel === "string" && body.customLabel.trim() ? body.customLabel.trim() : null;
+    const effectiveFrom = parseEffectiveFrom(body.effectiveFrom);
+    if (!effectiveFrom) return apiError("Ngày áp dụng không hợp lệ.", 400);
     const unitPrice = Number(body.unitPrice);
     const quantity = Number(body.quantity) || 1;
     const vendorId = isVendorlessCostCategory(body.category)
@@ -41,9 +53,9 @@ export async function POST(request: NextRequest) {
     if (!Number.isFinite(unitPrice) || unitPrice < 0) return apiError("Đơn giá không hợp lệ.", 400);
 
     const preset = await prisma.costPreset.upsert({
-      where: { goodsKeyword_category: { goodsKeyword, category: body.category } },
-      create: { goodsName, goodsKeyword, category: body.category, unitPrice, quantity, note: body.note || null, vendorId },
-      update: { goodsName, unitPrice, quantity, note: body.note || null, vendorId, isActive: true },
+      where: { goodsKeyword_customsGate_category_effectiveFrom: { goodsKeyword, customsGate, category: body.category, effectiveFrom } },
+      create: { goodsName, goodsKeyword, customsGate, category: body.category, effectiveFrom, unitPrice, quantity, customLabel, note: body.note || null, vendorId },
+      update: { goodsName, unitPrice, quantity, customLabel, note: body.note || null, vendorId, isActive: true },
     });
     const matchedShipments = await applyPresetToExistingShipments(preset.id, user.id);
     return apiSuccess({ preset, matchedShipments }, 201);

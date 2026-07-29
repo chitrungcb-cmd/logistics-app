@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
     if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền xem hóa đơn đối tác.", 403);
 
     const search = request.nextUrl.searchParams.get("search")?.trim() || null;
+    const vendorId = request.nextUrl.searchParams.get("vendorId")?.trim() || null;
     const rawStatus = request.nextUrl.searchParams.get("status");
     const status = rawStatus && STATUSES.has(rawStatus) ? rawStatus as "MATCHED" | "UNMATCHED" | "NEEDS_REVIEW" : null;
     const monthRange = getMonthRange(request.nextUrl.searchParams.get("month"));
@@ -39,6 +40,7 @@ export async function GET(request: NextRequest) {
       : null;
 
     const where: Prisma.VendorInvoiceWhereInput = {
+      vendorId: vendorId ?? undefined,
       status: status ?? undefined,
       invoiceDate: monthRange ?? undefined,
       isIssuedToNq: nq === "true" ? true : nq === "false" ? false : undefined,

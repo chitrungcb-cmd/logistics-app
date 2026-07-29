@@ -232,6 +232,7 @@ type PartnersTab = "overview" | "vendors";
 export default function PartnersClient() {
   const [activeTab, setActiveTab] = useState<PartnersTab>("overview");
   const [rows, setRows] = useState<PartnerRow[]>([]);
+  const [selectedPartner, setSelectedPartner] = useState<PartnerRow | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -284,11 +285,21 @@ export default function PartnersClient() {
         <div className="p-8">
           {error && <p className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
           <div className="rounded-xl border border-gray-200 bg-white">
-            <PartnerTable rows={rows} isLoading={isLoading} />
+            <PartnerTable
+              rows={rows}
+              isLoading={isLoading}
+              onOpenInvoices={setSelectedPartner}
+            />
           </div>
         </div>
       ) : (
         <VendorsSettingsClient />
+      )}
+      {selectedPartner && (
+        <PartnerInvoicesModal
+          partner={selectedPartner}
+          onClose={() => setSelectedPartner(null)}
+        />
       )}
     </div>
   );
@@ -450,11 +461,209 @@ function OutputShipmentLinkControl({
   );
 }
 
-function PartnerTable({ rows, isLoading }: { rows: PartnerRow[]; isLoading: boolean }) {
+function PartnerTable({
+  rows,
+  isLoading,
+  onOpenInvoices,
+}: {
+  rows: PartnerRow[];
+  isLoading: boolean;
+  onOpenInvoices: (partner: PartnerRow) => void;
+}) {
   return <div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200 text-sm">
     <thead className="bg-gray-50"><tr><th className="w-16 px-4 py-3 text-center font-medium text-gray-500">STT</th><th className="px-4 py-3 text-left font-medium text-gray-500">Tên đối tác</th><th className="px-4 py-3 text-left font-medium text-gray-500">Mã số thuế</th><th className="px-4 py-3 text-left font-medium text-gray-500">Loại đối tác</th><th className="px-4 py-3 text-right font-medium text-gray-500">Số hóa đơn</th><th className="px-4 py-3 text-right font-medium text-gray-500">Đã khớp</th><th className="px-4 py-3 text-right font-medium text-gray-500">Tổng tiền</th></tr></thead>
-    <tbody className="divide-y divide-gray-100">{isLoading && <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">Đang tải đối tác...</td></tr>}{!isLoading && rows.length === 0 && <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">Chưa có đối tác được nhận diện từ hóa đơn.</td></tr>}{!isLoading && rows.map((partner, index) => <tr key={partner.id} className="hover:bg-gray-50"><td className="px-4 py-3 text-center text-gray-400">{index + 1}</td><td className="px-4 py-3 font-medium text-gray-900">{partner.name}</td><td className="px-4 py-3 text-gray-600">{partner.taxCode || "—"}</td><td className="px-4 py-3 text-gray-600">{partner.type || "—"}</td><td className="px-4 py-3 text-right text-gray-700">{partner.invoiceCount}</td><td className="px-4 py-3 text-right text-emerald-700">{partner.matchedCount}</td><td className="px-4 py-3 text-right font-semibold text-gray-900">{formatMoney(partner.totalAmount)}</td></tr>)}</tbody>
+    <tbody className="divide-y divide-gray-100">{isLoading && <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">Đang tải đối tác...</td></tr>}{!isLoading && rows.length === 0 && <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">Chưa có đối tác được nhận diện từ hóa đơn.</td></tr>}{!isLoading && rows.map((partner, index) => <tr key={partner.id} className="hover:bg-gray-50"><td className="px-4 py-3 text-center text-gray-400">{index + 1}</td><td className="px-4 py-3 font-medium"><button type="button" onClick={() => onOpenInvoices(partner)} className="text-left text-gray-900 hover:text-blue-700 hover:underline">{partner.name}</button></td><td className="px-4 py-3 text-gray-600">{partner.taxCode || "—"}</td><td className="px-4 py-3 text-gray-600">{partner.type || "—"}</td><td className="px-4 py-3 text-right"><button type="button" onClick={() => onOpenInvoices(partner)} className="font-semibold text-blue-600 hover:underline">{partner.invoiceCount}</button></td><td className="px-4 py-3 text-right text-emerald-700">{partner.matchedCount}</td><td className="px-4 py-3 text-right font-semibold text-gray-900">{formatMoney(partner.totalAmount)}</td></tr>)}</tbody>
   </table></div>;
+}
+
+function PartnerInvoicesModal({
+  partner,
+  onClose,
+}: {
+  partner: PartnerRow;
+  onClose: () => void;
+}) {
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/vendor-invoices?vendorId=${encodeURIComponent(partner.id)}`, {
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        const json = await response.json();
+        if (!response.ok || !json.success) {
+          throw new Error(json.error || "Không thể tải hóa đơn của đối tác.");
+        }
+        if (!cancelled) setInvoices(json.data.invoices);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Không thể tải hóa đơn của đối tác.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [partner.id]);
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="partner-invoices-title"
+        className="flex max-h-[92vh] w-full max-w-[1500px] flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-6 py-5">
+          <div>
+            <h2 id="partner-invoices-title" className="text-xl font-semibold text-gray-900">
+              Hóa đơn của {partner.name}
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">
+              MST: {partner.taxCode || "—"} · {partner.invoiceCount} hóa đơn · Tổng{" "}
+              {formatMoney(partner.totalAmount)}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Đóng"
+            className="rounded-md px-3 py-1.5 text-2xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="overflow-auto p-5">
+          {error && (
+            <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>
+          )}
+          {isLoading ? (
+            <p className="py-12 text-center text-sm text-gray-400">Đang tải hóa đơn...</p>
+          ) : invoices.length === 0 ? (
+            <p className="py-12 text-center text-sm text-gray-400">
+              Không tìm thấy hóa đơn của đối tác này.
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-gray-200">
+              <table className="min-w-[1180px] w-full divide-y divide-gray-200 text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="w-14 px-4 py-3 text-center font-medium text-gray-500">STT</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-500">Ngày / số hóa đơn</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-500">Loại</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-500">Bên bán</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-500">Bên mua</th>
+                    <th className="px-4 py-3 text-right font-medium text-gray-500">Tổng tiền</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-500">Đối chiếu</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-500">Lô hàng</th>
+                    <th className="px-4 py-3 text-right font-medium text-gray-500">File</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {invoices.map((invoice, index) => (
+                    <tr key={invoice.id} className="align-top hover:bg-gray-50">
+                      <td className="px-4 py-4 text-center text-gray-400">{index + 1}</td>
+                      <td className="px-4 py-4">
+                        <p className="font-medium text-gray-900">
+                          {invoice.invoiceNumber || "Chưa đọc được số HĐ"}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500">
+                          {invoice.invoiceDate
+                            ? new Date(invoice.invoiceDate).toLocaleDateString("vi-VN")
+                            : "Chưa có ngày"}
+                          {invoice.invoiceSymbol ? ` · ${invoice.invoiceSymbol}` : ""}
+                        </p>
+                      </td>
+                      <td className="px-4 py-4">
+                        <DirectionBadge direction={invoice.invoiceDirection} />
+                      </td>
+                      <td className="px-4 py-4">
+                        <p className="max-w-64 font-medium text-gray-900">
+                          {invoice.sellerName || invoice.vendor?.name || "Chưa xác định"}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500">
+                          MST: {invoice.sellerTaxCode || invoice.vendor?.taxCode || "—"}
+                        </p>
+                      </td>
+                      <td className="px-4 py-4">
+                        <p className="max-w-64 text-gray-700">
+                          {invoice.buyerName || "Chưa đọc được"}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500">
+                          MST: {invoice.buyerTaxCode || "—"}
+                        </p>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-4 text-right font-semibold text-gray-900">
+                        {formatMoney(invoice.totalAmount, invoice.currency)}
+                      </td>
+                      <td className="px-4 py-4">
+                        <StatusBadge invoice={invoice} />
+                      </td>
+                      <td className="px-4 py-4">
+                        {invoice.linkedShipment ? (
+                          <ShipmentLink
+                            shipmentId={invoice.linkedShipment.id}
+                            className="font-medium text-blue-600 hover:underline"
+                          >
+                            TK {invoice.linkedShipment.declarationNo || "chưa có"}
+                          </ShipmentLink>
+                        ) : (
+                          <span className="text-gray-400">Chưa xác định</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-4 text-right">
+                        {invoice.pdfUrl ? (
+                          <AttachmentPreviewButton
+                            url={invoice.pdfUrl}
+                            name={invoice.attachmentName}
+                            className="font-medium text-blue-600 hover:underline"
+                          >
+                            Xem PDF
+                          </AttachmentPreviewButton>
+                        ) : invoice.xmlUrl ? (
+                          <a
+                            href={invoice.xmlUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-medium text-emerald-600 hover:underline"
+                          >
+                            XML
+                          </a>
+                        ) : (
+                          <AttachmentPreviewButton
+                            url={invoice.attachmentUrl}
+                            name={invoice.attachmentName}
+                            className="font-medium text-blue-600 hover:underline"
+                          >
+                            Mở file
+                          </AttachmentPreviewButton>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Metric({ label, value, note, accent = "default" }: { label: string; value: string; note: string; accent?: "default" | "blue" | "green" | "amber" }) {

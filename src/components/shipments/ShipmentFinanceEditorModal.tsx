@@ -10,6 +10,7 @@ import {
 } from "@/lib/shipment-cost-constants";
 import { QUOTE_LINE_LABELS, QUOTE_LINE_OPTIONS } from "@/lib/quote-line-constants";
 import AttachmentPreviewButton from "./AttachmentPreviewButton";
+import CopyShipmentCostsModal from "./CopyShipmentCostsModal";
 import MoneyInput from "@/components/MoneyInput";
 import VendorCombobox from "@/components/vendors/VendorCombobox";
 import { INVOICE_VAT_RATE, computeInvoiceVat, resolveInvoiceAmountWithVat } from "@/lib/personal-account-sync";
@@ -131,6 +132,8 @@ export default function ShipmentFinanceEditorModal({
   const [activeTab, setActiveTab] = useState<"quote" | "cost">("cost");
   // clientKey của dòng chi phí đang mở cửa sổ nhập chi tiết (null = danh sách).
   const [editingCostKey, setEditingCostKey] = useState<string | null>(null);
+  const [isCopyCostsOpen, setIsCopyCostsOpen] = useState(false);
+  const [costReloadKey, setCostReloadKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [costSaveStatus, setCostSaveStatus] = useState<Record<string, CostSaveStatus>>({});
   const [isSavingQuotes, setIsSavingQuotes] = useState(false);
@@ -216,7 +219,7 @@ export default function ShipmentFinanceEditorModal({
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Đã có lỗi xảy ra."))
       .finally(() => setIsLoading(false));
-  }, [shipment.id]);
+  }, [shipment.id, costReloadKey]);
 
   useEffect(() => {
     const timers = autoSaveTimers.current;
@@ -505,9 +508,18 @@ export default function ShipmentFinanceEditorModal({
               </section>}
 
               {activeTab === "cost" && <section className="rounded-xl border border-emerald-200 bg-emerald-50/30 p-5">
-                <div className="mb-3 flex items-center justify-between">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div><h3 className="font-semibold text-gray-900">Bảng chi phí chi tiết</h3><p className="text-xs text-gray-500">Bấm vào một dòng để nhập/sửa chi tiết · Dòng “Tự động” được lấy từ Cài đặt</p></div>
-                  <p className="text-lg font-bold text-emerald-700">{formatVnd(totalCost)}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCopyCostsOpen(true)}
+                      className="rounded-md border border-blue-300 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
+                    >
+                      Sao chép từ lô đã làm
+                    </button>
+                    <p className="text-lg font-bold text-emerald-700">{formatVnd(totalCost)}</p>
+                  </div>
                 </div>
                 <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
                   <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -610,6 +622,19 @@ export default function ShipmentFinanceEditorModal({
           {message && <p className="mt-4 text-sm text-green-700">{message}</p>}
           {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
         </div>
+        {isCopyCostsOpen && (
+          <CopyShipmentCostsModal
+            target={shipment}
+            onClose={() => setIsCopyCostsOpen(false)}
+            onCopied={() => {
+              setIsLoading(true);
+              setError(null);
+              setCostReloadKey((key) => key + 1);
+              onCostsChanged();
+              void refreshFinanceLinks();
+            }}
+          />
+        )}
       </div>
     </div>
   );

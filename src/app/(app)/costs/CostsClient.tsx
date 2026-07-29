@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { downloadExcel } from "@/lib/export-excel";
 import CostDetailPanel from "@/components/shipments/CostDetailPanel";
+import CopyShipmentCostsModal from "@/components/shipments/CopyShipmentCostsModal";
 import ShipmentFinanceEditorModal from "@/components/shipments/ShipmentFinanceEditorModal";
 import ShipmentInfoModal from "@/components/shipments/ShipmentInfoModal";
 import SimilarCostsModal from "@/components/shipments/SimilarCostsModal";
@@ -12,6 +13,7 @@ import {
   COST_CATEGORY_BADGE_CLASS,
   COST_CATEGORY_ICON,
   COST_CATEGORY_LABELS,
+  isInvoiceCostCategory,
   isVendorlessCostCategory,
 } from "@/lib/shipment-cost-constants";
 import { calculateCostOpportunities } from "@/lib/cost-optimization";
@@ -56,6 +58,7 @@ type ShipmentSummary = ShipmentOption & {
   totalRevenue: number;
   profit: number;
   documentCount: number;
+  missingInfoCount: number;
   opportunityCount: number;
   spikeCount: number;
 };
@@ -103,6 +106,7 @@ export default function CostsClient() {
     query: "",
     dateFrom: "",
     dateTo: "",
+    costStatus: "ALL" as "ALL" | "EMPTY" | "ENTERED" | "INCOMPLETE",
     additionalOnly: false,
     optimizationOnly: false,
   });
@@ -111,6 +115,7 @@ export default function CostsClient() {
   const [viewingShipmentId, setViewingShipmentId] = useState<string | null>(null);
   const [viewingCost, setViewingCost] = useState<CostRow | null>(null);
   const [similarShipmentId, setSimilarShipmentId] = useState<string | null>(null);
+  const [copyingShipment, setCopyingShipment] = useState<ShipmentOption | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
 
@@ -191,6 +196,11 @@ export default function CostsClient() {
           totalRevenue,
           profit: totalRevenue - totalCost,
           documentCount: costs.filter((cost) => cost.attachmentUrl).length,
+          missingInfoCount: costs.filter(
+            (cost) =>
+              (!isVendorlessCostCategory(cost.category) && !cost.vendorId) ||
+              (isInvoiceCostCategory(cost.category) && !!cost.invoiceNumber && !cost.attachmentUrl)
+          ).length,
           opportunityCount: shipmentOpportunities.length,
           spikeCount: shipmentOpportunities.filter(
             (item) => item.differencePercent >= SPIKE_DIFFERENCE_PERCENT
@@ -207,6 +217,9 @@ export default function CostsClient() {
         ) return false;
         if (filters.additionalOnly && !shipment.costs.some((cost) => cost.isAdditional)) return false;
         if (filters.optimizationOnly && shipment.opportunityCount === 0) return false;
+        if (filters.costStatus === "EMPTY" && shipment.costs.length > 0) return false;
+        if (filters.costStatus === "ENTERED" && shipment.costs.length === 0) return false;
+        if (filters.costStatus === "INCOMPLETE" && shipment.missingInfoCount === 0) return false;
         if (filters.dateFrom || filters.dateTo) {
           if (!shipment.declarationDate) return false;
           const declarationDate = new Date(shipment.declarationDate);
@@ -214,6 +227,11 @@ export default function CostsClient() {
           if (filters.dateTo && declarationDate > new Date(`${filters.dateTo}T23:59:59`)) return false;
         }
         return true;
+      })
+      .sort((a, b) => {
+        const aDate = a.declarationDate ? new Date(a.declarationDate).getTime() : 0;
+        const bDate = b.declarationDate ? new Date(b.declarationDate).getTime() : 0;
+        return bDate - aDate;
       });
   }, [allCosts, filters, opportunityByCostId, quoteTotals, shipments]);
 
@@ -224,8 +242,11 @@ export default function CostsClient() {
         revenue: result.revenue + shipment.totalRevenue,
         profit: result.profit + shipment.profit,
         documents: result.documents + shipment.documentCount,
+        entered: result.entered + (shipment.costs.length > 0 ? 1 : 0),
+        empty: result.empty + (shipment.costs.length === 0 ? 1 : 0),
+        incomplete: result.incomplete + (shipment.missingInfoCount > 0 ? 1 : 0),
       }),
-      { cost: 0, revenue: 0, profit: 0, documents: 0 }
+      { cost: 0, revenue: 0, profit: 0, documents: 0, entered: 0, empty: 0, incomplete: 0 }
     ),
     [shipmentRows]
   );
@@ -299,7 +320,7 @@ export default function CostsClient() {
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Chi phí lô hàng</h1>
-          <p className="mt-1 text-sm text-gray-500">Mỗi lô hàng chỉ hiển thị một dòng tổng hợp; mở rộng khi cần xem từng khoản.</p>
+          <p className="mt-1 text-sm text-gray-500">Theo dõi từng lô, nhập nhanh và sao chép các khoản đã làm mà không ghi đè dữ liệu cũ.</p>
         </div>
         <Link href="/reports/vendor-payables" className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
           📊 Báo cáo phải trả
@@ -310,9 +331,16 @@ export default function CostsClient() {
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Tổng chi" value={formatVnd(totals.cost)} color="red" />
-        <Kpi label="Tổng thu" value={formatVnd(totals.revenue)} color="blue" />
-        <Kpi label="Lãi/lỗ" value={formatVnd(totals.profit)} color={totals.profit >= 0 ? "green" : "red"} />
-        <Kpi label="Chứng từ" value={String(totals.documents)} color="gray" />
+        <Kpi label="Lô đã nhập chi phí" value={`${totals.entered} lô`} color="green" />
+        <Kpi label="Lô chưa nhập" value={`${totals.empty} lô`} color={totals.empty > 0 ? "red" : "gray"} />
+        <Kpi label="Lô cần bổ sung thông tin" value={`${totals.incomplete} lô`} color={totals.incomplete > 0 ? "blue" : "gray"} />
+      </div>
+
+      <div className="mb-6 grid gap-3 rounded-xl border border-blue-100 bg-blue-50/70 px-5 py-4 text-sm sm:grid-cols-4">
+        <ProcessStep number="1" title="Chọn lô" detail="Tìm theo công ty, số tờ khai hoặc tên hàng." />
+        <ProcessStep number="2" title="Nhập hoặc sao chép" detail="Chọn khoản từ lô đã làm để tiết kiệm thời gian." />
+        <ProcessStep number="3" title="Kiểm tra thông tin" detail="Bổ sung nhà cung cấp, TK chi và chứng từ riêng." />
+        <ProcessStep number="4" title="Đối chiếu công nợ" detail="Chi phí được đồng bộ theo đúng số tờ khai." />
       </div>
 
       {opportunities.length > 0 && (
@@ -333,19 +361,25 @@ export default function CostsClient() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-semibold text-gray-900">Chi phí theo lô hàng</h2>
-            <p className="text-xs text-gray-500">Một bảng duy nhất, bao gồm cả lô chưa phát sinh chi phí.</p>
+            <p className="text-xs text-gray-500">Lô mới nhất ở trên; mỗi dòng có thao tác nhập, sao chép và xem chi tiết.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={exportExcel} className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">📊 Xuất Excel</button>
           </div>
         </div>
 
-        <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
           <select value={filters.shipmentId} onChange={(event) => updateFilters({ shipmentId: event.target.value })} className="input xl:col-span-2">
             <option value="">Tất cả số tờ khai</option>
             {shipments.map((shipment) => <option key={shipment.id} value={shipment.id}>{shipment.declarationNo || "Chưa có TK"} · {shipment.goodsName || shipment.customerName}</option>)}
           </select>
           <input value={filters.query} onChange={(event) => updateFilters({ query: event.target.value })} className="input xl:col-span-2" placeholder="Tìm công ty, số TK, tên hàng..." />
+          <select value={filters.costStatus} onChange={(event) => updateFilters({ costStatus: event.target.value as typeof filters.costStatus })} className="input">
+            <option value="ALL">Tất cả trạng thái</option>
+            <option value="EMPTY">Chưa nhập chi phí</option>
+            <option value="ENTERED">Đã nhập chi phí</option>
+            <option value="INCOMPLETE">Cần bổ sung thông tin</option>
+          </select>
           <input type="date" value={filters.dateFrom} onChange={(event) => updateFilters({ dateFrom: event.target.value })} className="input" title="Từ ngày tờ khai" />
           <input type="date" value={filters.dateTo} onChange={(event) => updateFilters({ dateTo: event.target.value })} className="input" title="Đến ngày tờ khai" />
         </div>
@@ -355,7 +389,7 @@ export default function CostsClient() {
         </label>
 
         <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="min-w-[1200px] divide-y divide-gray-200 text-sm">
+          <table className="min-w-[1450px] divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50"><tr>
               <th className="w-14 px-3 py-3 text-center font-medium text-gray-500">STT</th>
               <th className="px-3 py-3 text-left font-medium text-gray-500">Tên công ty</th>
@@ -365,11 +399,12 @@ export default function CostsClient() {
               <th className="px-3 py-3 text-right font-medium text-gray-500">Tổng thu</th>
               <th className="px-3 py-3 text-right font-medium text-gray-500">Lãi/lỗ</th>
               <th className="px-3 py-3 text-center font-medium text-gray-500">Chứng từ</th>
-              <th className="px-3 py-3"></th>
+              <th className="px-3 py-3 text-left font-medium text-gray-500">Tình trạng nhập liệu</th>
+              <th className="px-3 py-3 text-right font-medium text-gray-500">Thao tác</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
-              {isLoading && <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400">Đang tải dữ liệu...</td></tr>}
-              {!isLoading && shipmentRows.length === 0 && <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400">Không có lô hàng phù hợp.</td></tr>}
+              {isLoading && <tr><td colSpan={10} className="px-4 py-10 text-center text-gray-400">Đang tải dữ liệu...</td></tr>}
+              {!isLoading && shipmentRows.length === 0 && <tr><td colSpan={10} className="px-4 py-10 text-center text-gray-400">Không có lô hàng phù hợp.</td></tr>}
               {!isLoading && paginatedShipments.map((shipment, index) => {
                 const expanded = expandedShipmentId === shipment.id;
                 return <Fragment key={shipment.id}>
@@ -382,13 +417,20 @@ export default function CostsClient() {
                     <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-blue-700">{formatVnd(shipment.totalRevenue)}</td>
                     <td className={`whitespace-nowrap px-3 py-3 text-right font-semibold ${shipment.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>{formatVnd(shipment.profit)}</td>
                     <td className="px-3 py-3 text-center text-gray-500">📎 {shipment.documentCount}</td>
-                    <td className="px-3 py-3"><div className="flex min-w-28 items-center justify-end gap-2"><button type="button" onClick={(event) => { event.stopPropagation(); setExpandedShipmentId(expanded ? null : shipment.id); }} className="text-xs text-gray-500 hover:text-blue-600 hover:underline">{expanded ? "Thu gọn" : `Chi tiết (${shipment.costs.length})`}</button><span className="text-lg leading-none text-gray-300">›</span></div></td>
+                    <td className="px-3 py-3"><CostEntryStatus shipment={shipment} /></td>
+                    <td className="px-3 py-3">
+                      <div className="flex min-w-[245px] items-center justify-end gap-2">
+                        <button type="button" onClick={(event) => { event.stopPropagation(); setEditingShipment(shipment); }} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">Nhập / sửa</button>
+                        <button type="button" onClick={(event) => { event.stopPropagation(); setCopyingShipment(shipment); }} className="rounded-md border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">Sao chép</button>
+                        <button type="button" onClick={(event) => { event.stopPropagation(); setExpandedShipmentId(expanded ? null : shipment.id); }} className="text-xs text-gray-500 hover:text-blue-600 hover:underline">{expanded ? "Thu gọn" : `Chi tiết (${shipment.costs.length})`}</button>
+                      </div>
+                    </td>
                   </tr>
-                  {expanded && <tr><td colSpan={9} className="bg-slate-50 px-6 py-4"><ShipmentCostDetails shipment={shipment} opportunityByCostId={opportunityByCostId} onHistory={setViewingCost} onCompare={() => setSimilarShipmentId(shipment.id)} /></td></tr>}
+                  {expanded && <tr><td colSpan={10} className="bg-slate-50 px-6 py-4"><ShipmentCostDetails shipment={shipment} opportunityByCostId={opportunityByCostId} onHistory={setViewingCost} onCompare={() => setSimilarShipmentId(shipment.id)} /></td></tr>}
                 </Fragment>;
               })}
             </tbody>
-            {!isLoading && shipmentRows.length > 0 && <tfoot className="bg-gray-50"><tr><td colSpan={4} className="px-3 py-3 text-right font-medium text-gray-700">Tổng ({shipmentRows.length} lô)</td><td className="px-3 py-3 text-right font-bold text-gray-900">{formatVnd(totals.cost)}</td><td className="px-3 py-3 text-right font-bold text-blue-700">{formatVnd(totals.revenue)}</td><td className={`px-3 py-3 text-right font-bold ${totals.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>{formatVnd(totals.profit)}</td><td colSpan={2}></td></tr></tfoot>}
+            {!isLoading && shipmentRows.length > 0 && <tfoot className="bg-gray-50"><tr><td colSpan={4} className="px-3 py-3 text-right font-medium text-gray-700">Tổng ({shipmentRows.length} lô)</td><td className="px-3 py-3 text-right font-bold text-gray-900">{formatVnd(totals.cost)}</td><td className="px-3 py-3 text-right font-bold text-blue-700">{formatVnd(totals.revenue)}</td><td className={`px-3 py-3 text-right font-bold ${totals.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>{formatVnd(totals.profit)}</td><td colSpan={3}></td></tr></tfoot>}
           </table>
         </div>
 
@@ -406,7 +448,32 @@ export default function CostsClient() {
       {viewingCost && <CostDetailPanel shipmentId={viewingCost.shipmentId} invoiceNumber={viewingCost.invoiceNumber} onClose={() => setViewingCost(null)} onCostsChanged={refreshFinancialData} />}
       {similarShipmentId && <SimilarCostsModal shipmentId={similarShipmentId} onClose={() => setSimilarShipmentId(null)} />}
       {editingShipment && <ShipmentFinanceEditorModal shipment={editingShipment} onClose={() => setEditingShipment(null)} onCostsChanged={refreshFinancialData} />}
+      {copyingShipment && <CopyShipmentCostsModal target={copyingShipment} onClose={() => setCopyingShipment(null)} onCopied={refreshFinancialData} />}
       {viewingShipmentId && <ShipmentInfoModal shipmentId={viewingShipmentId} onClose={() => setViewingShipmentId(null)} />}
+    </div>
+  );
+}
+
+function CostEntryStatus({ shipment }: { shipment: ShipmentSummary }) {
+  if (shipment.costs.length === 0) {
+    return <span className="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">Chưa nhập</span>;
+  }
+  if (shipment.missingInfoCount > 0) {
+    return (
+      <div>
+        <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">Cần bổ sung</span>
+        <span className="mt-1 block text-[11px] text-amber-700">{shipment.missingInfoCount} khoản thiếu NCC/chứng từ</span>
+      </div>
+    );
+  }
+  return <span className="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">Đã nhập {shipment.costs.length} khoản</span>;
+}
+
+function ProcessStep({ number, title, detail }: { number: string; title: string; detail: string }) {
+  return (
+    <div className="flex gap-3">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">{number}</span>
+      <div><p className="font-semibold text-gray-900">{title}</p><p className="mt-0.5 text-xs leading-5 text-gray-500">{detail}</p></div>
     </div>
   );
 }

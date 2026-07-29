@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import ShipmentLink from "@/components/shipments/ShipmentLink";
+import ShipmentFinanceEditorModal from "@/components/shipments/ShipmentFinanceEditorModal";
 import { downloadExcel } from "@/lib/export-excel";
 import {
   COST_CATEGORY_LABELS,
@@ -49,6 +50,13 @@ type ReportData = {
   };
 };
 
+type EditableShipment = {
+  id: string;
+  goodsName: string | null;
+  declarationNo: string | null;
+  customerName: string;
+};
+
 function currentMonth() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -63,6 +71,8 @@ export default function VendorPayablesReportClient() {
   const [category, setCategory] = useState("");
   const [data, setData] = useState<ReportData | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [editingShipment, setEditingShipment] = useState<EditableShipment | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,7 +95,7 @@ export default function VendorPayablesReportClient() {
     return () => {
       cancelled = true;
     };
-  }, [month, category]);
+  }, [month, category, refreshKey]);
 
   const hasUnassigned = (data?.totals.unassignedLineCount ?? 0) > 0;
   const detailCount = useMemo(() => data?.rows.reduce((sum, row) => sum + row.details.length, 0) ?? 0, [data]);
@@ -185,17 +195,50 @@ export default function VendorPayablesReportClient() {
                   <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-gray-900">{formatVnd(row.totalPayable)}</td>
                   <td className="px-4 py-3 text-right"><button type="button" onClick={() => setExpandedKey(expanded ? null : key)} className="font-medium text-blue-600 hover:underline">{expanded ? "Thu gọn" : "Xem các lô"}</button></td>
                 </tr>,
-                expanded ? <tr key={`${key}-details`}><td colSpan={7} className="bg-gray-50 px-5 py-4"><DetailTable details={row.details} /></td></tr> : null,
+                expanded ? (
+                  <tr key={`${key}-details`}>
+                    <td colSpan={7} className="bg-gray-50 px-5 py-4">
+                      <DetailTable
+                        details={row.details}
+                        onOpenCost={(detail) =>
+                          setEditingShipment({
+                            id: detail.shipmentId,
+                            declarationNo: detail.declarationNo,
+                            goodsName: detail.goodsName,
+                            customerName: detail.customerName,
+                          })
+                        }
+                      />
+                    </td>
+                  </tr>
+                ) : null,
               ];
             })}
           </tbody>
         </table>
       </div>
+      {editingShipment && (
+        <ShipmentFinanceEditorModal
+          shipment={editingShipment}
+          onClose={() => setEditingShipment(null)}
+          onCostsChanged={() => {
+            setIsLoading(true);
+            setError(null);
+            setRefreshKey((key) => key + 1);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function DetailTable({ details }: { details: DetailRow[] }) {
+function DetailTable({
+  details,
+  onOpenCost,
+}: {
+  details: DetailRow[];
+  onOpenCost: (detail: DetailRow) => void;
+}) {
   return <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white"><table className="min-w-full divide-y divide-gray-100 text-xs">
     <thead className="bg-gray-50"><tr><th className="px-3 py-2 text-left text-gray-500">Số TK</th><th className="px-3 py-2 text-left text-gray-500">Khách hàng / tên hàng</th><th className="px-3 py-2 text-left text-gray-500">Hạng mục</th><th className="px-3 py-2 text-left text-gray-500">Số HĐ</th><th className="px-3 py-2 text-right text-gray-500">Phải trả</th><th className="px-3 py-2 text-left text-gray-500">Ngày trả</th><th></th></tr></thead>
     <tbody className="divide-y divide-gray-100">{details.map((detail) => <tr key={detail.costId}>
@@ -203,7 +246,7 @@ function DetailTable({ details }: { details: DetailRow[] }) {
       <td className="px-3 py-2 text-gray-700">{detail.customerName}<span className="block text-gray-400">{detail.goodsName || "Chưa có tên hàng"}</span></td>
       <td className="px-3 py-2 text-gray-600">{detail.categoryLabel}</td><td className="px-3 py-2 text-gray-600">{detail.invoiceNumber || "—"}</td><td className="px-3 py-2 text-right font-medium text-gray-900">{formatVnd(detail.amount)}</td>
       <td className="px-3 py-2">{detail.isPaid ? <span className="font-medium text-green-700">{detail.paidAt ? new Date(detail.paidAt).toLocaleDateString("vi-VN") : "Đã trả"}</span> : <span className="text-gray-400">Chưa trả</span>}</td>
-      <td className="px-3 py-2 text-right"><Link href={`/costs?shipmentId=${detail.shipmentId}`} className="text-blue-600 hover:underline">Mở chi phí</Link></td>
+      <td className="px-3 py-2 text-right"><button type="button" onClick={() => onOpenCost(detail)} className="text-blue-600 hover:underline">Mở chi phí</button></td>
     </tr>)}</tbody>
   </table></div>;
 }

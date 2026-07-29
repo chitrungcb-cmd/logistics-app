@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { isOtherExpenseCategory } from "@/lib/other-expense-constants";
+import { hasModuleAccess } from "@/lib/module-permissions";
 
 const CREATOR_SELECT = { id: true, name: true } as const;
 
@@ -20,7 +21,9 @@ function isStoredAttachmentUrl(value: string) {
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return apiError("Chưa đăng nhập.", 401);
-  if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền xem chi phí khác.", 403);
+  if (!hasModuleAccess(user, "OTHER_EXPENSES")) {
+    return apiError("Bạn không có quyền xem chi phí khác.", 403);
+  }
 
   const expenses = await prisma.otherExpense.findMany({
     include: { createdBy: { select: CREATOR_SELECT } },
@@ -33,7 +36,9 @@ export async function POST(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
-    if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền thêm chi phí khác.", 403);
+    if (!hasModuleAccess(user, "OTHER_EXPENSES")) {
+      return apiError("Bạn không có quyền thêm chi phí khác.", 403);
+    }
 
     const body = await request.json();
     if (!isOtherExpenseCategory(body.category)) return apiError("Nhóm chi phí không hợp lệ.", 400);

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { isOtherExpenseCategory } from "@/lib/other-expense-constants";
+import { hasModuleAccess } from "@/lib/module-permissions";
 
 const CREATOR_SELECT = { id: true, name: true } as const;
 
@@ -21,7 +22,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
-    if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền sửa chi phí khác.", 403);
+    if (!hasModuleAccess(user, "OTHER_EXPENSES")) {
+      return apiError("Bạn không có quyền sửa chi phí khác.", 403);
+    }
 
     const { id } = await params;
     const existing = await prisma.otherExpense.findUnique({ where: { id }, select: { id: true } });
@@ -91,7 +94,9 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   try {
     const user = await getCurrentUser();
     if (!user) return apiError("Chưa đăng nhập.", 401);
-    if (user.role === "FIELD_STAFF") return apiError("Bạn không có quyền xóa chi phí khác.", 403);
+    if (!hasModuleAccess(user, "OTHER_EXPENSES")) {
+      return apiError("Bạn không có quyền xóa chi phí khác.", 403);
+    }
 
     const { id } = await params;
     await prisma.otherExpense.delete({ where: { id } });

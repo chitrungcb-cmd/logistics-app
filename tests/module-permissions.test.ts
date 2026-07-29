@@ -20,6 +20,21 @@ describe("module permissions", () => {
     ]);
   });
 
+  it("allows field staff to use modules explicitly granted to their account", () => {
+    expect(
+      hasModuleAccess(
+        { role: "FIELD_STAFF", modulePermissions: ["SHIPMENTS", "OTHER_EXPENSES"] },
+        "OTHER_EXPENSES"
+      )
+    ).toBe(true);
+    expect(
+      hasModuleAccess(
+        { role: "FIELD_STAFF", modulePermissions: ["SHIPMENTS"] },
+        "OTHER_EXPENSES"
+      )
+    ).toBe(false);
+  });
+
   it("grants accountants cost and report modules by default", () => {
     expect(getRoleModules("ACCOUNTANT")).toEqual(
       expect.arrayContaining(["COSTS", "REPORTS"])

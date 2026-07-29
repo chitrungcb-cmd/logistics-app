@@ -124,6 +124,7 @@ describe("HYS document status for automobile shipments", () => {
     const uploadedAt = "2026-07-29T00:00:00.000Z";
     expect(isHysAttachment("HYS_108470288730.pdf")).toBe(true);
     expect(isHysAttachment("chung-tu-hys-oto.PDF")).toBe(true);
+    expect(isHysAttachment("dinhkem.xlsx")).toBe(true);
     expect(isHysAttachment("PACKING LIST.pdf")).toBe(false);
     expect(
       hasHysAttachment([

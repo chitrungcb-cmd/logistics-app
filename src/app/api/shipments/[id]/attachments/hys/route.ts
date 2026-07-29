@@ -13,6 +13,7 @@ import { readStoredFile } from "@/lib/private-storage";
 import { saveEditableUploadedFile } from "@/lib/save-upload";
 import { isHysAttachment, type Attachment } from "@/lib/shipment-constants";
 import { UnsafeUploadError } from "@/lib/file-security";
+import { indexShipmentVehiclesFromAttachments } from "@/lib/shipment-vehicle-index";
 
 const MAX_HYS_BYTES = 20 * 1024 * 1024;
 
@@ -115,6 +116,7 @@ export async function POST(
       uploadedAt: new Date().toISOString(),
     };
 
+    let updatedAttachments: Attachment[] = [];
     await prisma.$transaction(async (transaction) => {
       const latest = await transaction.shipment.findUnique({
         where: { id },
@@ -131,10 +133,15 @@ export async function POST(
       // The same attachment row is updated in place. Its mutable storage slot is overwritten on
       // later saves, so the shipment never accumulates HYS versions or history entries.
       latestAttachments[targetIndex] = replacement;
+      updatedAttachments = latestAttachments;
       await transaction.shipment.update({
         where: { id },
         data: { attachments: latestAttachments },
       });
+    });
+    await indexShipmentVehiclesFromAttachments({
+      shipmentId: id,
+      attachments: updatedAttachments,
     });
 
     return apiSuccess({ attachment: replacement });

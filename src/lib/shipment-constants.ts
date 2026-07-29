@@ -82,7 +82,9 @@ export function shipmentRequiresHys(goodsName: string | null | undefined) {
 }
 
 export function isHysAttachment(filename: string) {
-  return /hys/i.test(filename);
+  const normalized = normalizeDocumentText(filename);
+  return /hys/.test(normalized) ||
+    (/dinh\s*kem/.test(normalized) && /\.xlsx$/i.test(filename));
 }
 
 export function hasHysAttachment(attachments: Attachment[] | null | undefined) {

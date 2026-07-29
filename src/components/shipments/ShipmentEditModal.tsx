@@ -2,13 +2,9 @@
 
 import { useEffect, useState } from "react";
 import CustomerCombobox from "@/components/customers/CustomerCombobox";
-import ShipmentVehiclesEditor, {
-  type ShipmentVehicleDraft,
-} from "@/components/shipments/ShipmentVehiclesEditor";
 import {
   CHANNEL_OPTIONS,
   CUSTOMS_TYPE_OPTIONS,
-  shipmentRequiresHys,
   STATUS_OPTIONS,
 } from "@/lib/shipment-constants";
 import type { ShipmentDTO } from "@/lib/types";
@@ -31,7 +27,6 @@ type EditForm = {
   goodsName: string;
   channel: string;
   customsOffice: string;
-  vehicles: ShipmentVehicleDraft[];
 };
 
 function formFromShipment(shipment: ShipmentDTO): EditForm {
@@ -53,10 +48,6 @@ function formFromShipment(shipment: ShipmentDTO): EditForm {
     goodsName: shipment.goodsName || "",
     channel: shipment.channel || "",
     customsOffice: shipment.customsOffice || "",
-    vehicles: shipment.vehicles.map((vehicle) => ({
-      chassisNo: vehicle.chassisNo || "",
-      engineNo: vehicle.engineNo || "",
-    })),
   };
 }
 
@@ -210,13 +201,6 @@ export default function ShipmentEditModal({
               <textarea name="note" value={form.note} onChange={handleChange} rows={3} className="input" />
             </label>
           </div>
-
-          {(shipmentRequiresHys(form.goodsName) || form.vehicles.length > 0) && (
-            <ShipmentVehiclesEditor
-              vehicles={form.vehicles}
-              onChange={(vehicles) => setForm((current) => ({ ...current, vehicles }))}
-            />
-          )}
 
           {error && (
             <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

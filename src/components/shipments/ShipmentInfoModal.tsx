@@ -247,59 +247,6 @@ export default function ShipmentInfoModal({
                   <ShipmentDetailsTable shipment={shipment} />
                 </section>
 
-                {(shipmentRequiresHys(shipment.goodsName) || shipment.vehicles.length > 0) && (
-                  <section className="rounded-lg border border-blue-200 bg-blue-50/30 p-5">
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <h3 className="text-base font-semibold text-gray-900">
-                          Số khung · Số máy
-                        </h3>
-                        <p className="mt-0.5 text-xs text-gray-500">
-                          Tra cứu từng xe để xác định đúng lô hàng.
-                        </p>
-                      </div>
-                      {shipment.vehicles.length > 0 && (
-                        <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
-                          {shipment.vehicles.length} xe
-                        </span>
-                      )}
-                    </div>
-
-                    {shipment.vehicles.length > 0 ? (
-                      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-                        <table className="w-full min-w-[620px] text-sm">
-                          <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
-                            <tr>
-                              <th className="w-16 px-4 py-3 text-center">STT</th>
-                              <th className="px-4 py-3">Số khung</th>
-                              <th className="px-4 py-3">Số máy</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100">
-                            {shipment.vehicles.map((vehicle, index) => (
-                              <tr key={vehicle.id}>
-                                <td className="px-4 py-3 text-center text-gray-400">
-                                  {index + 1}
-                                </td>
-                                <td className="px-4 py-3 font-mono font-medium text-gray-900">
-                                  {vehicle.chassisNo || "—"}
-                                </td>
-                                <td className="px-4 py-3 font-mono font-medium text-gray-900">
-                                  {vehicle.engineNo || "—"}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                        Chưa nhập số khung, số máy nên chưa thể tra cứu xe theo lô hàng.
-                      </div>
-                    )}
-                  </section>
-                )}
-
                 {debts.length > 0 && (
                   <section className="rounded-lg border border-gray-200 bg-white p-5">
                     <h3 className="mb-3 text-base font-semibold text-gray-900">Công nợ</h3>

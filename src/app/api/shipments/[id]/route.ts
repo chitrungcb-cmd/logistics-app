@@ -5,6 +5,7 @@ import { apiError, apiSuccess } from "@/lib/api-response";
 import { applyCostPresetsToShipment } from "@/lib/cost-presets";
 import { mergeUniqueAttachments, type Attachment } from "@/lib/shipment-constants";
 import { normalizeShipmentVehicles, type ShipmentVehicleInput } from "@/lib/shipment-vehicles";
+import { indexShipmentVehiclesFromAttachments } from "@/lib/shipment-vehicle-index";
 
 // totalAmount deliberately NOT here (audit 3.1) — the legacy per-shipment cost field is vestigial;
 // real costs live in ShipmentCost / the /costs page. The DB column is kept for historical reference
@@ -123,7 +124,7 @@ export async function PATCH(
       if (field in data && data[field] === "") data[field] = null;
     }
 
-    const shipment = await prisma.$transaction(async (transaction) => {
+    let shipment = await prisma.$transaction(async (transaction) => {
       await transaction.shipment.update({ where: { id }, data });
       if (vehicles !== undefined) {
         await transaction.shipmentVehicle.deleteMany({ where: { shipmentId: id } });
@@ -143,6 +144,21 @@ export async function PATCH(
         },
       });
     });
+    if ("attachments" in data) {
+      await indexShipmentVehiclesFromAttachments({
+        shipmentId: id,
+        attachments: data.attachments as Attachment[],
+      });
+      shipment = await prisma.shipment.findUniqueOrThrow({
+        where: { id },
+        include: {
+          vehicles: {
+            select: { id: true, chassisNo: true, engineNo: true },
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      });
+    }
     if (shipment.declarationNo && ("declarationNo" in data || "goodsName" in data)) {
       await applyCostPresetsToShipment({ shipmentId: shipment.id, userId: user.id });
     }

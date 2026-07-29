@@ -26,6 +26,10 @@ import { applyCostPresetsToShipment } from "@/lib/cost-presets";
 import { ensureShipmentWorkflowTasks } from "@/lib/shipment-workflow";
 import { syncVendorInvoices, type VendorInvoiceSyncSummary } from "@/lib/vendor-invoice-sync";
 import { notifyNewShipmentAssignees, syncMissingActualCostAlerts } from "@/lib/notifications";
+import {
+  backfillShipmentVehicleIndex,
+  indexShipmentVehiclesFromAttachments,
+} from "@/lib/shipment-vehicle-index";
 
 // How many *new* (not-yet-processed) messages one sync call takes on. Gmail returns matches
 // newest-first, and every call starts pagination from page 1 — so once the newest ~500 are already
@@ -392,6 +396,10 @@ async function syncDeclarationFromMessage(input: {
         attachments: mergedAttachments,
       },
     });
+    await indexShipmentVehiclesFromAttachments({
+      shipmentId: existing.id,
+      attachments: mergedAttachments,
+    });
     await Promise.all([
       applyCostPresetsToShipment({ shipmentId: existing.id, userId: user.id }),
       ensureShipmentWorkflowTasks({
@@ -441,6 +449,10 @@ async function syncDeclarationFromMessage(input: {
           : undefined,
       attachments: mergeUniqueAttachments(savedAttachments),
     },
+  });
+  await indexShipmentVehiclesFromAttachments({
+    shipmentId: shipment.id,
+    attachments: mergeUniqueAttachments(savedAttachments),
   });
   await Promise.all([
     applyCostPresetsToShipment({ shipmentId: shipment.id, userId: user.id }),
@@ -662,6 +674,12 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
       await syncMissingActualCostAlerts();
     } catch (notificationError) {
       console.error("Missing-cost alert reconciliation failed:", notificationError);
+    }
+
+    try {
+      await backfillShipmentVehicleIndex(25);
+    } catch (vehicleIndexError) {
+      console.error("Vehicle workbook backfill failed:", vehicleIndexError);
     }
 
     return {

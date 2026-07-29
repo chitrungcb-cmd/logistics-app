@@ -10,6 +10,7 @@ import { notifyNewShipmentAssignees } from "@/lib/notifications";
 import { paginationMeta, parsePagination } from "@/lib/pagination";
 import { SHIPMENT_TASK_STEPS } from "@/lib/task-constants";
 import { normalizeShipmentVehicles } from "@/lib/shipment-vehicles";
+import { backfillShipmentVehicleIndex } from "@/lib/shipment-vehicle-index";
 
 const SHIPMENT_LIST_SELECT = {
   id: true,
@@ -64,6 +65,14 @@ export async function GET(request: NextRequest) {
     const search = params.get("search")?.trim();
     const status = params.get("status")?.trim();
     const channel = params.get("channel")?.trim();
+    const normalizedIdentifierSearch = search?.replace(/\s+/g, "") ?? "";
+    if (
+      normalizedIdentifierSearch.length >= 6 &&
+      /[a-z]/i.test(normalizedIdentifierSearch) &&
+      /\d/.test(normalizedIdentifierSearch)
+    ) {
+      await backfillShipmentVehicleIndex(20);
+    }
     const where: Prisma.ShipmentWhereInput = {
       ...(status ? { status } : {}),
       ...(channel ? { channel } : {}),
@@ -78,8 +87,8 @@ export async function GET(request: NextRequest) {
                 vehicles: {
                   some: {
                     OR: [
-                      { chassisNo: { contains: search.replace(/\s+/g, ""), mode: "insensitive" } },
-                      { engineNo: { contains: search.replace(/\s+/g, ""), mode: "insensitive" } },
+                      { chassisNo: { contains: normalizedIdentifierSearch, mode: "insensitive" } },
+                      { engineNo: { contains: normalizedIdentifierSearch, mode: "insensitive" } },
                     ],
                   },
                 },

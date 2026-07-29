@@ -1,5 +1,6 @@
 // Công thức thuần cho báo cáo Thu–chi theo tài khoản — tách khỏi Prisma/UI để test được và khóa
-// đúng phép cộng trừ (mỗi TK: Thu − Chi = Số dư; tổng gồm cả khoản chưa gán tài khoản).
+// đúng phép cộng trừ. Tài khoản công ty: Thu − Chi; cá nhân: Thu + nhận nội bộ − Chi − chuyển
+// nội bộ. Tổng toàn công ty vẫn chỉ gồm Thu/Chi thật và cả khoản chưa gán, không cộng chuyển nội bộ.
 
 export type AccountInput = { id: string; name: string; isActive?: boolean };
 /** Một dòng tổng hợp theo tài khoản: id = khóa nhóm (null = chưa gán), amount = tổng, count = số khoản. */
@@ -14,6 +15,10 @@ export type AccountRow = {
   balance: number;
   thuCount: number;
   chiCount: number;
+  transferIn: number;
+  transferOut: number;
+  transferInCount: number;
+  transferOutCount: number;
 };
 
 export type CashFlowReport = {
@@ -27,7 +32,7 @@ function indexById(entries: SumEntry[]) {
   return new Map(entries.filter((e) => e.id != null).map((e) => [e.id as string, e]));
 }
 
-/** Ghép THU (theo "TK nhận tiền") và CHI (theo "Chi từ TK") cho từng tài khoản; balance = thu − chi. */
+/** Ghép THU, CHI và điều chuyển nội bộ cho từng tài khoản/cá nhân. */
 export function buildCashFlowReport(input: {
   companyAccounts: AccountInput[];
   users: AccountInput[];
@@ -37,34 +42,46 @@ export function buildCashFlowReport(input: {
   thuByCompany: SumEntry[];
   thuByPerson: SumEntry[];
   thuUnassigned: { amount: number; count: number };
+  transferInByPerson?: SumEntry[];
+  transferOutByPerson?: SumEntry[];
 }): CashFlowReport {
   const chiCompany = indexById(input.chiByCompany);
   const chiPerson = indexById(input.chiByPerson);
   const thuCompany = indexById(input.thuByCompany);
   const thuPerson = indexById(input.thuByPerson);
+  const transferInPerson = indexById(input.transferInByPerson ?? []);
+  const transferOutPerson = indexById(input.transferOutByPerson ?? []);
 
   const buildRow = (
     acc: AccountInput,
     thuMap: Map<string, SumEntry>,
-    chiMap: Map<string, SumEntry>
+    chiMap: Map<string, SumEntry>,
+    transferInMap = new Map<string, SumEntry>(),
+    transferOutMap = new Map<string, SumEntry>()
   ): AccountRow => {
     const thu = thuMap.get(acc.id)?.amount ?? 0;
     const chi = chiMap.get(acc.id)?.amount ?? 0;
+    const transferIn = transferInMap.get(acc.id)?.amount ?? 0;
+    const transferOut = transferOutMap.get(acc.id)?.amount ?? 0;
     return {
       id: acc.id,
       name: acc.name,
       isActive: acc.isActive,
       thu,
       chi,
-      balance: thu - chi,
+      balance: thu + transferIn - chi - transferOut,
       thuCount: thuMap.get(acc.id)?.count ?? 0,
       chiCount: chiMap.get(acc.id)?.count ?? 0,
+      transferIn,
+      transferOut,
+      transferInCount: transferInMap.get(acc.id)?.count ?? 0,
+      transferOutCount: transferOutMap.get(acc.id)?.count ?? 0,
     };
   };
 
   return {
     companyAccounts: input.companyAccounts.map((a) => buildRow(a, thuCompany, chiCompany)),
-    persons: input.users.map((u) => buildRow(u, thuPerson, chiPerson)),
+    persons: input.users.map((u) => buildRow(u, thuPerson, chiPerson, transferInPerson, transferOutPerson)),
     unassignedChi: input.chiUnassigned,
     unassignedThu: input.thuUnassigned,
   };

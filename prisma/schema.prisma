@@ -65,6 +65,7 @@ model Shipment {
   debts                Debt[]
   vendorInvoices       VendorInvoice[]
   vehicles             ShipmentVehicle[]
+  internalTransfers    InternalTransfer[]
   personalAccountEntry PersonalAccountEntry?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
@@ -475,6 +476,30 @@ model Payment {
   @@index([receivedByUserId])
 }
 
+// Chuyển tiền nội bộ giữa hai cá nhân. Đây chỉ là điều chuyển người đang giữ tiền, không phải
+// doanh thu hoặc chi phí mới nên báo cáo tổng Thu/Chi không cộng các dòng này.
+model InternalTransfer {
+  id           String    @id @default(cuid())
+  transferDate DateTime
+  amount       Float
+  fromUser     User      @relation("InternalTransferFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  fromUserId   String
+  toUser       User      @relation("InternalTransferTo", fields: [toUserId], references: [id], onDelete: Restrict)
+  toUserId     String
+  shipment     Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  shipmentId   String?
+  note         String?
+  createdBy    User?     @relation("InternalTransferCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([transferDate])
+  @@index([fromUserId])
+  @@index([toUserId])
+  @@index([shipmentId])
+}
+
 enum UserRole {
   ADMIN
   ACCOUNTANT
@@ -482,37 +507,40 @@ enum UserRole {
 }
 
 model User {
-  id                      String                 @id @default(cuid())
-  email                   String                 @unique
-  passwordHash            String
-  name                    String
-  role                    UserRole               @default(FIELD_STAFF)
+  id                        String                 @id @default(cuid())
+  email                     String                 @unique
+  passwordHash              String
+  name                      String
+  role                      UserRole               @default(FIELD_STAFF)
   // Danh sách mô-đun được phép mở. Vai trò vẫn quyết định các thao tác nhạy cảm bên trong mô-đun.
-  modulePermissions       String[]               @default([])
+  modulePermissions         String[]               @default([])
   // Soft lock instead of delete (audit 3.3): a departed employee is locked, not deleted, so their
   // task/message history stays intact and no FK constraints break. A locked user can't log in and
   // getCurrentUser() treats them as unauthenticated, so any live session stops working immediately.
-  isActive                Boolean                @default(true)
-  tasksAssigned           Task[]                 @relation("AssignedTasks")
-  tasksCreated            Task[]                 @relation("CreatedTasks")
-  customersAssigned       Customer[]             @relation("CustomerAssignments")
-  notifications           Notification[]
-  costAuditLogs           CostAuditLog[]
-  costsPaid               ShipmentCost[]         @relation("CostPaidBy")
-  costsPaidConfirmed      ShipmentCost[]         @relation("CostPaidConfirmedBy")
-  costPresetsPaidBy       CostPreset[]           @relation("CostPresetPaidBy")
-  paymentsReceived        Payment[]              @relation("PaymentReceivedBy")
-  otherExpensesCreated    OtherExpense[]         @relation("OtherExpenseCreator")
-  taskStatusLogs          TaskStatusLog[]
-  conversationsCreated    Conversation[]         @relation("CreatedConversations")
-  conversationMemberships ConversationMember[]
-  sentMessages            Message[]              @relation("SentMessages")
-  mentions                MessageMention[]       @relation("MentionedInMessages")
-  personalAccountEntries  PersonalAccountEntry[] @relation("PersonalAccountAssignee")
-  passwordResetsReceived  PasswordResetLog[]     @relation("ResetTarget")
-  passwordResetsPerformed PasswordResetLog[]     @relation("ResetBy")
-  createdAt               DateTime               @default(now())
-  updatedAt               DateTime               @updatedAt
+  isActive                  Boolean                @default(true)
+  tasksAssigned             Task[]                 @relation("AssignedTasks")
+  tasksCreated              Task[]                 @relation("CreatedTasks")
+  customersAssigned         Customer[]             @relation("CustomerAssignments")
+  notifications             Notification[]
+  costAuditLogs             CostAuditLog[]
+  costsPaid                 ShipmentCost[]         @relation("CostPaidBy")
+  costsPaidConfirmed        ShipmentCost[]         @relation("CostPaidConfirmedBy")
+  costPresetsPaidBy         CostPreset[]           @relation("CostPresetPaidBy")
+  paymentsReceived          Payment[]              @relation("PaymentReceivedBy")
+  internalTransfersSent     InternalTransfer[]     @relation("InternalTransferFrom")
+  internalTransfersReceived InternalTransfer[]     @relation("InternalTransferTo")
+  internalTransfersCreated  InternalTransfer[]     @relation("InternalTransferCreatedBy")
+  otherExpensesCreated      OtherExpense[]         @relation("OtherExpenseCreator")
+  taskStatusLogs            TaskStatusLog[]
+  conversationsCreated      Conversation[]         @relation("CreatedConversations")
+  conversationMemberships   ConversationMember[]
+  sentMessages              Message[]              @relation("SentMessages")
+  mentions                  MessageMention[]       @relation("MentionedInMessages")
+  personalAccountEntries    PersonalAccountEntry[] @relation("PersonalAccountAssignee")
+  passwordResetsReceived    PasswordResetLog[]     @relation("ResetTarget")
+  passwordResetsPerformed   PasswordResetLog[]     @relation("ResetBy")
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
 }
 
 // Audit trail for BƯỚC 3 — who reset whose password, when. The password itself is never stored

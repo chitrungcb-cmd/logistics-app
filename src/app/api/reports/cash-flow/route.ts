@@ -13,7 +13,20 @@ export async function GET() {
   if (!user) return apiError("Chưa đăng nhập.", 401);
   if (!hasModuleAccess(user, "REPORTS")) return apiError("Bạn không có quyền xem báo cáo này.", 403);
 
-  const [accounts, users, chiByCompany, chiByPerson, chiUnassigned, thuByCompany, thuByPerson, thuUnassigned] = await Promise.all([
+  const [
+    accounts,
+    users,
+    chiByCompany,
+    chiByPerson,
+    chiUnassigned,
+    thuByCompany,
+    thuByPerson,
+    thuUnassigned,
+    transferInByPerson,
+    transferOutByPerson,
+    transfers,
+    shipmentOptions,
+  ] = await Promise.all([
     prisma.companyAccount.findMany({ orderBy: [{ isActive: "desc" }, { name: "asc" }] }),
     prisma.user.findMany({ where: { isActive: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.shipmentCost.groupBy({
@@ -50,6 +63,50 @@ export async function GET() {
       _sum: { amount: true },
       _count: { _all: true },
     }),
+    prisma.internalTransfer.groupBy({
+      by: ["toUserId"],
+      _sum: { amount: true },
+      _count: { _all: true },
+    }),
+    prisma.internalTransfer.groupBy({
+      by: ["fromUserId"],
+      _sum: { amount: true },
+      _count: { _all: true },
+    }),
+    prisma.internalTransfer.findMany({
+      orderBy: [{ transferDate: "desc" }, { createdAt: "desc" }],
+      select: {
+        id: true,
+        transferDate: true,
+        amount: true,
+        note: true,
+        fromUser: { select: { id: true, name: true } },
+        toUser: { select: { id: true, name: true } },
+        shipment: {
+          select: {
+            id: true,
+            declarationNo: true,
+            declarationDate: true,
+            goodsName: true,
+            customerName: true,
+          },
+        },
+      },
+    }),
+    prisma.shipment.findMany({
+      orderBy: [
+        { declarationDate: { sort: "desc", nulls: "last" } },
+        { createdAt: "desc" },
+      ],
+      take: 300,
+      select: {
+        id: true,
+        declarationNo: true,
+        declarationDate: true,
+        goodsName: true,
+        customerName: true,
+      },
+    }),
   ]);
 
   const report = buildCashFlowReport({
@@ -61,7 +118,21 @@ export async function GET() {
     thuByCompany: thuByCompany.map((r) => ({ id: r.receivedToCompanyAccountId, amount: r._sum.amount ?? 0, count: r._count._all })),
     thuByPerson: thuByPerson.map((r) => ({ id: r.receivedByUserId, amount: r._sum.amount ?? 0, count: r._count._all })),
     thuUnassigned: { amount: thuUnassigned._sum.amount ?? 0, count: thuUnassigned._count._all },
+    transferInByPerson: transferInByPerson.map((r) => ({
+      id: r.toUserId,
+      amount: r._sum.amount ?? 0,
+      count: r._count._all,
+    })),
+    transferOutByPerson: transferOutByPerson.map((r) => ({
+      id: r.fromUserId,
+      amount: r._sum.amount ?? 0,
+      count: r._count._all,
+    })),
   });
 
-  return apiSuccess(report);
+  return apiSuccess({
+    ...report,
+    transfers,
+    shipmentOptions,
+  });
 }

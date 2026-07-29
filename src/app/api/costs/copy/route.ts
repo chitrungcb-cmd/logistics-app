@@ -111,9 +111,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const targetShipmentId = typeof body.targetShipmentId === "string" ? body.targetShipmentId : "";
     const sourceShipmentId = typeof body.sourceShipmentId === "string" ? body.sourceShipmentId : "";
-    const costIds = Array.isArray(body.costIds)
-      ? [...new Set(body.costIds.filter((id: unknown): id is string => typeof id === "string" && id))]
-      : [];
+    const rawCostIds: unknown[] = Array.isArray(body.costIds) ? body.costIds : [];
+    const costIds = [
+      ...new Set(rawCostIds.filter((id): id is string => typeof id === "string" && id.length > 0)),
+    ];
     if (!targetShipmentId || !sourceShipmentId || costIds.length === 0) {
       return apiError("Vui lòng chọn lô nguồn và ít nhất một khoản chi phí.", 400);
     }

@@ -322,9 +322,14 @@ export default function CostsClient() {
           <h1 className="text-2xl font-semibold text-gray-900">Chi phí lô hàng</h1>
           <p className="mt-1 text-sm text-gray-500">Theo dõi từng lô, nhập nhanh và sao chép các khoản đã làm mà không ghi đè dữ liệu cũ.</p>
         </div>
-        <Link href="/reports/vendor-payables" className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-          📊 Báo cáo phải trả
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/reports/cost-variance" className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100">
+            ⚠ So sánh chênh lệch
+          </Link>
+          <Link href="/reports/vendor-payables" className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+            📊 Báo cáo phải trả
+          </Link>
+        </div>
       </div>
 
       {error && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700"><span>{error}</span><button type="button" onClick={() => { setIsLoading(true); setError(null); setReloadKey((key) => key + 1); }} className="rounded border border-red-300 bg-white px-3 py-1 font-medium hover:bg-red-100">Thử lại</button></div>}

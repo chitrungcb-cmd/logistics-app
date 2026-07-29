@@ -1,5 +1,7 @@
+import type { CostCategory } from "@/generated/prisma/enums";
+
 type CostCopyIdentity = {
-  category: string;
+  category: CostCategory;
   customLabel?: string | null;
   vendorId?: string | null;
   unitPrice: number;

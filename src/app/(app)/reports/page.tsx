@@ -22,6 +22,10 @@ export default async function ReportsPage() {
           <p className="font-medium text-gray-900">Phải trả nhà cung cấp</p>
           <p className="mt-1 text-sm text-gray-500">Theo tháng: mỗi công ty phục vụ bao nhiêu lô và tổng số tiền phải trả.</p>
         </Link>
+        <Link href="/reports/cost-variance" className="rounded-lg border border-amber-200 bg-amber-50/40 p-4 hover:border-amber-400 hover:shadow-sm">
+          <p className="font-medium text-gray-900">So sánh chênh lệch chi phí</p>
+          <p className="mt-1 text-sm text-gray-500">Phát hiện cùng mặt hàng nhưng đơn giá cùng hạng mục chênh lệch lớn giữa các lô.</p>
+        </Link>
       </div>
     </div>
   );

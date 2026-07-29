@@ -86,6 +86,30 @@ export async function GET(request: NextRequest) {
     }),
   ]);
 
+  const shipmentIds = [...new Set(expenses.map((expense) => expense.shipment.id))];
+  const shipmentCosts = shipmentIds.length === 0
+    ? []
+    : await prisma.shipmentCost.findMany({
+        where: {
+          shipmentId: { in: shipmentIds },
+          isActual: true,
+          costPrice: { gt: 0 },
+        },
+        orderBy: [{ shipmentId: "asc" }, { createdAt: "asc" }],
+        select: {
+          id: true,
+          shipmentId: true,
+          category: true,
+          customLabel: true,
+          costPrice: true,
+          invoiceNumber: true,
+          note: true,
+          paidBy: { select: { id: true, name: true } },
+          paidFromCompanyAccount: { select: { id: true, name: true } },
+          vendor: { select: { name: true } },
+        },
+      });
+
   const entries = [
     ...expenses.map((expense) => ({
       id: `expense:${expense.id}`,
@@ -128,5 +152,20 @@ export async function GET(request: NextRequest) {
     }),
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  return apiSuccess({ person, entries });
+  return apiSuccess({
+    person,
+    entries,
+    shipmentCosts: shipmentCosts.map((cost) => ({
+      id: cost.id,
+      shipmentId: cost.shipmentId,
+      label: cost.customLabel || COST_CATEGORY_LABELS[cost.category] || cost.category,
+      amount: cost.costPrice,
+      invoiceNumber: cost.invoiceNumber,
+      vendorName: cost.vendor?.name ?? null,
+      payerId: cost.paidBy?.id ?? null,
+      payerName: cost.paidBy?.name ?? cost.paidFromCompanyAccount?.name ?? null,
+      payerType: cost.paidBy ? "PERSON" as const : cost.paidFromCompanyAccount ? "COMPANY" as const : null,
+      note: cost.note,
+    })),
+  });
 }

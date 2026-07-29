@@ -61,6 +61,28 @@ type LedgerEntry = {
 type Detail = {
   person: { id: string; name: string };
   entries: LedgerEntry[];
+  shipmentCosts: ShipmentCostDetail[];
+};
+
+type ShipmentCostDetail = {
+  id: string;
+  shipmentId: string;
+  label: string;
+  amount: number;
+  invoiceNumber: string | null;
+  vendorName: string | null;
+  payerId: string | null;
+  payerName: string | null;
+  payerType: "PERSON" | "COMPANY" | null;
+  note: string | null;
+};
+
+type ShipmentExpenseGroup = {
+  shipment: ShipmentRef;
+  personAmount: number;
+  personCostCount: number;
+  totalAmount: number;
+  totalCostCount: number;
 };
 
 type LedgerFilter = "ALL" | "RECEIPT" | "EXPENSE" | "TRANSFER";
@@ -461,6 +483,7 @@ function PersonLedger({
   onSearchChange: (search: string) => void;
   onClose: () => void;
 }) {
+  const [selectedShipmentId, setSelectedShipmentId] = useState<string | null>(null);
   const entries = useMemo(() => {
     if (!detail) return [];
     const normalizedSearch = search.trim().toLocaleLowerCase("vi");
@@ -483,6 +506,40 @@ function PersonLedger({
       ].some((value) => value?.toLocaleLowerCase("vi").includes(normalizedSearch));
     });
   }, [detail, filter, search]);
+
+  const expenseGroups = useMemo<ShipmentExpenseGroup[]>(() => {
+    if (!detail) return [];
+    const groups = new Map<string, ShipmentExpenseGroup>();
+    for (const entry of detail.entries) {
+      if (entry.type !== "EXPENSE" || !entry.shipment) continue;
+      const current = groups.get(entry.shipment.id) ?? {
+        shipment: entry.shipment,
+        personAmount: 0,
+        personCostCount: 0,
+        totalAmount: 0,
+        totalCostCount: 0,
+      };
+      current.personAmount += entry.amount;
+      current.personCostCount += 1;
+      groups.set(entry.shipment.id, current);
+    }
+    for (const cost of detail.shipmentCosts) {
+      const current = groups.get(cost.shipmentId);
+      if (!current) continue;
+      current.totalAmount += cost.amount;
+      current.totalCostCount += 1;
+    }
+    return [...groups.values()].sort((a, b) => {
+      const dateDifference =
+        new Date(b.shipment.declarationDate ?? 0).getTime() -
+        new Date(a.shipment.declarationDate ?? 0).getTime();
+      return dateDifference || b.personAmount - a.personAmount;
+    });
+  }, [detail]);
+
+  const selectedExpenseGroup = expenseGroups.find(
+    (group) => group.shipment.id === selectedShipmentId
+  ) ?? null;
 
   return (
     <section className="rounded-xl border-2 border-blue-200 bg-white p-5 shadow-sm">
@@ -527,7 +584,69 @@ function PersonLedger({
       {loading ? (
         <p className="py-10 text-center text-sm text-gray-400">Đang tải sổ chi tiết...</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
+        <>
+          <div className="mb-5 overflow-x-auto rounded-lg border border-blue-200">
+            <div className="border-b border-blue-100 bg-blue-50 px-4 py-3">
+              <h3 className="font-semibold text-gray-900">Các lô cá nhân đã chi</h3>
+              <p className="mt-0.5 text-xs text-gray-500">Mỗi lô một dòng; tổng chi lô bao gồm tất cả người và tài khoản công ty đã chi.</p>
+            </div>
+            <table className="w-full min-w-[920px] text-sm">
+              <thead className="bg-gray-50 text-left text-gray-500">
+                <tr>
+                  <th className="px-3 py-2 text-center">STT</th>
+                  <th className="px-3 py-2">Số TK / ngày TK</th>
+                  <th className="px-3 py-2">Tên hàng / khách hàng</th>
+                  <th className="px-3 py-2 text-right">Cá nhân đã chi</th>
+                  <th className="px-3 py-2 text-right">Tổng chi lô</th>
+                  <th className="px-3 py-2 text-right">Chi tiết</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {expenseGroups.length === 0 && (
+                  <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-400">Cá nhân này chưa chi khoản nào cho lô hàng.</td></tr>
+                )}
+                {expenseGroups.map((group, index) => (
+                  <tr
+                    key={group.shipment.id}
+                    onClick={() => setSelectedShipmentId(group.shipment.id)}
+                    className="cursor-pointer hover:bg-blue-50/60"
+                  >
+                    <td className="px-3 py-3 text-center text-gray-400">{index + 1}</td>
+                    <td className="px-3 py-3">
+                      <p className="font-medium text-blue-700">TK {group.shipment.declarationNo || "chưa có số"}</p>
+                      <p className="text-xs text-gray-500">{formatDate(group.shipment.declarationDate)}</p>
+                    </td>
+                    <td className="max-w-sm px-3 py-3">
+                      <p className="font-medium text-gray-900">{group.shipment.goodsName || "Chưa có tên hàng"}</p>
+                      <p className="truncate text-xs text-gray-500">{group.shipment.customerName}</p>
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      <p className="font-semibold text-red-700">{formatVnd(group.personAmount)}</p>
+                      <p className="text-xs text-gray-400">{group.personCostCount} khoản</p>
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      <p className="font-semibold text-gray-900">{formatVnd(group.totalAmount)}</p>
+                      <p className="text-xs text-gray-400">{group.totalCostCount} khoản</p>
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedShipmentId(group.shipment.id);
+                        }}
+                        className="rounded-md border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                      >
+                        Xem chi tiết
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
           <table className="w-full min-w-[1050px] text-sm">
             <thead className="bg-gray-50 text-left text-gray-500">
               <tr>
@@ -564,9 +683,100 @@ function PersonLedger({
               })}
             </tbody>
           </table>
-        </div>
+          </div>
+
+          {selectedExpenseGroup && detail && (
+            <ShipmentExpenseDetailModal
+              person={detail.person}
+              group={selectedExpenseGroup}
+              costs={detail.shipmentCosts.filter(
+                (cost) => cost.shipmentId === selectedExpenseGroup.shipment.id
+              )}
+              onClose={() => setSelectedShipmentId(null)}
+            />
+          )}
+        </>
       )}
     </section>
+  );
+}
+
+function ShipmentExpenseDetailModal({
+  person,
+  group,
+  costs,
+  onClose,
+}: {
+  person: { id: string; name: string };
+  group: ShipmentExpenseGroup;
+  costs: ShipmentCostDetail[];
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-gray-200 bg-white px-6 py-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Chi tiết chi phí lô hàng</p>
+            <h2 className="mt-1 text-xl font-semibold text-gray-900">
+              TK {group.shipment.declarationNo || "chưa có số"} · {group.shipment.goodsName || "Chưa có tên hàng"}
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">
+              {formatDate(group.shipment.declarationDate)} · {group.shipment.customerName}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="text-2xl leading-none text-gray-400 hover:text-gray-700">×</button>
+        </div>
+
+        <div className="grid gap-3 px-6 py-5 sm:grid-cols-2">
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+            <p className="text-xs font-medium text-red-700">{person.name} đã chi</p>
+            <p className="mt-1 text-xl font-bold text-red-800">{formatVnd(group.personAmount)}</p>
+            <p className="mt-1 text-xs text-red-600">{group.personCostCount} khoản</p>
+          </div>
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <p className="text-xs font-medium text-gray-600">Tổng chi toàn lô</p>
+            <p className="mt-1 text-xl font-bold text-gray-900">{formatVnd(group.totalAmount)}</p>
+            <p className="mt-1 text-xs text-gray-500">{group.totalCostCount} khoản</p>
+          </div>
+        </div>
+
+        <div className="px-6 pb-6">
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <table className="w-full min-w-[850px] text-sm">
+              <thead className="bg-gray-50 text-left text-gray-500">
+                <tr>
+                  <th className="px-3 py-2">Hạng mục</th>
+                  <th className="px-3 py-2">Nhà cung cấp</th>
+                  <th className="px-3 py-2">Người/TK đã chi</th>
+                  <th className="px-3 py-2">Số hóa đơn</th>
+                  <th className="px-3 py-2">Ghi chú</th>
+                  <th className="px-3 py-2 text-right">Số tiền</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {costs.map((cost) => {
+                  const paidBySelectedPerson = cost.payerType === "PERSON" && cost.payerId === person.id;
+                  return (
+                    <tr key={cost.id} className={paidBySelectedPerson ? "bg-blue-50/70" : ""}>
+                      <td className="px-3 py-3">
+                        <p className="font-medium text-gray-900">{cost.label}</p>
+                        {paidBySelectedPerson && <p className="text-xs font-medium text-blue-600">Khoản {person.name} đã chi</p>}
+                      </td>
+                      <td className="px-3 py-3 text-gray-600">{cost.vendorName || "—"}</td>
+                      <td className="px-3 py-3 text-gray-600">{cost.payerName || "Chưa xác định"}</td>
+                      <td className="px-3 py-3 text-gray-600">{cost.invoiceNumber || "—"}</td>
+                      <td className="max-w-64 px-3 py-3 text-gray-500">{cost.note || "—"}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-gray-900">{formatVnd(cost.amount)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

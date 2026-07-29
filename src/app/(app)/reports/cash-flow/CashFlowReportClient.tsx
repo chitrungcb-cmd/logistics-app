@@ -109,6 +109,32 @@ function Balance({ value }: { value: number }) {
   return <span className={value >= 0 ? "text-blue-700" : "text-orange-700"}>{formatVnd(value)}</span>;
 }
 
+function PersonalSettlementStatus({ value, compact = false }: { value: number; compact?: boolean }) {
+  const roundedValue = Math.round(value);
+  if (roundedValue === 0) {
+    return (
+      <div className={`rounded-lg border border-emerald-200 bg-emerald-50 ${compact ? "px-3 py-2" : "p-4"}`}>
+        <p className="font-semibold text-emerald-700">Đã cân bằng</p>
+        <p className="text-xs text-emerald-600">Không còn nợ nhân viên · 0 đ</p>
+      </div>
+    );
+  }
+  if (roundedValue > 0) {
+    return (
+      <div className={`rounded-lg border border-blue-200 bg-blue-50 ${compact ? "px-3 py-2" : "p-4"}`}>
+        <p className="font-semibold text-blue-700">Cá nhân đang giữ tiền công ty</p>
+        <p className={`${compact ? "text-xs" : "mt-1 text-lg font-bold"} text-blue-800`}>{formatVnd(roundedValue)}</p>
+      </div>
+    );
+  }
+  return (
+    <div className={`rounded-lg border border-orange-200 bg-orange-50 ${compact ? "px-3 py-2" : "p-4"}`}>
+      <p className="font-semibold text-orange-700">Công ty đang nợ cá nhân</p>
+      <p className={`${compact ? "text-xs" : "mt-1 text-lg font-bold"} text-orange-800`}>{formatVnd(Math.abs(roundedValue))}</p>
+    </div>
+  );
+}
+
 function ShipmentSummary({ shipment }: { shipment: ShipmentRef | null }) {
   if (!shipment) return <span className="text-gray-400">Không gắn lô hàng</span>;
   return (
@@ -284,8 +310,8 @@ export default function CashFlowReportClient({
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="font-semibold text-gray-900">Tổng hợp theo cá nhân</h2>
-              <p className="mt-0.5 text-xs text-gray-500">
-                  Tạm ứng và hoàn ứng chỉ điều chuyển số dư giữa hai người, không cộng vào tổng thu hoặc tổng chi công ty.
+                <p className="mt-0.5 text-xs text-gray-500">
+                  Đối soát = tiền cá nhân nhận + nhận nội bộ − tiền đã chi − tiền chuyển nội bộ. Dương là đang giữ tiền công ty; âm là công ty đang nợ cá nhân.
                 </p>
               </div>
               {canManageTransfers && (
@@ -423,7 +449,7 @@ function PersonTable({
             <th className="py-2 text-right">Chi cho lô hàng</th>
             <th className="py-2 text-right">Nhận tạm/hoàn ứng</th>
             <th className="py-2 text-right">Đã tạm/hoàn ứng</th>
-            <th className="py-2 text-right">Số dư đang giữ</th>
+            <th className="py-2 text-right">Kết quả đối soát</th>
             <th className="py-2 text-right">Chi tiết</th>
           </tr>
         </thead>
@@ -450,7 +476,9 @@ function PersonTable({
                 <p className="font-medium text-orange-700">{person.transferOut ? formatVnd(person.transferOut) : "—"}</p>
                 {person.transferOutCount > 0 && <p className="text-xs text-gray-400">{person.transferOutCount} lần</p>}
               </td>
-              <td className="py-3 text-right font-semibold"><Balance value={person.balance} /></td>
+              <td className="py-3 pl-4 text-right">
+                <PersonalSettlementStatus value={person.balance} compact />
+              </td>
               <td className="py-3 text-right">
                 <button type="button" onClick={() => onOpen(person.id)} className="rounded-md border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50">
                   Xem sổ chi tiết
@@ -556,6 +584,12 @@ function PersonLedger({
         </div>
         <button type="button" onClick={onClose} className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">Đóng</button>
       </div>
+
+      {account && (
+        <div className="mb-4 max-w-lg">
+          <PersonalSettlementStatus value={account.balance} />
+        </div>
+      )}
 
       <div className="mb-4 flex flex-wrap gap-2">
         {([

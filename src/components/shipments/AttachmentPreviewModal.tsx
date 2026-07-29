@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import type { Attachment } from "@/lib/shipment-constants";
+import { isHysAttachment, type Attachment } from "@/lib/shipment-constants";
 
 const PdfPreview = dynamic(() => import("./PdfPreview"), {
   ssr: false,
@@ -76,25 +76,40 @@ function FileIcon({ extension }: { extension: string }) {
 export default function AttachmentPreviewModal({
   attachment,
   onClose,
+  shipmentId,
+  onAttachmentReplaced,
 }: {
   attachment: Attachment | null;
   onClose: () => void;
+  shipmentId?: string;
+  onAttachmentReplaced?: (current: Attachment, replacement: Attachment) => void;
 }) {
   const ext = attachment ? getExtension(attachment.name) : "";
   const isPdf = ext === "pdf";
   const isImage = ["jpg", "jpeg", "png", "gif", "webp"].includes(ext);
   const isSpreadsheet = ext === "xlsx";
   const isPreviewable = isPdf || isImage || isSpreadsheet;
+  const canEditHys = Boolean(
+    attachment &&
+      shipmentId &&
+      onAttachmentReplaced &&
+      isSpreadsheet &&
+      isHysAttachment(attachment.name)
+  );
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const sheetPreviewRef = useRef<HTMLDivElement>(null);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hysChangesRef = useRef<Record<string, string>>({});
   const [sheets, setSheets] = useState<SheetPreview[] | null>(null);
   const [activeSheet, setActiveSheet] = useState(0);
   // Callers remount the modal with an attachment URL key, keeping file-specific state isolated.
   const [isLoading, setIsLoading] = useState(isSpreadsheet);
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
+  const [isEditingHys, setIsEditingHys] = useState(false);
+  const [isSavingHys, setIsSavingHys] = useState(false);
+  const [hysSaveError, setHysSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!attachment) return;
@@ -145,6 +160,28 @@ export default function AttachmentPreviewModal({
     return () => controller.abort();
   }, [attachment, isSpreadsheet]);
 
+  useEffect(() => {
+    const container = sheetPreviewRef.current;
+    const sheetName = sheets?.[activeSheet]?.name;
+    if (!container || !sheetName) return;
+
+    container.querySelectorAll<HTMLTableCellElement>("td[data-cell-address]").forEach((cell) => {
+      const address = cell.dataset.cellAddress;
+      if (!address) return;
+
+      const changedValue = hysChangesRef.current[`${sheetName}\u0000${address}`];
+      if (changedValue !== undefined && cell.textContent !== changedValue) {
+        cell.textContent = changedValue;
+      }
+
+      const editable = isEditingHys && cell.dataset.editable === "true";
+      cell.contentEditable = editable ? "true" : "false";
+      cell.spellcheck = false;
+      cell.tabIndex = editable ? 0 : -1;
+      cell.setAttribute("aria-label", editable ? `Sửa ô ${address}` : `Ô ${address}`);
+    });
+  }, [activeSheet, isEditingHys, isSavingHys, sheets]);
+
   if (!attachment) return null;
 
   const activeSheetData = sheets?.[activeSheet] ?? sheets?.[0];
@@ -169,6 +206,63 @@ export default function AttachmentPreviewModal({
     copyResetTimerRef.current = setTimeout(() => setCopyStatus("idle"), 2_000);
   }
 
+  function handleHysInput(event: React.FormEvent<HTMLDivElement>) {
+    if (!isEditingHys || !activeSheetData) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const cell = target.closest<HTMLTableCellElement>("td[data-cell-address]");
+    const address = cell?.dataset.cellAddress;
+    if (!cell || !address || cell.dataset.editable !== "true") return;
+    hysChangesRef.current[`${activeSheetData.name}\u0000${address}`] =
+      (cell.innerText || "").replace(/\r\n/g, "\n");
+  }
+
+  function cancelHysEditing() {
+    hysChangesRef.current = {};
+    setHysSaveError(null);
+    setIsEditingHys(false);
+    if (sheetPreviewRef.current && activeSheetData) {
+      sheetPreviewRef.current.innerHTML = activeSheetData.html;
+    }
+  }
+
+  async function saveHysChanges() {
+    if (!attachment || !shipmentId || !onAttachmentReplaced) return;
+
+    const changes = Object.entries(hysChangesRef.current).map(([key, value]) => {
+      const [sheetName, address] = key.split("\u0000");
+      return { sheetName, address, value };
+    });
+    if (changes.length === 0) {
+      setHysSaveError("Chưa có ô nào được thay đổi.");
+      return;
+    }
+
+    setIsSavingHys(true);
+    setHysSaveError(null);
+    try {
+      const response = await fetch(`/api/shipments/${shipmentId}/attachments/hys`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attachmentUrl: attachment.url, changes }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        throw new Error(json.error || "Không thể lưu tệp HYS.");
+      }
+
+      hysChangesRef.current = {};
+      setIsEditingHys(false);
+      onAttachmentReplaced(attachment, json.data.attachment as Attachment);
+    } catch (saveError) {
+      setHysSaveError(
+        saveError instanceof Error ? saveError.message : "Không thể lưu tệp HYS."
+      );
+    } finally {
+      setIsSavingHys(false);
+    }
+  }
+
   return (
     <div
       ref={dialogRef}
@@ -191,6 +285,19 @@ export default function AttachmentPreviewModal({
         </div>
 
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+          {canEditHys && !isEditingHys && (
+            <button
+              type="button"
+              onClick={() => {
+                hysChangesRef.current = {};
+                setHysSaveError(null);
+                setIsEditingHys(true);
+              }}
+              className="inline-flex h-10 items-center rounded-full px-3 text-sm font-medium text-white/90 hover:bg-white/10 hover:text-white"
+            >
+              Sửa HYS
+            </button>
+          )}
           {isSpreadsheet && activeSheetData && (
             <button
               type="button"
@@ -256,6 +363,39 @@ export default function AttachmentPreviewModal({
             )}
             {sheets && activeSheetData && (
               <>
+                {isEditingHys && (
+                  <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5">
+                    <div>
+                      <p className="text-sm font-medium text-amber-900">
+                        Bấm vào ô cần sửa rồi nhập nội dung mới.
+                      </p>
+                      <p className="text-xs text-amber-700">
+                        Lưu sẽ thay bản HYS hiện tại, không tạo lịch sử chỉnh sửa.
+                      </p>
+                      {hysSaveError && (
+                        <p className="mt-1 text-xs font-medium text-red-600">{hysSaveError}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={cancelHysEditing}
+                        disabled={isSavingHys}
+                        className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Hủy
+                      </button>
+                      <button
+                        type="button"
+                        onClick={saveHysChanges}
+                        disabled={isSavingHys}
+                        className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        {isSavingHys ? "Đang lưu..." : "Lưu HYS"}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <nav className="flex min-h-12 shrink-0 items-end gap-1 overflow-x-auto border-b border-gray-200 px-4" aria-label="Trang tính">
                   {sheets.map((sheet, index) => (
                     <button
@@ -280,7 +420,12 @@ export default function AttachmentPreviewModal({
                   {/* Cell text is escaped by the authenticated Excel preview endpoint. */}
                   <div
                     ref={sheetPreviewRef}
+                    onInput={handleHysInput}
                     className={`mx-auto w-fit max-w-none select-text rounded-sm bg-white text-xs shadow-sm [&_table]:max-w-none [&_td]:px-0.5 [&_td]:py-0 [&_td]:align-middle ${
+                      isEditingHys
+                        ? "[&_td[data-editable='true']]:cursor-text [&_td[data-editable='true']]:outline-1 [&_td[data-editable='true']]:outline-transparent [&_td[data-editable='true']:focus]:relative [&_td[data-editable='true']:focus]:z-10 [&_td[data-editable='true']:focus]:outline-2 [&_td[data-editable='true']:focus]:outline-blue-500"
+                        : ""
+                    } ${
                       activeSheetData.showGridLines ? "[&_td]:border [&_td]:border-gray-200" : ""
                     }`}
                     dangerouslySetInnerHTML={{ __html: activeSheetData.html }}

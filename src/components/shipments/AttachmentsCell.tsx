@@ -113,7 +113,19 @@ export default function AttachmentsCell({
         onChange={handleFileChange}
       />
       {error && <span className="text-xs text-red-600">{error}</span>}
-      <AttachmentPreviewModal key={previewing?.url} attachment={previewing} onClose={() => setPreviewing(null)} />
+      <AttachmentPreviewModal
+        key={previewing?.url}
+        attachment={previewing}
+        shipmentId={shipmentId}
+        onClose={() => setPreviewing(null)}
+        onAttachmentReplaced={(current, replacement) => {
+          const nextAttachments = attachments.map((attachment) =>
+            attachment.url === current.url ? replacement : attachment
+          );
+          onAttached(shipmentId, nextAttachments);
+          setPreviewing(replacement);
+        }}
+      />
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import ExcelJS from "exceljs";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
+import { cellContainsFormula } from "@/lib/hys-workbook";
 import { privateObjectKeyFromUrl, readStoredFile } from "@/lib/private-storage";
 
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
@@ -256,7 +257,10 @@ function worksheetToSafeHtml(sheet: ExcelJS.Worksheet) {
       const cell = sheet.getCell(rowNumber, columnNumber);
       const value = escapeHtml(cellText(cell));
       const style = cellStyle(cell);
-      cells.push(`<td${attributes}${style ? ` style="${style}"` : ""}>${value}</td>`);
+      const canEdit = !cellContainsFormula(cell);
+      cells.push(
+        `<td${attributes} data-cell-address="${cell.address}" data-editable="${canEdit ? "true" : "false"}"${style ? ` style="${style}"` : ""}>${value}</td>`
+      );
     }
     const height = sheet.getRow(rowNumber).height;
     const rowStyle = height && Number.isFinite(height)

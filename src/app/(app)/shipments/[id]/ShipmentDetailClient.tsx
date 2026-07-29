@@ -380,7 +380,25 @@ export default function ShipmentDetailClient({
         </Link>
       )}
 
-      <AttachmentPreviewModal key={previewing?.url} attachment={previewing} onClose={() => setPreviewing(null)} />
+      <AttachmentPreviewModal
+        key={previewing?.url}
+        attachment={previewing}
+        shipmentId={shipmentId}
+        onClose={() => setPreviewing(null)}
+        onAttachmentReplaced={(current, replacement) => {
+          setShipment((existing) =>
+            existing
+              ? {
+                  ...existing,
+                  attachments: (existing.attachments ?? []).map((attachment) =>
+                    attachment.url === current.url ? replacement : attachment
+                  ),
+                }
+              : existing
+          );
+          setPreviewing(replacement);
+        }}
+      />
     </div>
   );
 }

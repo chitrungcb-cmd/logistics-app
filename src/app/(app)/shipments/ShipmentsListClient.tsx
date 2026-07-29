@@ -12,6 +12,7 @@ import {
   channelBadgeClass,
   statusBadgeClass,
   getDeclarationBranches,
+  shipmentRequiresHys,
   CHANNEL_OPTIONS,
   STATUS_OPTIONS,
   type Attachment,
@@ -291,6 +292,7 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
                       <AttachmentsCell
                         shipmentId={shipment.id}
                         attachments={shipment.attachments || []}
+                        requiresHys={shipmentRequiresHys(shipment.goodsName)}
                         onAttached={handleAttached}
                       />
                     </td>

@@ -9,6 +9,8 @@ import ShipmentDetailsTable from "@/components/shipments/ShipmentDetailsTable";
 import TaskStepper from "@/components/shipments/TaskStepper";
 import {
   channelBadgeClass,
+  hasHysAttachment,
+  shipmentRequiresHys,
   statusBadgeClass,
   type Attachment,
 } from "@/lib/shipment-constants";
@@ -312,7 +314,22 @@ export default function ShipmentInfoModal({
                 )}
 
                 <section className="rounded-lg border border-gray-200 bg-white p-5">
-                  <h3 className="mb-3 text-base font-semibold text-gray-900">Chứng từ đính kèm</h3>
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-base font-semibold text-gray-900">Chứng từ đính kèm</h3>
+                    {shipmentRequiresHys(shipment.goodsName) && (
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          hasHysAttachment(shipment.attachments)
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-amber-100 text-amber-800"
+                        }`}
+                      >
+                        {hasHysAttachment(shipment.attachments)
+                          ? "HYS · Đã có chứng từ"
+                          : "HYS · Còn thiếu chứng từ"}
+                      </span>
+                    )}
+                  </div>
                   {shipment.attachments && shipment.attachments.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
                       {shipment.attachments.map((attachment, index) => (

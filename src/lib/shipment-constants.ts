@@ -55,6 +55,40 @@ export type Attachment = {
   uploadedAt: string;
 };
 
+function normalizeDocumentText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replaceAll("đ", "d")
+    .replaceAll("Đ", "D")
+    .toLowerCase();
+}
+
+/**
+ * HYS chỉ được theo dõi cho lô ô tô. Tên hàng từ tờ khai không đồng nhất, nên nhận cả cách viết
+ * "ô tô"/"oto" và những nhóm xe đường bộ thường gặp, nhưng không coi mọi tên bắt đầu bằng "xe"
+ * (ví dụ xe nâng, xe máy chuyên dùng) là ô tô.
+ */
+export function shipmentRequiresHys(goodsName: string | null | undefined) {
+  if (!goodsName) return false;
+  const normalized = normalizeDocumentText(goodsName);
+  return [
+    /(^|[^a-z0-9])o\s*to([^a-z0-9]|$)/,
+    /(^|[^a-z0-9])automobile([^a-z0-9]|$)/,
+    /(^|[^a-z0-9])dau\s+keo([^a-z0-9]|$)/,
+    /(^|[^a-z0-9])xe\s+(tai|ben|tron|khach|con)([^a-z0-9]|$)/,
+    /^\s*\d*\s*tron([^a-z0-9]|$)/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+export function isHysAttachment(filename: string) {
+  return /hys/i.test(filename);
+}
+
+export function hasHysAttachment(attachments: Attachment[] | null | undefined) {
+  return Boolean(attachments?.some((attachment) => isHysAttachment(attachment.name)));
+}
+
 function attachmentIdentity(attachment: Attachment) {
   // Content-addressed private URLs may carry a display-name query. The path is the stored object.
   return attachment.url.split(/[?#]/, 1)[0];

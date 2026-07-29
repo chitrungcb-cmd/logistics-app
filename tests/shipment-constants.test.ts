@@ -4,11 +4,14 @@ import {
   attachmentMatchesDeclaration,
   declarationNumbersFromFilename,
   getDeclarationBranches,
+  hasHysAttachment,
   isClearanceDecisionFilename,
+  isHysAttachment,
   mergeUniqueAttachments,
   mergeDeclarationBranch,
   normalizeDeclarationBranches,
   resolveSyncedShipmentStatus,
+  shipmentRequiresHys,
   sharesDeclarationFamily,
 } from "@/lib/shipment-constants";
 
@@ -103,6 +106,31 @@ describe("attachment deduplication", () => {
         [{ name: "renamed.pdf", url: "/api/attachments/file/attachments/sha256/ab/hash.pdf?name=renamed.pdf", uploadedAt }]
       )
     ).toHaveLength(1);
+  });
+});
+
+describe("HYS document status for automobile shipments", () => {
+  it("recognizes common automobile goods names without flagging machinery", () => {
+    expect(shipmentRequiresHys("10 XE Ô TÔ TRỘN")).toBe(true);
+    expect(shipmentRequiresHys("40 xe đầu kéo SHACMAN")).toBe(true);
+    expect(shipmentRequiresHys("20 ĐẦU KÉO 445")).toBe(true);
+    expect(shipmentRequiresHys("Ô tô tải tự đổ")).toBe(true);
+    expect(shipmentRequiresHys("10 TRỘN")).toBe(true);
+    expect(shipmentRequiresHys("1 MÁY KHOAN CỌC NHỒI CŨ 300")).toBe(false);
+    expect(shipmentRequiresHys("2 XE NÂNG HÀNG")).toBe(false);
+  });
+
+  it("finds HYS documents regardless of filename casing", () => {
+    const uploadedAt = "2026-07-29T00:00:00.000Z";
+    expect(isHysAttachment("HYS_108470288730.pdf")).toBe(true);
+    expect(isHysAttachment("chung-tu-hys-oto.PDF")).toBe(true);
+    expect(isHysAttachment("PACKING LIST.pdf")).toBe(false);
+    expect(
+      hasHysAttachment([
+        { name: "INVOICE.pdf", url: "/invoice.pdf", uploadedAt },
+        { name: "HYS_108470288730.pdf", url: "/hys.pdf", uploadedAt },
+      ])
+    ).toBe(true);
   });
 });
 

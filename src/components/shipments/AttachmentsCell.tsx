@@ -1,16 +1,22 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { mergeUniqueAttachments, type Attachment } from "@/lib/shipment-constants";
+import {
+  hasHysAttachment,
+  mergeUniqueAttachments,
+  type Attachment,
+} from "@/lib/shipment-constants";
 import AttachmentPreviewModal from "./AttachmentPreviewModal";
 
 export default function AttachmentsCell({
   shipmentId,
   attachments,
+  requiresHys = false,
   onAttached,
 }: {
   shipmentId: string;
   attachments: Attachment[];
+  requiresHys?: boolean;
   onAttached: (shipmentId: string, attachments: Attachment[]) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -66,6 +72,17 @@ export default function AttachmentsCell({
 
   return (
     <div className="flex flex-col gap-1">
+      {requiresHys && (
+        <span
+          className={`w-fit rounded-full px-2 py-0.5 text-xs font-medium ${
+            hasHysAttachment(attachments)
+              ? "bg-emerald-100 text-emerald-700"
+              : "bg-amber-100 text-amber-800"
+          }`}
+        >
+          {hasHysAttachment(attachments) ? "HYS · Đã có" : "HYS · Còn thiếu"}
+        </span>
+      )}
       {attachments.length > 0 && (
         <div className="flex flex-col gap-0.5">
           {attachments.map((file, index) => (

@@ -4,9 +4,13 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import Link from "next/link";
 import CustomerCombobox from "@/components/customers/CustomerCombobox";
+import ShipmentVehiclesEditor, {
+  type ShipmentVehicleDraft,
+} from "@/components/shipments/ShipmentVehiclesEditor";
 import {
   CHANNEL_OPTIONS,
   CUSTOMS_TYPE_OPTIONS,
+  shipmentRequiresHys,
   STATUS_OPTIONS,
 } from "@/lib/shipment-constants";
 
@@ -22,6 +26,7 @@ const initialForm = {
   status: STATUS_OPTIONS[0],
   customsOffice: "",
   note: "",
+  vehicles: [] as ShipmentVehicleDraft[],
 };
 
 export default function NewShipmentPage() {
@@ -160,6 +165,13 @@ export default function NewShipmentPage() {
             />
           </Field>
         </div>
+
+        {(shipmentRequiresHys(form.goodsName) || form.vehicles.length > 0) && (
+          <ShipmentVehiclesEditor
+            vehicles={form.vehicles}
+            onChange={(vehicles) => setForm((current) => ({ ...current, vehicles }))}
+          />
+        )}
 
         <Field label="Ghi chú">
           <textarea

@@ -9,6 +9,7 @@ import { ensureShipmentWorkflowTasks } from "@/lib/shipment-workflow";
 import { notifyNewShipmentAssignees } from "@/lib/notifications";
 import { paginationMeta, parsePagination } from "@/lib/pagination";
 import { SHIPMENT_TASK_STEPS } from "@/lib/task-constants";
+import { normalizeShipmentVehicles } from "@/lib/shipment-vehicles";
 
 const SHIPMENT_LIST_SELECT = {
   id: true,
@@ -27,6 +28,14 @@ const SHIPMENT_LIST_SELECT = {
   status: true,
   customsOffice: true,
   attachments: true,
+  vehicles: {
+    select: {
+      id: true,
+      chassisNo: true,
+      engineNo: true,
+    },
+    orderBy: { createdAt: "asc" as const },
+  },
 } as const;
 
 const SHIPMENT_LIST_ORDER: Prisma.ShipmentOrderByWithRelationInput[] = [
@@ -65,6 +74,16 @@ export async function GET(request: NextRequest) {
               { declarationNo: { contains: search, mode: "insensitive" } },
               { goodsName: { contains: search, mode: "insensitive" } },
               { invoiceNo: { contains: search, mode: "insensitive" } },
+              {
+                vehicles: {
+                  some: {
+                    OR: [
+                      { chassisNo: { contains: search.replace(/\s+/g, ""), mode: "insensitive" } },
+                      { engineNo: { contains: search.replace(/\s+/g, ""), mode: "insensitive" } },
+                    ],
+                  },
+                },
+              },
             ],
           }
         : {}),
@@ -134,6 +153,16 @@ export async function POST(request: NextRequest) {
       return apiError("Thiếu thông tin khách hàng.", 400);
     }
 
+    let vehicles;
+    try {
+      vehicles = normalizeShipmentVehicles(body.vehicles ?? []);
+    } catch (vehicleError) {
+      return apiError(
+        vehicleError instanceof Error ? vehicleError.message : "Thông tin số khung, số máy không hợp lệ.",
+        400
+      );
+    }
+
     const shipment = await prisma.shipment.create({
       data: {
         shipmentCode: generateShipmentCode(),
@@ -150,6 +179,13 @@ export async function POST(request: NextRequest) {
         status: body.status || undefined,
         customsOffice: body.customsOffice || null,
         note: body.note || null,
+        vehicles: vehicles.length > 0 ? { create: vehicles } : undefined,
+      },
+      include: {
+        vehicles: {
+          select: { id: true, chassisNo: true, engineNo: true },
+          orderBy: { createdAt: "asc" },
+        },
       },
     });
 
@@ -161,6 +197,9 @@ export async function POST(request: NextRequest) {
 
     return apiSuccess(shipment, 201);
   } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+      return apiError("Số khung hoặc số máy đã thuộc một lô hàng khác.", 409);
+    }
     console.error("POST /api/shipments failed:", error);
     return apiError("Không thể tạo lô hàng mới.", 500);
   }

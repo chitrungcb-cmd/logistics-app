@@ -1,5 +1,11 @@
 import type { Attachment } from "./shipment-constants";
 
+export type ShipmentVehicleDTO = {
+  id: string;
+  chassisNo: string | null;
+  engineNo: string | null;
+};
+
 export type ShipmentDTO = {
   id: string;
   shipmentCode: string;
@@ -23,6 +29,7 @@ export type ShipmentDTO = {
   note: string | null;
   consultationDate: string | null;
   declarationBranches: string[] | null;
+  vehicles: ShipmentVehicleDTO[];
   createdAt: string;
   updatedAt: string;
 };

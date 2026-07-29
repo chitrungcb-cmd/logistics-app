@@ -29,48 +29,63 @@ model Customer {
 }
 
 model Shipment {
-  id                  String              @id @default(cuid())
-  shipmentCode        String              @unique
-  customerName        String
-  customer            Customer?           @relation(fields: [customerId], references: [id])
-  customerId          String?
-  taxCode             String?
-  declarationNo       String?
-  declarationDate     DateTime?
-  invoiceNo           String?
-  customsType         String?
-  port                String?
-  goodsName           String?
-  channel             String?
-  status              String              @default("Đang làm thủ tục")
-  customsOffice       String?
-  transport           String?
-  transportRoute      String?
-  vehiclePlate        String?
-  totalAmount         Float               @default(0)
-  attachments         Json?
-  note                String?
-  consultationDate    DateTime?
-  declarationBranches Json?
+  id                   String                @id @default(cuid())
+  shipmentCode         String                @unique
+  customerName         String
+  customer             Customer?             @relation(fields: [customerId], references: [id])
+  customerId           String?
+  taxCode              String?
+  declarationNo        String?
+  declarationDate      DateTime?
+  invoiceNo            String?
+  customsType          String?
+  port                 String?
+  goodsName            String?
+  channel              String?
+  status               String                @default("Đang làm thủ tục")
+  customsOffice        String?
+  transport            String?
+  transportRoute       String?
+  vehiclePlate         String?
+  totalAmount          Float                 @default(0)
+  attachments          Json?
+  note                 String?
+  consultationDate     DateTime?
+  declarationBranches  Json?
   // Phân bổ báo giá nhập tay: khi một trong hai giá trị khác null thì Tổng báo giá = tổng hai
   // giá trị này (thay cho tổng bảng chi tiết). Null = chưa nhập tay, dùng tổng dòng như cũ.
   quoteInvoiceAmount   Float?
   quoteNoInvoiceAmount Float?
-  tasks               Task[]
-  notifications       Notification[]
-  costs               ShipmentCost[]
-  quotes              Quote[]
-  quoteLines          ShipmentQuoteLine[]
-  conversations       Conversation[]
-  debts               Debt[]
-  vendorInvoices      VendorInvoice[]
+  tasks                Task[]
+  notifications        Notification[]
+  costs                ShipmentCost[]
+  quotes               Quote[]
+  quoteLines           ShipmentQuoteLine[]
+  conversations        Conversation[]
+  debts                Debt[]
+  vendorInvoices       VendorInvoice[]
+  vehicles             ShipmentVehicle[]
   personalAccountEntry PersonalAccountEntry?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
 
   @@index([declarationDate, createdAt])
   @@index([status])
   @@index([channel])
+}
+
+// Một lô ô tô có thể chứa nhiều xe. Lưu riêng từng cặp số khung/số máy để tra cứu chính xác lô
+// thay vì nhét danh sách vào ghi chú hoặc một cột văn bản không thể tìm kiếm đáng tin cậy.
+model ShipmentVehicle {
+  id         String   @id @default(cuid())
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  shipmentId String
+  chassisNo  String?  @unique
+  engineNo   String?  @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([shipmentId])
 }
 
 enum CostCategory {
@@ -90,30 +105,30 @@ enum CostCategory {
 // already covered by the quote don't get counted twice. Access is controlled by the explicit COSTS
 // and REPORTS module permissions at both page and API layers.
 model ShipmentCost {
-  id             String          @id @default(cuid())
-  shipment       Shipment        @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  shipmentId     String
-  category       CostCategory
-  unitPrice      Float           @default(0)
-  quantity       Float           @default(1)
+  id                       String          @id @default(cuid())
+  shipment                 Shipment        @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  shipmentId               String
+  category                 CostCategory
+  unitPrice                Float           @default(0)
+  quantity                 Float           @default(1)
   // Always server-computed as unitPrice * quantity (see /api/costs) — never accept this directly
   // from a client write.
-  costPrice      Float           @default(0)
-  sellPrice      Float           @default(0)
-  isAdditional   Boolean         @default(false)
+  costPrice                Float           @default(0)
+  sellPrice                Float           @default(0)
+  isAdditional             Boolean         @default(false)
   // Preset-generated rows remain estimates until a user edits or explicitly confirms them.
-  isActual       Boolean         @default(true)
-  invoiceNumber  String?
-  attachmentUrl  String?
+  isActual                 Boolean         @default(true)
+  invoiceNumber            String?
+  attachmentUrl            String?
   // Đơn vị tính (lần, xe, chuyến...) và tên hạng mục tùy chỉnh do người dùng gõ — category enum vẫn
   // giữ nguyên cho màu sắc/so sánh/cảnh báo; customLabel chỉ là nhãn hiển thị thêm cho từng dòng.
-  unit           String?
-  customLabel    String?
-  note           String?
+  unit                     String?
+  customLabel              String?
+  note                     String?
   // Người đứng ra chi khoản này ("do ai chi") — mô-đun Tài khoản cá nhân tổng hợp "ai chi bao nhiêu".
   // SetNull khi user bị xóa để không vỡ FK (user chỉ bị khóa chứ hiếm khi xóa, xem User.isActive).
-  paidBy         User?           @relation("CostPaidBy", fields: [paidByUserId], references: [id], onDelete: SetNull)
-  paidByUserId   String?
+  paidBy                   User?           @relation("CostPaidBy", fields: [paidByUserId], references: [id], onDelete: SetNull)
+  paidByUserId             String?
   // "Chi từ TK": trỏ tới 1 tài khoản công ty; nếu null mà paidByUserId có giá trị = chi từ TK cá nhân
   // người đó; cả hai null = chưa chọn. Đúng một trong hai được đặt. Dùng cho báo cáo thu–chi theo TK.
   paidFromCompanyAccount   CompanyAccount? @relation("CostPaidFromCompanyAccount", fields: [paidFromCompanyAccountId], references: [id], onDelete: SetNull)
@@ -124,14 +139,14 @@ model ShipmentCost {
   paidAt                   DateTime?
   paidConfirmedBy          User?           @relation("CostPaidConfirmedBy", fields: [paidConfirmedByUserId], references: [id], onDelete: SetNull)
   paidConfirmedByUserId    String?
-  vendor         Vendor?         @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  vendorId       String?
-  preset         CostPreset?     @relation(fields: [presetId], references: [id], onDelete: SetNull)
-  presetId       String?
-  auditLogs      CostAuditLog[]
-  vendorInvoices VendorInvoice[]
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  vendor                   Vendor?         @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorId                 String?
+  preset                   CostPreset?     @relation(fields: [presetId], references: [id], onDelete: SetNull)
+  presetId                 String?
+  auditLogs                CostAuditLog[]
+  vendorInvoices           VendorInvoice[]
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
 
   @@unique([shipmentId, presetId])
   @@index([vendorId])
@@ -143,14 +158,14 @@ model ShipmentCost {
 // Tài khoản công ty (nhiều TK ngân hàng, có thể thuộc cả 2 công ty) — nguồn chi/thu chính thức.
 // "Chi từ TK" trên chi phí trỏ vào đây; báo cáo thu–chi tổng hợp theo từng tài khoản.
 model CompanyAccount {
-  id        String         @id @default(cuid())
-  name      String
-  isActive  Boolean        @default(true)
-  costs     ShipmentCost[] @relation("CostPaidFromCompanyAccount")
-  costPresets CostPreset[] @relation("CostPresetPaidFrom")
-  paymentsReceived Payment[] @relation("PaymentReceivedToCompanyAccount")
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  id               String         @id @default(cuid())
+  name             String
+  isActive         Boolean        @default(true)
+  costs            ShipmentCost[] @relation("CostPaidFromCompanyAccount")
+  costPresets      CostPreset[]   @relation("CostPresetPaidFrom")
+  paymentsReceived Payment[]      @relation("PaymentReceivedToCompanyAccount")
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 }
 
 enum OtherExpenseCategory {
@@ -191,35 +206,35 @@ model OtherExpense {
 // Bảng giá chi phí được thiết lập trước theo nhóm tên hàng. Khi lô có số tờ khai, các dòng đang
 // hoạt động được sao chép sang ShipmentCost và liên kết bằng presetId để không tạo trùng.
 model CostPreset {
-  id            String         @id @default(cuid())
-  goodsName     String
-  goodsKeyword  String
+  id                       String          @id @default(cuid())
+  goodsName                String
+  goodsKeyword             String
   // Cửa khẩu áp dụng (so khớp với Shipment.port đã chuẩn hóa). "" = áp cho MỌI cửa khẩu (mặc định
   // dùng khi không có bộ giá riêng cho cửa khẩu của lô). Bộ giá theo cửa khẩu cụ thể được ưu tiên.
-  customsGate   String         @default("")
-  category      CostCategory
-  unitPrice     Float
-  quantity      Float          @default(1)
+  customsGate              String          @default("")
+  category                 CostCategory
+  unitPrice                Float
+  quantity                 Float           @default(1)
   // Nhãn hạng mục tùy chỉnh (vd "Lái xe chuyên trách" cho hạng mục "Khác"); áp sang ShipmentCost.customLabel.
-  customLabel   String?
+  customLabel              String?
   // Mốc áp dụng: giá này có hiệu lực cho lô có NGÀY TỜ KHAI >= effectiveFrom. Mỗi (nhóm hàng, cửa khẩu,
   // hạng mục) có thể có nhiều mốc; lô lấy mốc gần nhất TRƯỚC ngày tờ khai. "Từ đầu" = 1970-01-01.
-  effectiveFrom DateTime
+  effectiveFrom            DateTime
   // Đơn vị tính mặc định (lần, xe, chuyến...) áp sang ShipmentCost.unit.
-  unit          String?
+  unit                     String?
   // Tài khoản chi mặc định: chi từ TK công ty (paidFromCompanyAccountId) HOẶC TK cá nhân của người
   // (paidByUserId). Đúng một trong hai; áp sang ShipmentCost khi sinh chi phí.
-  paidBy        User?          @relation("CostPresetPaidBy", fields: [paidByUserId], references: [id], onDelete: SetNull)
-  paidByUserId  String?
+  paidBy                   User?           @relation("CostPresetPaidBy", fields: [paidByUserId], references: [id], onDelete: SetNull)
+  paidByUserId             String?
   paidFromCompanyAccount   CompanyAccount? @relation("CostPresetPaidFrom", fields: [paidFromCompanyAccountId], references: [id], onDelete: SetNull)
   paidFromCompanyAccountId String?
-  note          String?
-  vendor        Vendor?        @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  vendorId      String?
-  isActive      Boolean        @default(true)
-  shipmentCosts ShipmentCost[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  note                     String?
+  vendor                   Vendor?         @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorId                 String?
+  isActive                 Boolean         @default(true)
+  shipmentCosts            ShipmentCost[]
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
 
   @@unique([goodsKeyword, customsGate, category, effectiveFrom])
   @@index([vendorId])
@@ -409,40 +424,40 @@ enum DebtPortion {
 // NQ Logistics nợ nhà cung cấp/đối tác) — the two id fields are mutually exclusive by convention of
 // `type`, not enforced at the DB level (see validation in POST /api/debts).
 model Debt {
-  id          String     @id @default(cuid())
-  type        DebtType
+  id              String     @id @default(cuid())
+  type            DebtType
   // Khóa chỉ có ở công nợ đồng bộ từ tài chính lô hàng; unique để mọi lần lưu sau chỉ upsert.
-  sourceKey   String?    @unique
-  customer    Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  customerId  String?
-  vendor      Vendor?    @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  vendorId    String?
-  shipment    Shipment?  @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
-  shipmentId  String?
-  totalAmount Float
+  sourceKey       String?    @unique
+  customer        Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerId      String?
+  vendor          Vendor?    @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorId        String?
+  shipment        Shipment?  @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  shipmentId      String?
+  totalAmount     Float
   // Tách phần có hóa đơn (chưa VAT) / không hóa đơn của công nợ phải thu đồng bộ từ báo giá. Cả hai
   // null = công nợ KHÔNG tách (mặc định, mọi công nợ phải trả và công nợ nhập tay) — thanh toán trừ
   // vào tổng chung. Khi tách, invoiceAmount + noInvoiceAmount = totalAmount và mỗi Payment gắn portion.
   invoiceAmount   Float?
   noInvoiceAmount Float?
-  dueDate     DateTime?
-  status      DebtStatus @default(UNPAID)
-  note        String?
-  payments    Payment[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  dueDate         DateTime?
+  status          DebtStatus @default(UNPAID)
+  note            String?
+  payments        Payment[]
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 
   @@index([type, createdAt])
   @@index([dueDate])
 }
 
 model Payment {
-  id            String       @id @default(cuid())
-  debt          Debt         @relation(fields: [debtId], references: [id], onDelete: Cascade)
-  debtId        String
-  amount        Float
-  paymentDate   DateTime
-  method        String?
+  id                         String          @id @default(cuid())
+  debt                       Debt            @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  debtId                     String
+  amount                     Float
+  paymentDate                DateTime
+  method                     String?
   // "TK nhận tiền": thu vào TK công ty (receivedToCompanyAccountId) hoặc TK cá nhân của một người
   // (receivedByUserId) — loại trừ nhau. Đối xứng với "Chi từ TK" bên ShipmentCost, để theo dõi dòng
   // tiền công ty vs cá nhân. SetNull khi bản ghi gốc bị xóa để không vỡ FK.
@@ -451,10 +466,10 @@ model Payment {
   receivedBy                 User?           @relation("PaymentReceivedBy", fields: [receivedByUserId], references: [id], onDelete: SetNull)
   receivedByUserId           String?
   // Phần được trả (chỉ dùng cho công nợ phải thu tách hóa đơn); null với công nợ không tách.
-  portion       DebtPortion?
-  attachmentUrl String?
-  note          String?
-  createdAt     DateTime     @default(now())
+  portion                    DebtPortion?
+  attachmentUrl              String?
+  note                       String?
+  createdAt                  DateTime        @default(now())
 
   @@index([receivedToCompanyAccountId])
   @@index([receivedByUserId])
@@ -467,37 +482,37 @@ enum UserRole {
 }
 
 model User {
-  id                      String               @id @default(cuid())
-  email                   String               @unique
+  id                      String                 @id @default(cuid())
+  email                   String                 @unique
   passwordHash            String
   name                    String
-  role                    UserRole             @default(FIELD_STAFF)
+  role                    UserRole               @default(FIELD_STAFF)
   // Danh sách mô-đun được phép mở. Vai trò vẫn quyết định các thao tác nhạy cảm bên trong mô-đun.
-  modulePermissions       String[]             @default([])
+  modulePermissions       String[]               @default([])
   // Soft lock instead of delete (audit 3.3): a departed employee is locked, not deleted, so their
   // task/message history stays intact and no FK constraints break. A locked user can't log in and
   // getCurrentUser() treats them as unauthenticated, so any live session stops working immediately.
-  isActive                Boolean              @default(true)
-  tasksAssigned           Task[]               @relation("AssignedTasks")
-  tasksCreated            Task[]               @relation("CreatedTasks")
-  customersAssigned       Customer[]           @relation("CustomerAssignments")
+  isActive                Boolean                @default(true)
+  tasksAssigned           Task[]                 @relation("AssignedTasks")
+  tasksCreated            Task[]                 @relation("CreatedTasks")
+  customersAssigned       Customer[]             @relation("CustomerAssignments")
   notifications           Notification[]
   costAuditLogs           CostAuditLog[]
-  costsPaid               ShipmentCost[]       @relation("CostPaidBy")
-  costsPaidConfirmed      ShipmentCost[]       @relation("CostPaidConfirmedBy")
-  costPresetsPaidBy       CostPreset[]         @relation("CostPresetPaidBy")
-  paymentsReceived        Payment[]            @relation("PaymentReceivedBy")
-  otherExpensesCreated    OtherExpense[]       @relation("OtherExpenseCreator")
+  costsPaid               ShipmentCost[]         @relation("CostPaidBy")
+  costsPaidConfirmed      ShipmentCost[]         @relation("CostPaidConfirmedBy")
+  costPresetsPaidBy       CostPreset[]           @relation("CostPresetPaidBy")
+  paymentsReceived        Payment[]              @relation("PaymentReceivedBy")
+  otherExpensesCreated    OtherExpense[]         @relation("OtherExpenseCreator")
   taskStatusLogs          TaskStatusLog[]
-  conversationsCreated    Conversation[]       @relation("CreatedConversations")
+  conversationsCreated    Conversation[]         @relation("CreatedConversations")
   conversationMemberships ConversationMember[]
-  sentMessages            Message[]            @relation("SentMessages")
-  mentions                MessageMention[]     @relation("MentionedInMessages")
+  sentMessages            Message[]              @relation("SentMessages")
+  mentions                MessageMention[]       @relation("MentionedInMessages")
   personalAccountEntries  PersonalAccountEntry[] @relation("PersonalAccountAssignee")
-  passwordResetsReceived  PasswordResetLog[]   @relation("ResetTarget")
-  passwordResetsPerformed PasswordResetLog[]   @relation("ResetBy")
-  createdAt               DateTime             @default(now())
-  updatedAt               DateTime             @updatedAt
+  passwordResetsReceived  PasswordResetLog[]     @relation("ResetTarget")
+  passwordResetsPerformed PasswordResetLog[]     @relation("ResetBy")
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
 }
 
 // Audit trail for BƯỚC 3 — who reset whose password, when. The password itself is never stored

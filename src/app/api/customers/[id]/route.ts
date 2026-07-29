@@ -29,7 +29,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     include: {
       assignedUser: { select: { id: true, name: true, email: true } },
       shipments: {
-        orderBy: { createdAt: "desc" },
+        orderBy: [
+          { declarationDate: { sort: "desc", nulls: "last" } },
+          { createdAt: "desc" },
+        ],
         select: {
           id: true,
           declarationNo: true,

@@ -10,7 +10,7 @@ import {
 } from "@/lib/hys-workbook";
 import { prisma } from "@/lib/prisma";
 import { readStoredFile } from "@/lib/private-storage";
-import { saveUploadedFile } from "@/lib/save-upload";
+import { saveEditableUploadedFile } from "@/lib/save-upload";
 import { isHysAttachment, type Attachment } from "@/lib/shipment-constants";
 import { UnsafeUploadError } from "@/lib/file-security";
 
@@ -103,7 +103,12 @@ export async function POST(
     }
 
     const output = Buffer.from(await workbook.xlsx.writeBuffer());
-    const saved = await saveUploadedFile(currentAttachment.name, output);
+    const saved = await saveEditableUploadedFile(
+      currentAttachment.name,
+      currentAttachment.url,
+      id,
+      output
+    );
     const replacement: Attachment = {
       name: currentAttachment.name,
       url: saved.url,
@@ -123,8 +128,8 @@ export async function POST(
       );
       if (targetIndex < 0) throw new Error("HYS_CHANGED");
 
-      // Replace the current reference in place. The old version is not appended, so the shipment
-      // always displays only the latest HYS and no edit-history row is created.
+      // The same attachment row is updated in place. Its mutable storage slot is overwritten on
+      // later saves, so the shipment never accumulates HYS versions or history entries.
       latestAttachments[targetIndex] = replacement;
       await transaction.shipment.update({
         where: { id },

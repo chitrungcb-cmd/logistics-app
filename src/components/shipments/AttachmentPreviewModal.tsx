@@ -138,6 +138,7 @@ export default function AttachmentPreviewModal({
     const controller = new AbortController();
     fetch(`/api/attachments/preview?url=${encodeURIComponent(attachment.url)}`, {
       credentials: "same-origin",
+      cache: "no-store",
       signal: controller.signal,
     })
       .then(async (res) => {
@@ -370,7 +371,7 @@ export default function AttachmentPreviewModal({
                         Bấm vào ô cần sửa rồi nhập nội dung mới.
                       </p>
                       <p className="text-xs text-amber-700">
-                        Lưu sẽ thay bản HYS hiện tại, không tạo lịch sử chỉnh sửa.
+                        Lưu sẽ ghi đè tệp HYS hiện tại, không tạo bản mới hoặc lịch sử chỉnh sửa.
                       </p>
                       {hysSaveError && (
                         <p className="mt-1 text-xs font-medium text-red-600">{hysSaveError}</p>

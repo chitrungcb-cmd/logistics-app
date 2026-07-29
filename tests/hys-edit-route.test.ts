@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   findLatestShipment: vi.fn(),
   updateShipment: vi.fn(),
   readStoredFile: vi.fn(),
-  saveUploadedFile: vi.fn(),
+  saveEditableUploadedFile: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({
@@ -33,7 +33,7 @@ vi.mock("@/lib/private-storage", () => ({
 }));
 
 vi.mock("@/lib/save-upload", () => ({
-  saveUploadedFile: mocks.saveUploadedFile,
+  saveEditableUploadedFile: mocks.saveEditableUploadedFile,
 }));
 
 import { POST } from "@/app/api/shipments/[id]/attachments/hys/route";
@@ -62,7 +62,7 @@ describe("HYS attachment replacement", () => {
     mocks.updateShipment.mockResolvedValue({ id: "shipment-1" });
   });
 
-  it("changes only selected cells and replaces the current HYS reference without history", async () => {
+  it("changes only selected cells and retains one current HYS without history", async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("HYS");
     sheet.getCell("A1").value = "SỐ KHUNG CŨ";
@@ -78,9 +78,14 @@ describe("HYS attachment replacement", () => {
     );
 
     let savedBuffer: Buffer | null = null;
-    mocks.saveUploadedFile.mockImplementation(async (_name: string, buffer: Buffer) => {
+    mocks.saveEditableUploadedFile.mockImplementation(async (
+      _name: string,
+      _url: string,
+      _scopeId: string,
+      buffer: Buffer
+    ) => {
       savedBuffer = buffer;
-      return { name: currentHys.name, url: "/uploads/new-hys.xlsx" };
+      return { name: currentHys.name, url: "/uploads/editable-current-hys.xlsx" };
     });
 
     const request = new NextRequest(
@@ -100,10 +105,16 @@ describe("HYS attachment replacement", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.data.attachment.url).toBe("/uploads/new-hys.xlsx");
+    expect(payload.data.attachment.url).toBe("/uploads/editable-current-hys.xlsx");
+    expect(mocks.saveEditableUploadedFile).toHaveBeenCalledWith(
+      currentHys.name,
+      currentHys.url,
+      "shipment-1",
+      expect.any(Buffer)
+    );
     const updatedAttachments = mocks.updateShipment.mock.calls[0][0].data.attachments;
     expect(updatedAttachments).toHaveLength(2);
-    expect(updatedAttachments[0].url).toBe("/uploads/new-hys.xlsx");
+    expect(updatedAttachments[0].url).toBe("/uploads/editable-current-hys.xlsx");
     expect(updatedAttachments.some((item: { url: string }) => item.url === currentHys.url)).toBe(false);
     expect(updatedAttachments[1]).toEqual(invoice);
 

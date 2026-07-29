@@ -428,7 +428,7 @@ export default function ShipmentInfoModal({
       </div>
 
       <AttachmentPreviewModal
-        key={previewing?.url}
+        key={`${previewing?.url}-${previewing?.uploadedAt}`}
         attachment={previewing}
         shipmentId={shipmentId}
         onClose={() => setPreviewing(null)}

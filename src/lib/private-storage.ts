@@ -141,6 +141,29 @@ export async function uploadPrivateObject(fileName: string, buffer: Buffer) {
   return { key, url: privateFileUrl(key, fileName) };
 }
 
+/** Replaces the bytes at an existing private object key without creating another attachment URL. */
+export async function overwritePrivateObject(key: string, fileName: string, buffer: Buffer) {
+  if (!isSafeObjectKey(key) || !key.startsWith(`${OBJECT_ROOT}/editable/`)) {
+    throw new Error("Invalid editable private storage object key.");
+  }
+  const config = requireStorageConfig();
+  const response = await fetch(
+    `${config.baseUrl}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodePath(key)}`,
+    {
+      method: "POST",
+      headers: {
+        ...storageHeaders(config),
+        "Content-Type": contentTypeForFileName(fileName),
+        "Cache-Control": "private, no-store",
+        "x-upsert": "true",
+      },
+      body: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
+      cache: "no-store",
+    }
+  );
+  if (!response.ok) throw await storageError(response);
+}
+
 export async function fetchPrivateObject(key: string, range?: string | null) {
   if (!isSafeObjectKey(key)) throw new Error("Invalid private storage object key.");
   const config = requireStorageConfig();

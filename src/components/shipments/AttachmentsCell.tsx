@@ -114,7 +114,7 @@ export default function AttachmentsCell({
       />
       {error && <span className="text-xs text-red-600">{error}</span>}
       <AttachmentPreviewModal
-        key={previewing?.url}
+        key={`${previewing?.url}-${previewing?.uploadedAt}`}
         attachment={previewing}
         shipmentId={shipmentId}
         onClose={() => setPreviewing(null)}

@@ -65,7 +65,6 @@ model Shipment {
   debts                Debt[]
   vendorInvoices       VendorInvoice[]
   vehicles             ShipmentVehicle[]
-  internalTransfers    InternalTransfer[]
   personalAccountEntry PersonalAccountEntry?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
@@ -476,28 +475,31 @@ model Payment {
   @@index([receivedByUserId])
 }
 
-// Chuyển tiền nội bộ giữa hai cá nhân. Đây chỉ là điều chuyển người đang giữ tiền, không phải
-// doanh thu hoặc chi phí mới nên báo cáo tổng Thu/Chi không cộng các dòng này.
+enum InternalTransferType {
+  ADVANCE
+  RETURN
+}
+
+// Tạm ứng/hoàn ứng giữa hai cá nhân. Đây chỉ là điều chuyển người đang giữ tiền, không phải
+// doanh thu hoặc chi phí mới và không thuộc một lô hàng cụ thể.
 model InternalTransfer {
-  id           String    @id @default(cuid())
+  id           String               @id @default(cuid())
+  type         InternalTransferType @default(ADVANCE)
   transferDate DateTime
   amount       Float
-  fromUser     User      @relation("InternalTransferFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  fromUser     User                 @relation("InternalTransferFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
   fromUserId   String
-  toUser       User      @relation("InternalTransferTo", fields: [toUserId], references: [id], onDelete: Restrict)
+  toUser       User                 @relation("InternalTransferTo", fields: [toUserId], references: [id], onDelete: Restrict)
   toUserId     String
-  shipment     Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
-  shipmentId   String?
   note         String?
-  createdBy    User?     @relation("InternalTransferCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy    User?                @relation("InternalTransferCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   createdById  String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
 
   @@index([transferDate])
   @@index([fromUserId])
   @@index([toUserId])
-  @@index([shipmentId])
 }
 
 enum UserRole {

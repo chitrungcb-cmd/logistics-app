@@ -25,7 +25,6 @@ export async function GET() {
     transferInByPerson,
     transferOutByPerson,
     transfers,
-    shipmentOptions,
   ] = await Promise.all([
     prisma.companyAccount.findMany({ orderBy: [{ isActive: "desc" }, { name: "asc" }] }),
     prisma.user.findMany({ where: { isActive: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
@@ -77,34 +76,12 @@ export async function GET() {
       orderBy: [{ transferDate: "desc" }, { createdAt: "desc" }],
       select: {
         id: true,
+        type: true,
         transferDate: true,
         amount: true,
         note: true,
         fromUser: { select: { id: true, name: true } },
         toUser: { select: { id: true, name: true } },
-        shipment: {
-          select: {
-            id: true,
-            declarationNo: true,
-            declarationDate: true,
-            goodsName: true,
-            customerName: true,
-          },
-        },
-      },
-    }),
-    prisma.shipment.findMany({
-      orderBy: [
-        { declarationDate: { sort: "desc", nulls: "last" } },
-        { createdAt: "desc" },
-      ],
-      take: 300,
-      select: {
-        id: true,
-        declarationNo: true,
-        declarationDate: true,
-        goodsName: true,
-        customerName: true,
       },
     }),
   ]);
@@ -133,6 +110,5 @@ export async function GET() {
   return apiSuccess({
     ...report,
     transfers,
-    shipmentOptions,
   });
 }

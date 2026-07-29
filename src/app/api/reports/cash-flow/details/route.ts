@@ -76,12 +76,12 @@ export async function GET(request: NextRequest) {
       orderBy: [{ transferDate: "desc" }, { createdAt: "desc" }],
       select: {
         id: true,
+        type: true,
         transferDate: true,
         amount: true,
         note: true,
         fromUser: { select: { id: true, name: true } },
         toUser: { select: { id: true, name: true } },
-        shipment: { select: SHIPMENT_SELECT },
       },
     }),
   ]);
@@ -116,11 +116,14 @@ export async function GET(request: NextRequest) {
         type: isIncoming ? ("TRANSFER_IN" as const) : ("TRANSFER_OUT" as const),
         date: transfer.transferDate,
         amount: transfer.amount,
-        label: isIncoming ? "Nhận chuyển nội bộ" : "Chuyển nội bộ",
+        label:
+          transfer.type === "ADVANCE"
+            ? (isIncoming ? "Nhận tạm ứng" : "Đã tạm ứng")
+            : (isIncoming ? "Nhận hoàn ứng" : "Hoàn ứng"),
         counterparty: isIncoming ? transfer.fromUser.name : transfer.toUser.name,
         invoiceNumber: null,
         note: transfer.note,
-        shipment: transfer.shipment,
+        shipment: null,
       };
     }),
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());

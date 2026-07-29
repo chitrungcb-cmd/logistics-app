@@ -30,12 +30,12 @@ type Account = {
 
 type Transfer = {
   id: string;
+  type: "ADVANCE" | "RETURN";
   transferDate: string;
   amount: number;
   note: string | null;
   fromUser: { id: string; name: string };
   toUser: { id: string; name: string };
-  shipment: ShipmentRef | null;
 };
 
 type Report = {
@@ -44,7 +44,6 @@ type Report = {
   unassignedChi: { amount: number; count: number };
   unassignedThu: { amount: number; count: number };
   transfers: Transfer[];
-  shipmentOptions: ShipmentRef[];
 };
 
 type LedgerEntry = {
@@ -263,13 +262,13 @@ export default function CashFlowReportClient({
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="font-semibold text-gray-900">Tổng hợp theo cá nhân</h2>
-                <p className="mt-0.5 text-xs text-gray-500">
-                  Chuyển nội bộ chỉ điều chuyển số dư giữa hai người, không cộng vào tổng thu hoặc tổng chi công ty.
+              <p className="mt-0.5 text-xs text-gray-500">
+                  Tạm ứng và hoàn ứng chỉ điều chuyển số dư giữa hai người, không cộng vào tổng thu hoặc tổng chi công ty.
                 </p>
               </div>
               {canManageTransfers && (
                 <button type="button" onClick={() => setShowTransferModal(true)} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-                  + Ghi nhận chuyển nội bộ
+                  + Ghi nhận tạm ứng/hoàn ứng
                 </button>
               )}
             </div>
@@ -312,7 +311,6 @@ export default function CashFlowReportClient({
           {showTransferModal && (
             <TransferModal
               persons={report.persons}
-              shipmentOptions={report.shipmentOptions}
               onClose={() => setShowTransferModal(false)}
               onSaved={handleTransferSaved}
             />
@@ -401,8 +399,8 @@ function PersonTable({
             <th className="py-2">Cá nhân</th>
             <th className="py-2 text-right">Nhận từ lô hàng</th>
             <th className="py-2 text-right">Chi cho lô hàng</th>
-            <th className="py-2 text-right">Nhận nội bộ</th>
-            <th className="py-2 text-right">Chuyển nội bộ</th>
+            <th className="py-2 text-right">Nhận tạm/hoàn ứng</th>
+            <th className="py-2 text-right">Đã tạm/hoàn ứng</th>
             <th className="py-2 text-right">Số dư đang giữ</th>
             <th className="py-2 text-right">Chi tiết</th>
           </tr>
@@ -507,7 +505,7 @@ function PersonLedger({
           ["ALL", "Tất cả"],
           ["RECEIPT", "Đã nhận"],
           ["EXPENSE", "Đã chi"],
-          ["TRANSFER", "Chuyển nội bộ"],
+          ["TRANSFER", "Tạm ứng/hoàn ứng"],
         ] as const).map(([value, label]) => (
           <button
             key={value}
@@ -588,8 +586,8 @@ function TransferLedger({ transfers, onAdd }: { transfers: Transfer[]; onAdd?: (
     <section className="rounded-xl border border-gray-200 bg-white p-5">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h2 className="font-semibold text-gray-900">Chuyển nội bộ giữa cá nhân</h2>
-          <p className="mt-0.5 text-xs text-gray-500">Một dòng duy nhất thể hiện rõ ai chuyển, ai nhận và lô hàng liên quan.</p>
+          <h2 className="font-semibold text-gray-900">Tạm ứng và hoàn ứng giữa cá nhân</h2>
+          <p className="mt-0.5 text-xs text-gray-500">Theo dõi rõ ai đưa tiền trước, ai nhận và khoản nào được hoàn lại.</p>
         </div>
         {onAdd && (
           <button type="button" onClick={onAdd} className="rounded-md border border-blue-200 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50">+ Thêm</button>
@@ -600,23 +598,27 @@ function TransferLedger({ transfers, onAdd }: { transfers: Transfer[]; onAdd?: (
           <thead className="bg-gray-50 text-left text-gray-500">
             <tr>
               <th className="px-3 py-2">Ngày chuyển</th>
+              <th className="px-3 py-2">Nghiệp vụ</th>
               <th className="px-3 py-2">Người chuyển</th>
               <th className="px-3 py-2">Người nhận</th>
-              <th className="px-3 py-2">Lô hàng liên quan</th>
               <th className="px-3 py-2">Ghi chú</th>
               <th className="px-3 py-2 text-right">Số tiền</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {transfers.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-10 text-center text-gray-400">Chưa có khoản chuyển nội bộ nào.</td></tr>
+              <tr><td colSpan={6} className="px-3 py-10 text-center text-gray-400">Chưa có khoản tạm ứng/hoàn ứng nào.</td></tr>
             )}
             {transfers.map((transfer) => (
               <tr key={transfer.id} className="align-top">
                 <td className="whitespace-nowrap px-3 py-3 text-gray-600">{formatDate(transfer.transferDate)}</td>
+                <td className="px-3 py-3">
+                  <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${transfer.type === "ADVANCE" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>
+                    {transfer.type === "ADVANCE" ? "Tạm ứng" : "Hoàn ứng"}
+                  </span>
+                </td>
                 <td className="px-3 py-3 font-medium text-orange-700">{transfer.fromUser.name}</td>
                 <td className="px-3 py-3 font-medium text-blue-700">{transfer.toUser.name}</td>
-                <td className="max-w-xs px-3 py-3"><ShipmentSummary shipment={transfer.shipment} /></td>
                 <td className="max-w-64 px-3 py-3 text-gray-500">{transfer.note || "—"}</td>
                 <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-gray-900">{formatVnd(transfer.amount)}</td>
               </tr>
@@ -630,20 +632,18 @@ function TransferLedger({ transfers, onAdd }: { transfers: Transfer[]; onAdd?: (
 
 function TransferModal({
   persons,
-  shipmentOptions,
   onClose,
   onSaved,
 }: {
   persons: Account[];
-  shipmentOptions: ShipmentRef[];
   onClose: () => void;
   onSaved: (personIds: string[]) => void;
 }) {
   const [fromUserId, setFromUserId] = useState("");
   const [toUserId, setToUserId] = useState("");
+  const [transferType, setTransferType] = useState<"ADVANCE" | "RETURN">("ADVANCE");
   const [amount, setAmount] = useState("");
   const [transferDate, setTransferDate] = useState(todayInputValue());
-  const [shipmentId, setShipmentId] = useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -656,7 +656,7 @@ function TransferModal({
       const response = await fetch("/api/reports/cash-flow/transfers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fromUserId, toUserId, amount, transferDate, shipmentId, note }),
+        body: JSON.stringify({ fromUserId, toUserId, transferType, amount, transferDate, note }),
       });
       const json = await response.json();
       if (!response.ok || !json.success) throw new Error(json.error || "Không thể lưu khoản chuyển.");
@@ -673,15 +673,23 @@ function TransferModal({
       <form onSubmit={submit} className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">Ghi nhận chuyển nội bộ</h2>
-            <p className="mt-1 text-sm text-gray-500">Ghi đúng một dòng chuyển từ người giữ tiền sang người nhận tiền.</p>
+            <h2 className="text-xl font-semibold text-gray-900">Ghi nhận tạm ứng/hoàn ứng</h2>
+            <p className="mt-1 text-sm text-gray-500">Khoản này chỉ điều chuyển tiền giữa hai cá nhân, không thuộc lô hàng.</p>
           </div>
           <button type="button" onClick={onClose} className="text-2xl leading-none text-gray-400 hover:text-gray-700">×</button>
         </div>
 
         {formError && <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</p>}
 
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        <label className="mt-5 block">
+          <span className="mb-1 block text-sm font-medium text-gray-700">Nghiệp vụ</span>
+          <select value={transferType} onChange={(event) => setTransferType(event.target.value as "ADVANCE" | "RETURN")} className="input">
+            <option value="ADVANCE">Tạm ứng — đưa tiền trước cho một cá nhân</option>
+            <option value="RETURN">Hoàn ứng — trả lại tiền đã được tạm ứng</option>
+          </select>
+        </label>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-gray-700">Người chuyển</span>
             <select value={fromUserId} onChange={(event) => setFromUserId(event.target.value)} className="input" required>
@@ -707,18 +715,6 @@ function TransferModal({
         </div>
 
         <label className="mt-4 block">
-          <span className="mb-1 block text-sm font-medium text-gray-700">Lô hàng liên quan <span className="font-normal text-gray-400">(không bắt buộc)</span></span>
-          <select value={shipmentId} onChange={(event) => setShipmentId(event.target.value)} className="input">
-            <option value="">Không gắn lô hàng</option>
-            {shipmentOptions.map((shipment) => (
-              <option key={shipment.id} value={shipment.id}>
-                TK {shipment.declarationNo || "chưa có số"} · {shipment.goodsName || "Chưa có tên hàng"} · {shipment.customerName}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="mt-4 block">
           <span className="mb-1 block text-sm font-medium text-gray-700">Ghi chú</span>
           <textarea value={note} onChange={(event) => setNote(event.target.value)} className="input min-h-20" placeholder="Lý do chuyển hoặc nội dung cần ghi nhớ" />
         </label>
@@ -726,7 +722,7 @@ function TransferModal({
         <div className="mt-6 flex justify-end gap-3">
           <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Hủy</button>
           <button type="submit" disabled={saving} className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-            {saving ? "Đang lưu..." : "Lưu chuyển nội bộ"}
+            {saving ? "Đang lưu..." : "Lưu tạm ứng/hoàn ứng"}
           </button>
         </div>
       </form>

@@ -1,11 +1,13 @@
--- Ghi nhận chuyển tiền nội bộ giữa các cá nhân mà không làm tăng tổng thu/chi của công ty.
+-- Ghi nhận tạm ứng/hoàn ứng giữa các cá nhân mà không làm tăng tổng thu/chi của công ty.
+CREATE TYPE "InternalTransferType" AS ENUM ('ADVANCE', 'RETURN');
+
 CREATE TABLE "InternalTransfer" (
   "id" TEXT NOT NULL,
+  "type" "InternalTransferType" NOT NULL DEFAULT 'ADVANCE',
   "transferDate" TIMESTAMP(3) NOT NULL,
   "amount" DOUBLE PRECISION NOT NULL,
   "fromUserId" TEXT NOT NULL,
   "toUserId" TEXT NOT NULL,
-  "shipmentId" TEXT,
   "note" TEXT,
   "createdById" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -19,7 +21,6 @@ CREATE TABLE "InternalTransfer" (
 CREATE INDEX "InternalTransfer_transferDate_idx" ON "InternalTransfer"("transferDate");
 CREATE INDEX "InternalTransfer_fromUserId_idx" ON "InternalTransfer"("fromUserId");
 CREATE INDEX "InternalTransfer_toUserId_idx" ON "InternalTransfer"("toUserId");
-CREATE INDEX "InternalTransfer_shipmentId_idx" ON "InternalTransfer"("shipmentId");
 
 ALTER TABLE "InternalTransfer"
   ADD CONSTRAINT "InternalTransfer_fromUserId_fkey"
@@ -28,10 +29,6 @@ ALTER TABLE "InternalTransfer"
 ALTER TABLE "InternalTransfer"
   ADD CONSTRAINT "InternalTransfer_toUserId_fkey"
   FOREIGN KEY ("toUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "InternalTransfer"
-  ADD CONSTRAINT "InternalTransfer_shipmentId_fkey"
-  FOREIGN KEY ("shipmentId") REFERENCES "Shipment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 ALTER TABLE "InternalTransfer"
   ADD CONSTRAINT "InternalTransfer_createdById_fkey"

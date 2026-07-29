@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -624,41 +624,6 @@ export default function DebtDetailClient({
         </section>
       )}
 
-      <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="border-b border-gray-100 px-5 py-4 sm:px-6">
-          <h2 className="text-base font-semibold text-gray-950">Thông tin tờ khai và đối tác</h2>
-          <p className="mt-1 text-sm text-gray-500">Thông tin nhận diện dùng để đối chiếu công nợ, chi phí và hóa đơn.</p>
-        </div>
-        <dl className="grid grid-cols-1 gap-px bg-gray-100 sm:grid-cols-2 xl:grid-cols-4">
-          <Info
-            label="Số tờ khai"
-            value={
-              debt.shipment ? (
-                displayMode === "modal" ? (
-                  <span className="font-semibold text-blue-700">
-                    {debt.shipment.declarationNo || "Chưa có số tờ khai"}
-                  </span>
-                ) : (
-                  <ShipmentLink shipmentId={debt.shipment.id} className="font-semibold text-blue-700 hover:underline">
-                    {debt.shipment.declarationNo || "Chưa có số tờ khai"}
-                  </ShipmentLink>
-                )
-              ) : null
-            }
-          />
-          <Info
-            label="Ngày tờ khai"
-            value={debt.shipment?.declarationDate ? new Date(debt.shipment.declarationDate).toLocaleDateString("vi-VN") : null}
-          />
-          <Info label={debt.type === "RECEIVABLE" ? "Khách hàng" : "Nhà cung cấp"} value={partnerName} />
-          <Info label="Loại công nợ" value={DEBT_TYPE_LABELS[debt.type]} />
-          <Info label="Tên hàng" value={debt.shipment?.goodsName} className="xl:col-span-2" />
-          <Info label="Số invoice trên tờ khai" value={debt.shipment?.invoiceNo} />
-          <Info label="Nguồn dữ liệu" value={debt.sourceKey ? "Đồng bộ từ tài chính lô hàng" : "Nhập trực tiếp"} />
-          <Info label="Ghi chú" value={debt.note} className="sm:col-span-2 xl:col-span-4" />
-        </dl>
-      </section>
-
       {breakdown && (
         <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
           <div className="mb-4">
@@ -1214,23 +1179,6 @@ function CostSummary({
     <div className="rounded-lg border border-gray-200 bg-gray-50/60 px-4 py-3">
       <p className="text-xs font-medium text-gray-500">{label}</p>
       <p className={`mt-1 text-lg font-bold ${valueClassName}`}>{formatVnd(value)}</p>
-    </div>
-  );
-}
-
-function Info({
-  label,
-  value,
-  className = "",
-}: {
-  label: string;
-  value: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={`bg-white px-5 py-4 sm:px-6 ${className}`}>
-      <dt className="text-xs font-semibold uppercase tracking-wide text-gray-400">{label}</dt>
-      <dd className="mt-1.5 break-words text-sm font-medium text-gray-900">{value || "—"}</dd>
     </div>
   );
 }

@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import dynamic from "next/dynamic";
 import AttachmentPreviewModal from "@/components/shipments/AttachmentPreviewModal";
 import Badge from "@/components/shipments/Badge";
+import ShipmentEditModal from "@/components/shipments/ShipmentEditModal";
 import ShipmentDetailsTable from "@/components/shipments/ShipmentDetailsTable";
 import TaskStepper from "@/components/shipments/TaskStepper";
 import {
@@ -67,6 +67,7 @@ export default function ShipmentInfoModal({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState<Attachment | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
   const [debts, setDebts] = useState<ShipmentDebt[]>([]);
   const [selectedDebtId, setSelectedDebtId] = useState<string | null>(null);
   const [viewer, setViewer] = useState<Viewer | null>(null);
@@ -164,7 +165,9 @@ export default function ShipmentInfoModal({
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
-      if (selectedDebtId) {
+      if (isEditing) {
+        setIsEditing(false);
+      } else if (selectedDebtId) {
         setSelectedDebtId(null);
         void loadDebts();
       } else {
@@ -174,7 +177,7 @@ export default function ShipmentInfoModal({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [loadDebts, onClose, selectedDebtId]);
+  }, [isEditing, loadDebts, onClose, selectedDebtId]);
 
   return (
     <>
@@ -333,12 +336,13 @@ export default function ShipmentInfoModal({
 
           <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-gray-200 bg-gray-50 px-5 py-3 sm:px-6">
             {shipment ? (
-              <Link
-                href={`/shipments/${shipment.id}`}
+              <button
+                type="button"
+                onClick={() => setIsEditing(true)}
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
               >
                 ✏️ Chỉnh sửa lô hàng
-              </Link>
+              </button>
             ) : (
               <span />
             )}
@@ -358,6 +362,18 @@ export default function ShipmentInfoModal({
         attachment={previewing}
         onClose={() => setPreviewing(null)}
       />
+
+      {isEditing && shipment && (
+        <ShipmentEditModal
+          key={`${shipment.id}-${shipment.updatedAt}`}
+          shipment={shipment}
+          onClose={() => setIsEditing(false)}
+          onSaved={(updatedShipment) => {
+            setShipment(updatedShipment);
+            setIsEditing(false);
+          }}
+        />
+      )}
 
       {selectedDebtId && (
         <div

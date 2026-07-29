@@ -18,24 +18,12 @@ import {
   type Attachment,
 } from "@/lib/shipment-constants";
 import type { ShipmentDTO } from "@/lib/types";
-import type { ShipmentVehicleDTO } from "@/lib/types";
 import type { PaginationMeta } from "@/lib/pagination";
 
 const ALL_FILTER = "__all__";
 const PAGE_SIZE = 50;
 const LIST_REFRESH_INTERVAL_MS = 90 * 1000;
 const EMPTY_PAGINATION: PaginationMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 };
-
-function visibleVehicles(vehicles: ShipmentVehicleDTO[], search: string) {
-  if (!search) return vehicles.slice(0, 2);
-  const normalizedSearch = search.replace(/\s+/g, "").toUpperCase();
-  const matching = vehicles.filter(
-    (vehicle) =>
-      vehicle.chassisNo?.includes(normalizedSearch) ||
-      vehicle.engineNo?.includes(normalizedSearch)
-  );
-  return (matching.length > 0 ? matching : vehicles).slice(0, 2);
-}
 
 export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
   const [shipments, setShipments] = useState<ShipmentDTO[]>([]);
@@ -186,7 +174,7 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full min-w-[2020px] table-fixed divide-y divide-gray-200 text-sm">
+        <table className="w-full min-w-[1810px] table-fixed divide-y divide-gray-200 text-sm">
           <colgroup>
             <col className="w-[48px]" />
             <col className="w-[175px]" />
@@ -196,7 +184,6 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
             <col className="w-[145px]" />
             <col className="w-[120px]" />
             <col className="w-[205px]" />
-            <col className="w-[210px]" />
             <col className="w-[90px]" />
             <col className="w-[145px]" />
             <col className="w-[170px]" />
@@ -214,7 +201,6 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
               <th className="px-3 py-3 text-left font-medium text-gray-500">Số invoice</th>
               <th className="px-3 py-3 text-left font-medium text-gray-500">Cửa khẩu/Cảng</th>
               <th className="px-3 py-3 text-left font-medium text-gray-500">Tên hàng</th>
-              <th className="px-3 py-3 text-left font-medium text-gray-500">Số khung / Số máy</th>
               <th className="px-3 py-3 text-left font-medium text-gray-500">Phân luồng</th>
               <th className="px-3 py-3 text-left font-medium text-gray-500">Trạng thái</th>
               <th className="px-3 py-3 text-left font-medium text-gray-500">HQ tiếp nhận</th>
@@ -226,21 +212,21 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
           <tbody className="divide-y divide-gray-100">
             {isLoading && (
               <tr>
-                <td colSpan={15} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={14} className="px-4 py-6 text-center text-gray-400">
                   Đang tải dữ liệu...
                 </td>
               </tr>
             )}
             {!isLoading && error && (
               <tr>
-                <td colSpan={15} className="px-4 py-6 text-center text-red-600">
+                <td colSpan={14} className="px-4 py-6 text-center text-red-600">
                   {error}
                 </td>
               </tr>
             )}
             {!isLoading && !error && shipments.length === 0 && (
               <tr>
-                <td colSpan={15} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={14} className="px-4 py-6 text-center text-gray-400">
                   {debouncedSearch || statusFilter !== ALL_FILTER || channelFilter !== ALL_FILTER
                     ? "Không có lô hàng khớp bộ lọc."
                     : "Chưa có lô hàng nào."}
@@ -251,10 +237,6 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
               !error &&
               shipments.map((shipment, index) => {
                 const branches = getDeclarationBranches(shipment.declarationBranches);
-                const displayedVehicles = visibleVehicles(
-                  shipment.vehicles,
-                  debouncedSearch
-                );
                 return (
                   <tr
                     key={shipment.id}
@@ -295,29 +277,6 @@ export default function ShipmentsListClient({ isAdmin }: { isAdmin: boolean }) {
                     <td className="whitespace-nowrap px-3 py-3 text-gray-600">{shipment.invoiceNo || "—"}</td>
                     <td className="break-words px-3 py-3 text-gray-600">{shipment.port || "—"}</td>
                     <td className="break-words px-3 py-3 leading-5 text-gray-600">{shipment.goodsName || "—"}</td>
-                    <td className="px-3 py-3 text-xs text-gray-600">
-                      {shipment.vehicles.length > 0 ? (
-                        <div className="space-y-1">
-                          {displayedVehicles.map((vehicle) => (
-                            <div key={vehicle.id} className="rounded bg-gray-50 px-2 py-1">
-                              <div className="truncate font-mono" title={vehicle.chassisNo || ""}>
-                                Khung: {vehicle.chassisNo || "—"}
-                              </div>
-                              <div className="truncate font-mono" title={vehicle.engineNo || ""}>
-                                Máy: {vehicle.engineNo || "—"}
-                              </div>
-                            </div>
-                          ))}
-                          {shipment.vehicles.length > displayedVehicles.length && (
-                            <span className="text-gray-400">
-                              +{shipment.vehicles.length - displayedVehicles.length} xe khác
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
                     <td className="px-3 py-3">
                       {shipment.channel ? (
                         <Badge label={shipment.channel} className={channelBadgeClass(shipment.channel)} />

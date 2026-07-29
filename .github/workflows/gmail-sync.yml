@@ -1,0 +1,22 @@
+name: Dong bo Gmail
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+concurrency:
+  group: gmail-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Goi dong bo Gmail tren production
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then echo "Thieu CRON_SECRET"; exit 1; fi
+          code=$(curl -sS -o /tmp/sync.json -w "%{http_code}" --max-time 300 \
+            -X POST "https://nqlogistics.click/api/gmail/sync" \
+            -H "Authorization: Bearer $CRON_SECRET")
+          echo "HTTP $code"; cat /tmp/sync.json || true; echo
+          case "$code" in 200|202) exit 0 ;; *) exit 1 ;; esac

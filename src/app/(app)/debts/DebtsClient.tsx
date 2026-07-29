@@ -196,9 +196,20 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
   const filteredDebts = useMemo(() => {
     return tabDebts.filter((d) => {
       if (filters.search) {
-        const query = filters.search.toLowerCase();
-        const name = debtPartyName(d).toLowerCase();
-        if (!name.includes(query)) return false;
+        const query = filters.search.trim().toLocaleLowerCase("vi");
+        const searchableText = [
+          debtPartyName(d),
+          d.shipment?.customerName,
+          d.shipment?.goodsName,
+          d.shipment?.declarationNo,
+          d.shipment?.invoiceNo,
+          d.shipment?.shipmentCode,
+          d.note,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLocaleLowerCase("vi");
+        if (!searchableText.includes(query)) return false;
       }
       if (filters.status === OVERDUE_FILTER) {
         if (!isOverdue(d.status, d.dueDate)) return false;
@@ -208,6 +219,14 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
       if (filters.dueFrom && (!d.dueDate || new Date(d.dueDate) < new Date(filters.dueFrom))) return false;
       if (filters.dueTo && (!d.dueDate || new Date(d.dueDate) > new Date(`${filters.dueTo}T23:59:59`))) return false;
       return true;
+    }).sort((a, b) => {
+      const aDate = a.shipment?.declarationDate
+        ? new Date(a.shipment.declarationDate).getTime()
+        : new Date(a.createdAt).getTime();
+      const bDate = b.shipment?.declarationDate
+        ? new Date(b.shipment.declarationDate).getTime()
+        : new Date(b.createdAt).getTime();
+      return bDate - aDate;
     });
   }, [tabDebts, filters]);
 
@@ -372,8 +391,8 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
           type="text"
           value={filters.search}
           onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
-          placeholder={activeTab === "RECEIVABLE" ? "Tìm khách hàng..." : "Tìm nhà cung cấp..."}
-          className="input max-w-xs"
+          placeholder="Tìm công ty, invoice, tên hàng, số tờ khai..."
+          className="input w-full max-w-md"
         />
         <select
           value={filters.status}
@@ -453,13 +472,16 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
       </section>
 
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="min-w-full divide-y divide-gray-200 text-sm">
+        <table className="min-w-[1450px] divide-y divide-gray-200 text-sm">
           <thead className="bg-gray-50">
             <tr>
+              <th className="w-14 px-3 py-3 text-center font-medium text-gray-500">STT</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">
                 {activeTab === "RECEIVABLE" ? "Khách hàng" : "Nhà cung cấp / nguồn chi"}
               </th>
-              <th className="px-4 py-3 text-left font-medium text-gray-500">Lô hàng liên quan</th>
+              <th className="whitespace-nowrap px-4 py-3 text-left font-medium text-gray-500">Ngày tờ khai</th>
+              <th className="whitespace-nowrap px-4 py-3 text-left font-medium text-gray-500">Số tờ khai</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-500">Tên hàng / Invoice</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Tổng tiền</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Đã thanh toán</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Còn lại</th>
@@ -470,28 +492,28 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
           <tbody className="divide-y divide-gray-100">
             {isLoading && (
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={10} className="px-4 py-6 text-center text-gray-400">
                   Đang tải dữ liệu...
                 </td>
               </tr>
             )}
             {!isLoading && error && (
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-red-600">
+                <td colSpan={10} className="px-4 py-6 text-center text-red-600">
                   {error}
                 </td>
               </tr>
             )}
             {!isLoading && !error && filteredDebts.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={10} className="px-4 py-6 text-center text-gray-400">
                   {tabDebts.length === 0 ? "Chưa có công nợ nào." : "Không có công nợ khớp bộ lọc."}
                 </td>
               </tr>
             )}
             {!isLoading &&
               !error &&
-              filteredDebts.map((debt) => {
+              filteredDebts.map((debt, index) => {
                 const badge = debtStatusBadge(debt.status, debt.dueDate);
                 return (
                   <tr
@@ -499,6 +521,7 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
                     onClick={() => router.push(`/debts/${debt.id}`)}
                     className="cursor-pointer hover:bg-gray-50"
                   >
+                    <td className="px-3 py-3 text-center text-gray-500">{index + 1}</td>
                     <td className="px-4 py-3 font-medium text-gray-900">
                       <div>{debtPartyName(debt)}</div>
                       {debt.sourceKey && (
@@ -507,12 +530,29 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">
+                    <td className="whitespace-nowrap px-4 py-3 text-gray-600">
+                      {debt.shipment?.declarationDate
+                        ? new Date(debt.shipment.declarationDate).toLocaleDateString("vi-VN")
+                        : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-gray-600">
+                      {debt.shipment ? (
+                        <ShipmentLink shipmentId={debt.shipment.id} className="font-medium text-blue-600 hover:underline">
+                          {debt.shipment.declarationNo || "Chưa có số TK"}
+                        </ShipmentLink>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="max-w-sm px-4 py-3 text-gray-600">
                       {debt.shipment ? (
                         <>
-                          <ShipmentLink shipmentId={debt.shipment.id} className="hover:underline">
+                          <ShipmentLink shipmentId={debt.shipment.id} className="font-medium text-gray-800 hover:text-blue-600 hover:underline">
                             {debt.shipment.goodsName || debt.shipment.shipmentCode}
                           </ShipmentLink>
+                          <span className="mt-0.5 block text-[11px] text-gray-400">
+                            Invoice: {debt.shipment.invoiceNo || "—"}
+                          </span>
                           {isAdmin && (
                             <button
                               type="button"

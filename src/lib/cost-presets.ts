@@ -38,10 +38,58 @@ export function selectApplicablePresets<T extends { category: CostCategory; cust
   return [...byCategory.values()];
 }
 
+type CostIdentity = {
+  category: CostCategory;
+  customLabel: string | null;
+};
+
+type ExistingShipmentCostIdentity = CostIdentity & {
+  presetId: string | null;
+};
+
+function normalizeCostLabel(value: string | null | undefined) {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toUpperCase();
+}
+
+/**
+ * Hạng mục chuẩn chỉ được có một dòng trong một lô. Riêng "Khác" có thể chứa nhiều khoản khác
+ * nhau nên dùng thêm tên hiển thị để phân biệt (vd. "Lái xe chuyên trách" và "Nâng hạ").
+ */
+export function shipmentCostIdentityKey(cost: CostIdentity) {
+  if (cost.category !== "KHAC") return cost.category;
+  return `${cost.category}:${normalizeCostLabel(cost.customLabel)}`;
+}
+
+/**
+ * Chỉ lấy các dòng bảng giá còn thiếu trên lô hàng. Dòng đã nhập tay, dòng từ phiên bản bảng giá
+ * cũ và dòng đã xác nhận thực tế đều được giữ nguyên, tuyệt đối không dùng bảng giá ghi đè.
+ */
+export function selectMissingCostPresets<
+  T extends CostIdentity & { id: string },
+>(presets: T[], existingCosts: ExistingShipmentCostIdentity[]): T[] {
+  const existingPresetIds = new Set(
+    existingCosts.flatMap((cost) => (cost.presetId ? [cost.presetId] : []))
+  );
+  const existingKeys = new Set(existingCosts.map(shipmentCostIdentityKey));
+
+  return presets.filter((preset) => {
+    if (existingPresetIds.has(preset.id)) return false;
+    const key = shipmentCostIdentityKey(preset);
+    if (existingKeys.has(key)) return false;
+    existingKeys.add(key);
+    return true;
+  });
+}
+
 export async function applyCostPresetsToShipment(params: {
   shipmentId: string;
   userId: string;
-  refreshExisting?: boolean;
 }) {
   const shipment = await prisma.shipment.findUnique({
     where: { id: params.shipmentId },
@@ -53,7 +101,12 @@ export async function applyCostPresetsToShipment(params: {
   if (!keyword) return { applied: 0, keyword: null as string | null };
 
   const allPresets = await prisma.costPreset.findMany({ where: { goodsKeyword: keyword, isActive: true } });
-  const presets = selectApplicablePresets(allPresets, shipment.port, shipment.declarationDate);
+  const applicablePresets = selectApplicablePresets(allPresets, shipment.port, shipment.declarationDate);
+  const existingCosts = await prisma.shipmentCost.findMany({
+    where: { shipmentId: shipment.id },
+    select: { presetId: true, category: true, customLabel: true },
+  });
+  const presets = selectMissingCostPresets(applicablePresets, existingCosts);
   let applied = 0;
   for (const preset of presets) {
     const vendorId = isVendorlessCostCategory(preset.category) ? null : preset.vendorId;
@@ -61,31 +114,6 @@ export async function applyCostPresetsToShipment(params: {
     // nhân theo số lượng suy từ tên hàng (vd "10 MÁY NGHIỀN" → 10).
     const quantity = isPerLotUnit(preset.unit) ? preset.quantity : getGoodsQuantity(shipment.goodsName);
     const costPrice = preset.unitPrice * quantity;
-    const existing = await prisma.shipmentCost.findUnique({
-      where: { shipmentId_presetId: { shipmentId: shipment.id, presetId: preset.id } },
-    });
-    if (existing) {
-      // Once a user has confirmed the actual cost, later preset edits must not overwrite it.
-      if (params.refreshExisting && !existing.isActual) {
-        await prisma.shipmentCost.update({
-          where: { id: existing.id },
-          data: {
-            category: preset.category,
-            unitPrice: preset.unitPrice,
-            quantity,
-            costPrice,
-            customLabel: preset.customLabel,
-            unit: preset.unit,
-            paidByUserId: preset.paidByUserId,
-            paidFromCompanyAccountId: preset.paidFromCompanyAccountId,
-            note: preset.note,
-            vendorId,
-          },
-        });
-      }
-      continue;
-    }
-
     const cost = await prisma.shipmentCost.create({
       data: {
         shipmentId: shipment.id,
@@ -126,7 +154,7 @@ export async function applyPresetToExistingShipments(presetId: string, userId: s
   });
   const matches = shipments.filter((shipment) => getGoodsKeyword(shipment.goodsName) === preset.goodsKeyword);
   for (const shipment of matches) {
-    await applyCostPresetsToShipment({ shipmentId: shipment.id, userId, refreshExisting: true });
+    await applyCostPresetsToShipment({ shipmentId: shipment.id, userId });
   }
   return matches.length;
 }

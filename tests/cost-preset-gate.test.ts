@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { normalizeCustomsGate, presetGateMatchesPort, getGoodsKeyword, getGoodsQuantity, isPerLotUnit } from "@/lib/goods-keyword";
-import { selectApplicablePresets } from "@/lib/cost-presets";
+import {
+  selectApplicablePresets,
+  selectMissingCostPresets,
+  shipmentCostIdentityKey,
+} from "@/lib/cost-presets";
 import type { CostCategory } from "@/generated/prisma/enums";
 
 describe("normalizeCustomsGate + presetGateMatchesPort", () => {
@@ -108,5 +112,49 @@ describe("số lượng theo tên hàng + đơn vị tính", () => {
     expect(isPerLotUnit(null)).toBe(true);
     expect(isPerLotUnit("máy")).toBe(false);
     expect(isPerLotUnit("xe")).toBe(false);
+  });
+});
+
+describe("áp bảng giá vào lô đã có chi phí", () => {
+  const presets = [
+    { id: "hq-new", category: "HAI_QUAN" as const, customLabel: null },
+    { id: "hh-new", category: "HOA_HONG" as const, customLabel: null },
+    { id: "driver-new", category: "KHAC" as const, customLabel: "Lái xe chuyên trách" },
+    { id: "lift-new", category: "KHAC" as const, customLabel: "Nâng hạ" },
+  ];
+
+  it("giữ nguyên hạng mục đã nhập tay và chỉ trả về phần còn thiếu", () => {
+    const existing = [
+      { presetId: null, category: "HAI_QUAN" as const, customLabel: null },
+      { presetId: "driver-old", category: "KHAC" as const, customLabel: "lái xe CHUYÊN TRÁCH" },
+    ];
+
+    expect(selectMissingCostPresets(presets, existing).map((preset) => preset.id)).toEqual([
+      "hh-new",
+      "lift-new",
+    ]);
+  });
+
+  it("không tạo lại dòng đã liên kết đúng preset dù tên hiển thị đã đổi", () => {
+    const existing = [
+      { presetId: "driver-new", category: "KHAC" as const, customLabel: "Tên cũ" },
+    ];
+
+    expect(selectMissingCostPresets(presets, existing).map((preset) => preset.id)).toEqual([
+      "hq-new",
+      "hh-new",
+      "lift-new",
+    ]);
+  });
+
+  it("hạng mục chuẩn khớp theo loại; hạng mục Khác khớp thêm theo tên", () => {
+    expect(shipmentCostIdentityKey({ category: "VAN_TAI", customLabel: "Vận tải A" })).toBe("VAN_TAI");
+    expect(shipmentCostIdentityKey({ category: "VAN_TAI", customLabel: "Vận tải B" })).toBe("VAN_TAI");
+    expect(shipmentCostIdentityKey({ category: "KHAC", customLabel: "Lái xe chuyên trách" })).toBe(
+      shipmentCostIdentityKey({ category: "KHAC", customLabel: "lai xe chuyen trach" })
+    );
+    expect(shipmentCostIdentityKey({ category: "KHAC", customLabel: "Nâng hạ" })).not.toBe(
+      shipmentCostIdentityKey({ category: "KHAC", customLabel: "Lái xe chuyên trách" })
+    );
   });
 });

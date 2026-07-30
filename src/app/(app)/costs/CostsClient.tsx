@@ -113,6 +113,7 @@ export default function CostsClient() {
   const [viewingShipmentId, setViewingShipmentId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
+  const resultsRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,7 +165,7 @@ export default function CostsClient() {
     [opportunities]
   );
 
-  const shipmentRows = useMemo<ShipmentSummary[]>(() => {
+  const allShipmentRows = useMemo<ShipmentSummary[]>(() => {
     const costsByShipment = new Map<string, CostRow[]>();
     for (const cost of allCosts) {
       const rows = costsByShipment.get(cost.shipmentId) ?? [];
@@ -172,7 +173,6 @@ export default function CostsClient() {
       costsByShipment.set(cost.shipmentId, rows);
     }
 
-    const query = filters.query.trim().toLowerCase();
     return shipments
       .map((shipment) => {
         const costs = costsByShipment.get(shipment.id) ?? [];
@@ -201,6 +201,16 @@ export default function CostsClient() {
           ).length,
         };
       })
+      .sort((a, b) => {
+        const aDate = a.declarationDate ? new Date(a.declarationDate).getTime() : 0;
+        const bDate = b.declarationDate ? new Date(b.declarationDate).getTime() : 0;
+        return bDate - aDate;
+      });
+  }, [allCosts, opportunityByCostId, quoteTotals, shipments]);
+
+  const shipmentRows = useMemo<ShipmentSummary[]>(() => {
+    const query = filters.query.trim().toLowerCase();
+    return allShipmentRows
       .filter((shipment) => {
         if (filters.shipmentId && shipment.id !== filters.shipmentId) return false;
         if (
@@ -221,13 +231,8 @@ export default function CostsClient() {
           if (filters.dateTo && declarationDate > new Date(`${filters.dateTo}T23:59:59`)) return false;
         }
         return true;
-      })
-      .sort((a, b) => {
-        const aDate = a.declarationDate ? new Date(a.declarationDate).getTime() : 0;
-        const bDate = b.declarationDate ? new Date(b.declarationDate).getTime() : 0;
-        return bDate - aDate;
       });
-  }, [allCosts, filters, opportunityByCostId, quoteTotals, shipments]);
+  }, [allShipmentRows, filters]);
 
   const totals = useMemo(
     () => shipmentRows.reduce(
@@ -244,6 +249,19 @@ export default function CostsClient() {
     [shipmentRows]
   );
 
+  const overallTotals = useMemo(
+    () => allShipmentRows.reduce(
+      (result, shipment) => ({
+        cost: result.cost + shipment.totalCost,
+        entered: result.entered + (shipment.costs.length > 0 ? 1 : 0),
+        empty: result.empty + (shipment.costs.length === 0 ? 1 : 0),
+        incomplete: result.incomplete + (shipment.missingInfoCount > 0 ? 1 : 0),
+      }),
+      { cost: 0, entered: 0, empty: 0, incomplete: 0 }
+    ),
+    [allShipmentRows]
+  );
+
   const pageCount = Math.max(1, Math.ceil(shipmentRows.length / pageSize));
   const safePage = Math.min(currentPage, pageCount);
   const paginatedShipments = shipmentRows.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -251,6 +269,13 @@ export default function CostsClient() {
   function updateFilters(patch: Partial<typeof filters>) {
     setFilters((current) => ({ ...current, ...patch }));
     setCurrentPage(1);
+  }
+
+  function showCostStatus(costStatus: typeof filters.costStatus) {
+    updateFilters({ costStatus, shipmentId: "" });
+    requestAnimationFrame(() => {
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   async function refreshFinancialData() {
@@ -328,10 +353,10 @@ export default function CostsClient() {
       {error && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700"><span>{error}</span><button type="button" onClick={() => { setIsLoading(true); setError(null); setReloadKey((key) => key + 1); }} className="rounded border border-red-300 bg-white px-3 py-1 font-medium hover:bg-red-100">Thử lại</button></div>}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi label="Tổng chi" value={formatVnd(totals.cost)} color="red" />
-        <Kpi label="Lô đã nhập chi phí" value={`${totals.entered} lô`} color="green" />
-        <Kpi label="Lô chưa nhập" value={`${totals.empty} lô`} color={totals.empty > 0 ? "red" : "gray"} />
-        <Kpi label="Lô cần bổ sung thông tin" value={`${totals.incomplete} lô`} color={totals.incomplete > 0 ? "blue" : "gray"} />
+        <Kpi label="Tổng chi" value={formatVnd(overallTotals.cost)} color="red" active={filters.costStatus === "ALL"} onClick={() => showCostStatus("ALL")} hint="Hiện tất cả lô" />
+        <Kpi label="Lô đã nhập chi phí" value={`${overallTotals.entered} lô`} color="green" active={filters.costStatus === "ENTERED"} onClick={() => showCostStatus("ENTERED")} hint="Hiện danh sách đã nhập" />
+        <Kpi label="Lô chưa nhập" value={`${overallTotals.empty} lô`} color={overallTotals.empty > 0 ? "red" : "gray"} active={filters.costStatus === "EMPTY"} onClick={() => showCostStatus("EMPTY")} hint="Hiện các lô chưa nhập" />
+        <Kpi label="Lô cần bổ sung thông tin" value={`${overallTotals.incomplete} lô`} color={overallTotals.incomplete > 0 ? "blue" : "gray"} active={filters.costStatus === "INCOMPLETE"} onClick={() => showCostStatus("INCOMPLETE")} hint="Hiện các lô cần bổ sung" />
       </div>
 
       <div className="mb-6 grid gap-3 rounded-xl border border-blue-100 bg-blue-50/70 px-5 py-4 text-sm sm:grid-cols-4">
@@ -355,7 +380,7 @@ export default function CostsClient() {
         </div>
       )}
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5">
+      <section ref={resultsRef} className="scroll-mt-4 rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-semibold text-gray-900">Chi phí theo lô hàng</h2>
@@ -366,20 +391,16 @@ export default function CostsClient() {
           </div>
         </div>
 
-        <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-          <select value={filters.shipmentId} onChange={(event) => updateFilters({ shipmentId: event.target.value })} className="input xl:col-span-2">
-            <option value="">Tất cả số tờ khai</option>
-            {shipments.map((shipment) => <option key={shipment.id} value={shipment.id}>{shipment.declarationNo || "Chưa có TK"} · {shipment.goodsName || shipment.customerName}</option>)}
-          </select>
-          <input value={filters.query} onChange={(event) => updateFilters({ query: event.target.value })} className="input xl:col-span-2" placeholder="Tìm công ty, số TK, tên hàng..." />
-          <select value={filters.costStatus} onChange={(event) => updateFilters({ costStatus: event.target.value as typeof filters.costStatus })} className="input">
+        <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-12">
+          <input value={filters.query} onChange={(event) => updateFilters({ query: event.target.value, shipmentId: "" })} className="input xl:col-span-5" placeholder="Tìm công ty, số TK, tên hàng..." />
+          <select value={filters.costStatus} onChange={(event) => updateFilters({ costStatus: event.target.value as typeof filters.costStatus, shipmentId: "" })} className="input xl:col-span-3">
             <option value="ALL">Tất cả trạng thái</option>
             <option value="EMPTY">Chưa nhập chi phí</option>
             <option value="ENTERED">Đã nhập chi phí</option>
             <option value="INCOMPLETE">Cần bổ sung thông tin</option>
           </select>
-          <input type="date" value={filters.dateFrom} onChange={(event) => updateFilters({ dateFrom: event.target.value })} className="input" title="Từ ngày tờ khai" />
-          <input type="date" value={filters.dateTo} onChange={(event) => updateFilters({ dateTo: event.target.value })} className="input" title="Đến ngày tờ khai" />
+          <input type="date" value={filters.dateFrom} onChange={(event) => updateFilters({ dateFrom: event.target.value, shipmentId: "" })} className="input xl:col-span-2" title="Từ ngày tờ khai" />
+          <input type="date" value={filters.dateTo} onChange={(event) => updateFilters({ dateTo: event.target.value, shipmentId: "" })} className="input xl:col-span-2" title="Đến ngày tờ khai" />
         </div>
         <label className="mb-4 inline-flex items-center gap-2 text-sm text-gray-700">
           <input type="checkbox" checked={filters.additionalOnly} onChange={(event) => updateFilters({ additionalOnly: event.target.checked })} />
@@ -442,7 +463,32 @@ function ProcessStep({ number, title, detail }: { number: string; title: string;
   );
 }
 
-function Kpi({ label, value, color }: { label: string; value: string; color: "red" | "blue" | "green" | "gray" }) {
+function Kpi({
+  label,
+  value,
+  color,
+  active,
+  onClick,
+  hint,
+}: {
+  label: string;
+  value: string;
+  color: "red" | "blue" | "green" | "gray";
+  active: boolean;
+  onClick: () => void;
+  hint: string;
+}) {
   const styles = { red: "border-red-100 bg-red-50 text-red-800", blue: "border-blue-100 bg-blue-50 text-blue-800", green: "border-emerald-100 bg-emerald-50 text-emerald-800", gray: "border-gray-200 bg-white text-gray-900" };
-  return <div className={`rounded-xl border p-4 ${styles[color]}`}><p className="text-xs opacity-70">{label}</p><p className="mt-1 text-xl font-bold">{value}</p></div>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${styles[color]} ${active ? "ring-2 ring-blue-500 ring-offset-2" : ""}`}
+      aria-pressed={active}
+    >
+      <p className="text-xs opacity-70">{label}</p>
+      <p className="mt-1 text-xl font-bold">{value}</p>
+      <p className="mt-2 text-[11px] font-medium opacity-60">{hint} →</p>
+    </button>
+  );
 }

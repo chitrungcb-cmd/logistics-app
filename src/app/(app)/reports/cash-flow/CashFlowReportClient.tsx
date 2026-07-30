@@ -110,7 +110,6 @@ function formatVnd(n: number) {
 
 function formatSignedVnd(n: number) {
   const roundedValue = Math.round(n);
-  if (roundedValue > 0) return `+${roundedValue.toLocaleString("vi-VN")} đ`;
   return `${roundedValue.toLocaleString("vi-VN")} đ`;
 }
 
@@ -349,6 +348,19 @@ export default function CashFlowReportClient({
     await load();
   }
 
+  async function renameAccount(id: string, name: string) {
+    const response = await fetch(`/api/company-accounts/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const json = await response.json();
+    if (!response.ok || !json.success) {
+      throw new Error(json.error || "Không thể đổi tên tài khoản.");
+    }
+    await load();
+  }
+
   async function handleTransferSaved(personIds: string[]) {
     setShowTransferModal(false);
     await load();
@@ -450,6 +462,7 @@ export default function CashFlowReportClient({
             <CompanyAccountTable
               rows={report.companyAccounts}
               onToggle={canManageAccounts ? toggleAccount : undefined}
+              onRename={canManageAccounts ? renameAccount : undefined}
               showToggle={canManageAccounts}
             />
           </section>
@@ -459,7 +472,7 @@ export default function CashFlowReportClient({
               <div>
                 <h2 className="font-semibold text-gray-900">Tổng hợp theo cá nhân</h2>
                 <p className="mt-0.5 text-xs text-gray-500">
-                  Đối soát = tiền cá nhân nhận + nhận nội bộ − tiền đã chi − tiền chuyển nội bộ. Kết quả chỉ hiển thị số dư dương (+), âm (−) hoặc 0.
+                  Đối soát = tiền cá nhân nhận + nhận nội bộ − tiền đã chi − tiền chuyển nội bộ. Kết quả hiển thị số dư dương, âm (−) hoặc 0.
                 </p>
               </div>
               {canManageTransfers && (
@@ -646,14 +659,41 @@ function SummaryCard({ label, value, tone }: { label: string; value: number; ton
 function CompanyAccountTable({
   rows,
   onToggle,
+  onRename,
   showToggle,
 }: {
   rows: Account[];
   onToggle?: (id: string, isActive: boolean) => void;
+  onRename?: (id: string, name: string) => Promise<void>;
   showToggle?: boolean;
 }) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  async function saveName(account: Account) {
+    const name = editingName.trim();
+    if (!name || !onRename) return;
+    if (name === account.name) {
+      setEditingId(null);
+      return;
+    }
+    setSavingId(account.id);
+    setRenameError(null);
+    try {
+      await onRename(account.id, name);
+      setEditingId(null);
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : "Không thể đổi tên tài khoản.");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   return (
     <div className="overflow-x-auto">
+      {renameError && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{renameError}</p>}
       <table className="w-full min-w-[680px] text-sm">
         <thead>
           <tr className="border-b border-gray-200 text-left text-gray-500">
@@ -670,7 +710,51 @@ function CompanyAccountTable({
           )}
           {rows.map((account) => (
             <tr key={account.id} className={account.isActive === false ? "opacity-50" : ""}>
-              <td className="py-2 font-medium text-gray-900">{account.name}</td>
+              <td className="py-2 font-medium text-gray-900">
+                {editingId === account.id ? (
+                  <div className="flex max-w-xl items-center gap-2">
+                    <input
+                      autoFocus
+                      value={editingName}
+                      onChange={(event) => setEditingName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void saveName(account);
+                        if (event.key === "Escape") setEditingId(null);
+                      }}
+                      className="input min-w-64 flex-1"
+                      aria-label={`Tên tài khoản ${account.name}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void saveName(account)}
+                      disabled={savingId === account.id || !editingName.trim()}
+                      className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {savingId === account.id ? "Đang lưu..." : "Lưu"}
+                    </button>
+                    <button type="button" onClick={() => setEditingId(null)} className="rounded-md border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50">
+                      Hủy
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span>{account.name}</span>
+                    {onRename && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(account.id);
+                          setEditingName(account.name);
+                          setRenameError(null);
+                        }}
+                        className="rounded px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                      >
+                        Sửa tên
+                      </button>
+                    )}
+                  </div>
+                )}
+              </td>
               <td className="py-2 text-right font-medium text-emerald-700">{account.thu > 0 ? formatVnd(account.thu) : <span className="text-gray-300">—</span>}</td>
               <td className="py-2 text-right font-medium text-red-700">{account.chi > 0 ? formatVnd(account.chi) : <span className="text-gray-300">—</span>}</td>
               <td className="py-2 text-right font-semibold"><Balance value={account.balance} /></td>
@@ -771,6 +855,7 @@ function PersonLedger({
   onClose: () => void;
 }) {
   const [selectedShipmentId, setSelectedShipmentId] = useState<string | null>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const entries = useMemo(() => {
     if (!detail) return [];
     const normalizedSearch = search.trim().toLocaleLowerCase("vi");
@@ -841,9 +926,26 @@ function PersonLedger({
             </p>
           )}
         </div>
-        <button type="button" onClick={onClose} className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">Đóng</button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsCollapsed((value) => !value)}
+            className="rounded-md border border-blue-200 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50"
+            aria-expanded={!isCollapsed}
+          >
+            {isCollapsed ? "Mở rộng" : "Thu gọn"}
+          </button>
+          <button type="button" onClick={onClose} className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">Đóng</button>
+        </div>
       </div>
 
+      {isCollapsed ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-100 bg-blue-50/60 px-4 py-3">
+          <p className="text-sm text-gray-600">Sổ đã thu gọn; bấm “Mở rộng” để xem các lô và giao dịch.</p>
+          {account && <PersonalSettlementStatus value={account.balance} compact />}
+        </div>
+      ) : (
+        <>
       {account && (
         <div className="mb-4 max-w-lg">
           <PersonalSettlementStatus value={account.balance} />
@@ -1005,6 +1107,8 @@ function PersonLedger({
               onClose={() => setSelectedShipmentId(null)}
             />
           )}
+        </>
+      )}
         </>
       )}
     </section>

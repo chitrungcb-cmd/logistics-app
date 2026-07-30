@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import ShipmentLink from "@/components/shipments/ShipmentLink";
-import { useRouter } from "next/navigation";
 import CustomerCombobox from "@/components/customers/CustomerCombobox";
 import VendorCombobox from "@/components/vendors/VendorCombobox";
 import ShipmentFinanceEditorModal from "@/components/shipments/ShipmentFinanceEditorModal";
@@ -16,6 +16,14 @@ import {
   isOverdue,
 } from "@/lib/debt-constants";
 import { buildShipmentDebtMarginMap, summarizeDebts } from "@/lib/debt-summary";
+
+const DebtDetailClient = dynamic(
+  () => import("@/app/(app)/debts/[id]/DebtDetailClient"),
+  {
+    ssr: false,
+    loading: () => <p className="p-10 text-center text-sm text-gray-400">Đang tải chi tiết công nợ...</p>,
+  }
+);
 
 const ALL_FILTER = "__all__";
 const OVERDUE_FILTER = "__overdue__";
@@ -104,14 +112,19 @@ function daysOverdue(dueDate: string) {
   return Math.floor((Date.now() - new Date(dueDate).getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
-  const router = useRouter();
-
+export default function DebtsClient({
+  isAdmin,
+  currentUserId,
+}: {
+  isAdmin: boolean;
+  currentUserId: string;
+}) {
   const [debts, setDebts] = useState<DebtRow[]>([]);
   const [shipments, setShipments] = useState<ShipmentOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [section, setSection] = useState<"DEBTS" | "INVOICES">("DEBTS");
+  const [selectedDebtId, setSelectedDebtId] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<"RECEIVABLE" | "PAYABLE">("RECEIVABLE");
   const [filters, setFilters] = useState({
@@ -536,8 +549,9 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
                 return (
                   <tr
                     key={debt.id}
-                    onClick={() => router.push(`/debts/${debt.id}`)}
+                    onClick={() => setSelectedDebtId(debt.id)}
                     className="cursor-pointer hover:bg-gray-50"
+                    title="Bấm để mở cửa sổ chi tiết công nợ"
                   >
                     <td className="px-3 py-3 text-center text-gray-500">{index + 1}</td>
                     <td className="px-4 py-3 font-medium text-gray-900">
@@ -792,6 +806,58 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
           onClose={() => setFinanceShipment(null)}
           onCostsChanged={loadDebts}
         />
+      )}
+
+      {selectedDebtId && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-2 sm:p-5"
+          onMouseDown={(event) => {
+            if (event.target !== event.currentTarget) return;
+            setSelectedDebtId(null);
+            void loadDebts();
+          }}
+        >
+          <div
+            className="flex max-h-[95vh] w-full max-w-[1500px] flex-col overflow-hidden rounded-2xl bg-gray-50 shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="debt-list-detail-modal-title"
+          >
+            <header className="flex shrink-0 items-center justify-between gap-4 border-b border-gray-200 bg-white px-5 py-3 sm:px-6">
+              <div>
+                <h2 id="debt-list-detail-modal-title" className="text-lg font-semibold text-gray-950">
+                  Chi tiết công nợ
+                </h2>
+                <p className="mt-0.5 text-xs text-gray-500">Xem, đối chiếu và cập nhật ngay tại cửa sổ này.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDebtId(null);
+                  void loadDebts();
+                }}
+                className="rounded-md p-2 text-xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                aria-label="Đóng cửa sổ chi tiết công nợ"
+              >
+                ×
+              </button>
+            </header>
+            <div className="flex-1 overflow-y-auto">
+              <DebtDetailClient
+                key={selectedDebtId}
+                debtId={selectedDebtId}
+                isAdmin={isAdmin}
+                currentUserId={currentUserId}
+                displayMode="modal"
+                onClose={() => {
+                  setSelectedDebtId(null);
+                  void loadDebts();
+                }}
+                onSelectDebt={setSelectedDebtId}
+              />
+            </div>
+          </div>
+        </div>
       )}
       </>}
     </div>

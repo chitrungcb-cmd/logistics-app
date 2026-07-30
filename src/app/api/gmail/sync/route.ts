@@ -41,7 +41,15 @@ import {
 const NEW_MESSAGES_PER_SYNC = 150;
 // v3 also scans HYS-only replies in the same Gmail thread as a declaration email.
 const SHIPMENT_SYNC_MARKER = "[shipment-attachments-v3]";
-let syncInProgress = false;
+
+// Khoá đồng bộ trong bộ nhớ tiến trình. Lưu MỐC bắt đầu (thay cho cờ bật/tắt) để nếu một lần sync bị
+// treo và không bao giờ nhả khoá, lần gọi kế tiếp vẫn tự vượt qua sau SYNC_STALE_MS — khoá không thể
+// kẹt vĩnh viễn khiến "đồng bộ ngay"/cron mãi báo "đang chạy" cho tới khi restart server.
+const SYNC_STALE_MS = 5 * 60 * 1000;
+let syncStartedAt: number | null = null;
+function syncIsRunning() {
+  return syncStartedAt !== null && Date.now() - syncStartedAt < SYNC_STALE_MS;
+}
 
 export const runtime = "nodejs";
 
@@ -882,7 +890,7 @@ export async function POST(request: NextRequest) {
       return apiError("Không thể xác thực Gmail lúc này. Vui lòng thử lại.", 502);
     }
 
-    if (syncInProgress) {
+    if (syncIsRunning()) {
       return apiSuccess({
         scanned: 0,
         newlyFound: 0,
@@ -900,7 +908,7 @@ export async function POST(request: NextRequest) {
         inProgress: true,
       }, 202);
     }
-    syncInProgress = true;
+    syncStartedAt = Date.now();
     ownsSyncLock = true;
 
     // Cron (gọi bằng Bearer CRON_SECRET) chạy ngầm và trả 202 ngay để dịch vụ cron timeout ngắn
@@ -910,7 +918,7 @@ export async function POST(request: NextRequest) {
       void runGmailSync(gmail, user)
         .catch((error) => console.error("Background Gmail sync failed:", error))
         .finally(() => {
-          syncInProgress = false;
+          syncStartedAt = null;
         });
       ownsSyncLock = false; // tác vụ nền tự nhả khóa; finally ngoài không đụng tới
       return apiSuccess({ started: true, inProgress: true }, 202);
@@ -921,6 +929,6 @@ export async function POST(request: NextRequest) {
     console.error("POST /api/gmail/sync failed:", error);
     return apiError("Đồng bộ email thất bại.", 500);
   } finally {
-    if (ownsSyncLock) syncInProgress = false;
+    if (ownsSyncLock) syncStartedAt = null;
   }
 }

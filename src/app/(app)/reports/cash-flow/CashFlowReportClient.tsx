@@ -95,7 +95,6 @@ type ShipmentExpenseGroup = {
   totalCostCount: number;
 };
 
-type LedgerFilter = "ALL" | "RECEIPT" | "EXPENSE" | "TRANSFER";
 type PeriodMode = "ALL" | "DAY" | "MONTH" | "QUARTER" | "YEAR";
 
 type PeriodSelection = {
@@ -218,19 +217,6 @@ function PersonalSettlementStatus({ value, compact = false }: { value: number; c
   );
 }
 
-function ShipmentSummary({ shipment }: { shipment: ShipmentRef | null }) {
-  if (!shipment) return <span className="text-gray-400">Không gắn lô hàng</span>;
-  return (
-    <div className="min-w-0">
-      <p className="font-medium text-blue-700">TK {shipment.declarationNo || "chưa có số"}</p>
-      <p className="truncate text-xs text-gray-600">
-        {formatDate(shipment.declarationDate)} · {shipment.goodsName || "Chưa có tên hàng"}
-      </p>
-      <p className="truncate text-xs text-gray-400">{shipment.customerName}</p>
-    </div>
-  );
-}
-
 export default function CashFlowReportClient({
   canManageAccounts,
   canManageTransfers,
@@ -246,7 +232,6 @@ export default function CashFlowReportClient({
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [ledgerFilter, setLedgerFilter] = useState<LedgerFilter>("ALL");
   const [ledgerSearch, setLedgerSearch] = useState("");
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [periodMode, setPeriodMode] = useState<PeriodMode>("ALL");
@@ -297,7 +282,6 @@ export default function CashFlowReportClient({
 
   const openPersonLedger = useCallback(async (personId: string) => {
     setSelectedPersonId(personId);
-    setLedgerFilter("ALL");
     setLedgerSearch("");
     setDetail(null);
     setDetailLoading(true);
@@ -493,9 +477,7 @@ export default function CashFlowReportClient({
               account={report.persons.find((person) => person.id === selectedPersonId) ?? null}
               detail={detail}
               loading={detailLoading}
-              filter={ledgerFilter}
               search={ledgerSearch}
-              onFilterChange={setLedgerFilter}
               onSearchChange={setLedgerSearch}
               onClose={() => {
                 setSelectedPersonId(null);
@@ -839,45 +821,19 @@ function PersonLedger({
   account,
   detail,
   loading,
-  filter,
   search,
-  onFilterChange,
   onSearchChange,
   onClose,
 }: {
   account: Account | null;
   detail: Detail | null;
   loading: boolean;
-  filter: LedgerFilter;
   search: string;
-  onFilterChange: (filter: LedgerFilter) => void;
   onSearchChange: (search: string) => void;
   onClose: () => void;
 }) {
   const [selectedShipmentId, setSelectedShipmentId] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const entries = useMemo(() => {
-    if (!detail) return [];
-    const normalizedSearch = search.trim().toLocaleLowerCase("vi");
-    return detail.entries.filter((entry) => {
-      const matchesType =
-        filter === "ALL" ||
-        (filter === "RECEIPT" && entry.type === "RECEIPT") ||
-        (filter === "EXPENSE" && entry.type === "EXPENSE") ||
-        (filter === "TRANSFER" && entry.type.startsWith("TRANSFER"));
-      if (!matchesType) return false;
-      if (!normalizedSearch) return true;
-      return [
-        entry.label,
-        entry.counterparty,
-        entry.invoiceNumber,
-        entry.note,
-        entry.shipment?.declarationNo,
-        entry.shipment?.goodsName,
-        entry.shipment?.customerName,
-      ].some((value) => value?.toLocaleLowerCase("vi").includes(normalizedSearch));
-    });
-  }, [detail, filter, search]);
 
   const expenseGroups = useMemo<ShipmentExpenseGroup[]>(() => {
     if (!detail) return [];
@@ -901,13 +857,21 @@ function PersonLedger({
       current.totalAmount += cost.amount;
       current.totalCostCount += 1;
     }
-    return [...groups.values()].sort((a, b) => {
+    const normalizedSearch = search.trim().toLocaleLowerCase("vi");
+    return [...groups.values()].filter((group) => {
+      if (!normalizedSearch) return true;
+      return [
+        group.shipment.declarationNo,
+        group.shipment.goodsName,
+        group.shipment.customerName,
+      ].some((value) => value?.toLocaleLowerCase("vi").includes(normalizedSearch));
+    }).sort((a, b) => {
       const dateDifference =
         new Date(b.shipment.declarationDate ?? 0).getTime() -
         new Date(a.shipment.declarationDate ?? 0).getTime();
       return dateDifference || b.personAmount - a.personAmount;
     });
-  }, [detail]);
+  }, [detail, search]);
 
   const selectedExpenseGroup = expenseGroups.find(
     (group) => group.shipment.id === selectedShipmentId
@@ -952,27 +916,12 @@ function PersonLedger({
         </div>
       )}
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {([
-          ["ALL", "Tất cả"],
-          ["RECEIPT", "Đã nhận"],
-          ["EXPENSE", "Đã chi"],
-          ["TRANSFER", "Tạm ứng/hoàn ứng"],
-        ] as const).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => onFilterChange(value)}
-            className={`rounded-full px-3 py-1.5 text-xs font-medium ${filter === value ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="mb-4 flex justify-end">
         <input
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
-          className="input ml-auto min-w-64"
-          placeholder="Tìm số tờ khai, tên hàng, khách hàng..."
+          className="input w-full sm:max-w-lg"
+          placeholder="Tìm lô theo số tờ khai, tên hàng hoặc khách hàng..."
         />
       </div>
 
@@ -1039,62 +988,6 @@ function PersonLedger({
                 ))}
               </tbody>
             </table>
-          </div>
-
-          <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="w-full min-w-[1050px] text-sm">
-            <thead className="bg-gray-50 text-left text-gray-500">
-              <tr>
-                <th className="px-3 py-2">Ngày</th>
-                <th className="px-3 py-2">Loại giao dịch</th>
-                <th className="px-3 py-2">Nội dung</th>
-                <th className="px-3 py-2">Lô hàng liên quan</th>
-                <th className="px-3 py-2">Đối tượng</th>
-                <th className="px-3 py-2">Chứng từ</th>
-                <th className="px-3 py-2 text-right">Tiền vào</th>
-                <th className="px-3 py-2 text-right">Tiền ra</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {entries.length === 0 && (
-                <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-400">Không có giao dịch phù hợp.</td></tr>
-              )}
-              {entries.map((entry) => {
-                const isIncoming = entry.type === "RECEIPT" || entry.type === "TRANSFER_IN";
-                return (
-                  <tr key={entry.id} className="align-top">
-                    <td className="whitespace-nowrap px-3 py-3 text-gray-600">{formatDate(entry.date)}</td>
-                    <td className="px-3 py-3"><TransactionBadge type={entry.type} /></td>
-                    <td className="px-3 py-3">
-                      <p className="font-medium text-gray-900">{entry.label}</p>
-                      {entry.invoiceNumber && <p className="text-xs text-gray-500">HĐ: {entry.invoiceNumber}</p>}
-                      {entry.note && <p className="mt-0.5 text-xs text-gray-400">{entry.note}</p>}
-                    </td>
-                    <td className="max-w-xs px-3 py-3"><ShipmentSummary shipment={entry.shipment} /></td>
-                    <td className="max-w-56 px-3 py-3 text-gray-600">{entry.counterparty || "—"}</td>
-                    <td className="px-3 py-3">
-                      {entry.attachmentUrl ? (
-                        <AttachmentPreviewButton
-                          url={entry.attachmentUrl}
-                          name={entry.attachmentName}
-                          className="font-medium text-blue-600 hover:underline"
-                        >
-                          📎 {entry.attachmentName || "Xem ảnh"}
-                        </AttachmentPreviewButton>
-                      ) : <span className="text-gray-300">—</span>}
-                      {entry.recordedBy && (
-                        <p className="mt-1 text-xs text-gray-400">
-                          Ghi nhận bởi {entry.recordedBy}{entry.recordedAt ? ` · ${formatDateTime(entry.recordedAt)}` : ""}
-                        </p>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-emerald-700">{isIncoming ? formatVnd(entry.amount) : "—"}</td>
-                    <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-red-700">{!isIncoming ? formatVnd(entry.amount) : "—"}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
           </div>
 
           {selectedExpenseGroup && detail && (
@@ -1192,17 +1085,6 @@ function ShipmentExpenseDetailModal({
       </div>
     </div>
   );
-}
-
-function TransactionBadge({ type }: { type: LedgerEntry["type"] }) {
-  const config = {
-    RECEIPT: ["Đã nhận", "bg-emerald-100 text-emerald-700"],
-    EXPENSE: ["Đã chi", "bg-red-100 text-red-700"],
-    TRANSFER_IN: ["Nhận nội bộ", "bg-blue-100 text-blue-700"],
-    TRANSFER_OUT: ["Chuyển nội bộ", "bg-orange-100 text-orange-700"],
-  } as const;
-  const [label, className] = config[type];
-  return <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${className}`}>{label}</span>;
 }
 
 function TransferLedger({ transfers, onAdd }: { transfers: Transfer[]; onAdd?: () => void }) {

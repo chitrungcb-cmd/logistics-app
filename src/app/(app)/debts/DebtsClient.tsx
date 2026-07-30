@@ -15,7 +15,7 @@ import {
   debtStatusBadge,
   isOverdue,
 } from "@/lib/debt-constants";
-import { summarizeDebts } from "@/lib/debt-summary";
+import { buildShipmentDebtMarginMap, summarizeDebts } from "@/lib/debt-summary";
 
 const ALL_FILTER = "__all__";
 const OVERDUE_FILTER = "__overdue__";
@@ -60,6 +60,11 @@ type DebtRow = {
 
 function formatVnd(amount: number) {
   return amount.toLocaleString("vi-VN") + " đ";
+}
+
+function formatSignedVnd(amount: number) {
+  const rounded = Math.round(amount);
+  return `${rounded.toLocaleString("vi-VN")} đ`;
 }
 
 function shipmentLabelFor(s: ShipmentOption) {
@@ -231,6 +236,11 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
   }, [tabDebts, filters]);
 
   const filteredSummary = useMemo(() => summarizeDebts(filteredDebts), [filteredDebts]);
+  const shipmentMargins = useMemo(() => buildShipmentDebtMarginMap(debts), [debts]);
+  const totalShipmentMargin = useMemo(
+    () => [...shipmentMargins.values()].reduce((sum, margin) => sum + margin, 0),
+    [shipmentMargins]
+  );
   const hasActiveFilters = Boolean(
     filters.search || filters.status !== ALL_FILTER || filters.dueFrom || filters.dueTo
   );
@@ -349,7 +359,7 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
       {section === "INVOICES" ? (
         <InvoiceManagementPanel isAdmin={isAdmin} embedded />
       ) : <>
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           icon="📥"
           label="Tổng phải thu"
@@ -367,6 +377,13 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
         />
         <KpiCard icon="📤" label="Tổng phải trả" value={formatVnd(kpi.tongPhaiTra)} valueClassName="text-orange-700" />
         <KpiCard icon="⚠️" label="Tổng quá hạn" value={formatVnd(kpi.tongQuaHan)} valueClassName="text-red-600" />
+        <KpiCard
+          icon="📈"
+          label="Lãi/lỗ các lô đủ dữ liệu"
+          value={formatSignedVnd(totalShipmentMargin)}
+          valueClassName={totalShipmentMargin > 0 ? "text-emerald-700" : totalShipmentMargin < 0 ? "text-red-600" : "text-gray-600"}
+          sub={`${shipmentMargins.size} lô có đủ phải thu và phải trả`}
+        />
       </div>
 
       <div className="mb-4 flex gap-2 border-b border-gray-200">
@@ -485,6 +502,7 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
               <th className="px-4 py-3 text-left font-medium text-gray-500">Tổng tiền</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Đã thanh toán</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Còn lại</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right font-medium text-gray-500">Lãi/lỗ lô hàng</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Hạn thanh toán</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Trạng thái</th>
             </tr>
@@ -492,21 +510,21 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
           <tbody className="divide-y divide-gray-100">
             {isLoading && (
               <tr>
-                <td colSpan={10} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={11} className="px-4 py-6 text-center text-gray-400">
                   Đang tải dữ liệu...
                 </td>
               </tr>
             )}
             {!isLoading && error && (
               <tr>
-                <td colSpan={10} className="px-4 py-6 text-center text-red-600">
+                <td colSpan={11} className="px-4 py-6 text-center text-red-600">
                   {error}
                 </td>
               </tr>
             )}
             {!isLoading && !error && filteredDebts.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={11} className="px-4 py-6 text-center text-gray-400">
                   {tabDebts.length === 0 ? "Chưa có công nợ nào." : "Không có công nợ khớp bộ lọc."}
                 </td>
               </tr>
@@ -590,6 +608,19 @@ export default function DebtsClient({ isAdmin }: { isAdmin: boolean }) {
                         invoice={debt.splitBreakdown?.remainingInvoice}
                         noInvoice={debt.splitBreakdown?.remainingNoInvoice}
                       />
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right font-semibold">
+                      {debt.shipmentId && shipmentMargins.has(debt.shipmentId) ? (
+                        <span className={
+                          shipmentMargins.get(debt.shipmentId)! > 0
+                            ? "text-emerald-700"
+                            : shipmentMargins.get(debt.shipmentId)! < 0
+                              ? "text-red-600"
+                              : "text-gray-500"
+                        }>
+                          {formatSignedVnd(shipmentMargins.get(debt.shipmentId)!)}
+                        </span>
+                      ) : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-4 py-3 text-gray-600">
                       {debt.dueDate ? new Date(debt.dueDate).toLocaleDateString("vi-VN") : "—"}

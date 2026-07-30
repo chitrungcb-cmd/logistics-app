@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
 import { hasModuleAccess } from "@/lib/module-permissions";
 import { COST_CATEGORY_LABELS } from "@/lib/shipment-cost-constants";
+import { parseReportDateRange } from "@/lib/report-date-range";
 
 const SHIPMENT_SELECT = {
   id: true,
@@ -23,6 +24,24 @@ export async function GET(request: NextRequest) {
   const personId = request.nextUrl.searchParams.get("personId")?.trim();
   if (!personId) return apiError("Thiếu người cần xem.", 400);
 
+  const parsedRange = parseReportDateRange(request.nextUrl.searchParams);
+  if (!parsedRange.ok) return apiError(parsedRange.error, 400);
+  const range = parsedRange.range;
+  const expensePeriod = range
+    ? {
+        OR: [
+          { paidAt: { gte: range.start, lt: range.endExclusive } },
+          { paidAt: null, createdAt: { gte: range.start, lt: range.endExclusive } },
+        ],
+      }
+    : {};
+  const receiptPeriod = range
+    ? { paymentDate: { gte: range.start, lt: range.endExclusive } }
+    : {};
+  const transferPeriod = range
+    ? { transferDate: { gte: range.start, lt: range.endExclusive } }
+    : {};
+
   const person = await prisma.user.findUnique({
     where: { id: personId },
     select: { id: true, name: true },
@@ -35,6 +54,7 @@ export async function GET(request: NextRequest) {
         paidByUserId: personId,
         isActual: true,
         costPrice: { gt: 0 },
+        ...expensePeriod,
       },
       orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
       select: {
@@ -51,7 +71,7 @@ export async function GET(request: NextRequest) {
       },
     }),
     prisma.payment.findMany({
-      where: { receivedByUserId: personId },
+      where: { receivedByUserId: personId, ...receiptPeriod },
       orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
       select: {
         id: true,
@@ -72,6 +92,7 @@ export async function GET(request: NextRequest) {
     prisma.internalTransfer.findMany({
       where: {
         OR: [{ fromUserId: personId }, { toUserId: personId }],
+        ...transferPeriod,
       },
       orderBy: [{ transferDate: "desc" }, { createdAt: "desc" }],
       select: {
@@ -80,8 +101,12 @@ export async function GET(request: NextRequest) {
         transferDate: true,
         amount: true,
         note: true,
+        attachmentName: true,
+        attachmentUrl: true,
+        createdAt: true,
         fromUser: { select: { id: true, name: true } },
         toUser: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, name: true } },
       },
     }),
   ]);
@@ -94,6 +119,7 @@ export async function GET(request: NextRequest) {
           shipmentId: { in: shipmentIds },
           isActual: true,
           costPrice: { gt: 0 },
+          ...expensePeriod,
         },
         orderBy: [{ shipmentId: "asc" }, { createdAt: "asc" }],
         select: {
@@ -147,6 +173,10 @@ export async function GET(request: NextRequest) {
         counterparty: isIncoming ? transfer.fromUser.name : transfer.toUser.name,
         invoiceNumber: null,
         note: transfer.note,
+        attachmentName: transfer.attachmentName,
+        attachmentUrl: transfer.attachmentUrl,
+        recordedBy: transfer.createdBy?.name ?? null,
+        recordedAt: transfer.createdAt,
         shipment: null,
       };
     }),

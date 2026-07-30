@@ -10,6 +10,17 @@ function parseTransferDate(value: unknown) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function optionalText(value: unknown, maxLength: number) {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  return text.length <= maxLength ? text || null : undefined;
+}
+
+function isStoredAttachmentUrl(value: string) {
+  return value.startsWith("/api/attachments/file/") || value.startsWith("/uploads/");
+}
+
 export async function POST(request: NextRequest) {
   const currentUser = await getCurrentUser();
   if (!currentUser) return apiError("Chưa đăng nhập.", 401);
@@ -27,12 +38,23 @@ export async function POST(request: NextRequest) {
   const transferDate = parseTransferDate(body.transferDate);
   const transferType = body.transferType === "RETURN" ? "RETURN" : body.transferType === "ADVANCE" ? "ADVANCE" : null;
   const note = typeof body.note === "string" && body.note.trim() ? body.note.trim() : null;
+  const attachmentName = optionalText(body.attachmentName, 255);
+  const attachmentUrl = optionalText(body.attachmentUrl, 1_024);
 
   if (!fromUserId || !toUserId) return apiError("Hãy chọn người chuyển và người nhận.", 400);
   if (fromUserId === toUserId) return apiError("Người chuyển và người nhận phải khác nhau.", 400);
   if (!Number.isFinite(amount) || amount <= 0) return apiError("Số tiền chuyển phải lớn hơn 0.", 400);
   if (!transferDate) return apiError("Ngày chuyển không hợp lệ.", 400);
   if (!transferType) return apiError("Loại tạm ứng/hoàn ứng không hợp lệ.", 400);
+  if (attachmentName === undefined || attachmentUrl === undefined) {
+    return apiError("Thông tin ảnh chuyển tiền không hợp lệ.", 400);
+  }
+  if (attachmentUrl && !isStoredAttachmentUrl(attachmentUrl)) {
+    return apiError("Đường dẫn ảnh chuyển tiền không hợp lệ.", 400);
+  }
+  if (Boolean(attachmentName) !== Boolean(attachmentUrl)) {
+    return apiError("Ảnh chuyển tiền phải có đủ tên tệp và đường dẫn.", 400);
+  }
 
   const [fromUser, toUser] = await Promise.all([
     prisma.user.findFirst({ where: { id: fromUserId, isActive: true }, select: { id: true } }),
@@ -48,6 +70,8 @@ export async function POST(request: NextRequest) {
       amount: Math.round(amount),
       transferDate,
       note,
+      attachmentName,
+      attachmentUrl,
       createdById: currentUser.id,
     },
     select: { id: true },

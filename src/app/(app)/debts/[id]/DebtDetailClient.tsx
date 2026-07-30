@@ -95,6 +95,11 @@ function formatVnd(amount: number) {
   return amount.toLocaleString("vi-VN") + " đ";
 }
 
+function formatSignedVnd(amount: number) {
+  const rounded = Math.round(amount);
+  return `${rounded.toLocaleString("vi-VN")} đ`;
+}
+
 function formatInvoiceMoney(amount: number | null, currency: string) {
   if (amount === null) return "—";
   return currency === "VND" ? formatVnd(amount) : `${amount.toLocaleString("vi-VN")} ${currency}`;
@@ -566,10 +571,22 @@ export default function DebtDetailClient({
               <p className="mt-1 text-sm text-gray-500">So sánh phải thu và phải trả của cùng số tờ khai.</p>
             </div>
             {estimatedMargin !== null && (
-              <div className="rounded-lg bg-violet-50 px-4 py-2 text-right">
-                <p className="text-xs font-medium text-violet-600">Chênh lệch thu − chi</p>
-                <p className={`text-base font-bold ${estimatedMargin >= 0 ? "text-violet-800" : "text-red-700"}`}>
-                  {formatVnd(estimatedMargin)}
+              <div className={`rounded-lg px-4 py-2 text-right ${
+                estimatedMargin > 0
+                  ? "bg-emerald-50"
+                  : estimatedMargin < 0
+                    ? "bg-red-50"
+                    : "bg-gray-50"
+              }`}>
+                <p className="text-xs font-medium text-gray-500">Lãi/lỗ lô hàng</p>
+                <p className={`text-base font-bold ${
+                  estimatedMargin > 0
+                    ? "text-emerald-700"
+                    : estimatedMargin < 0
+                      ? "text-red-700"
+                      : "text-gray-600"
+                }`}>
+                  {formatSignedVnd(estimatedMargin)}
                 </p>
               </div>
             )}

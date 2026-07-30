@@ -26,6 +26,49 @@ export type DebtSummary = {
   remainingNoInvoice: number;
 };
 
+export type ShipmentDebtMarginRow = {
+  shipmentId: string | null;
+  type: "RECEIVABLE" | "PAYABLE";
+  totalAmount: number;
+};
+
+/**
+ * Lãi/lỗ theo lô = tổng phải thu − tổng phải trả. Chỉ trả kết quả khi lô có đủ cả hai vế để
+ * không biến một công nợ còn thiếu dữ liệu thành lãi hoặc lỗ giả.
+ */
+export function buildShipmentDebtMarginMap(rows: readonly ShipmentDebtMarginRow[]) {
+  const totals = new Map<string, {
+    receivable: number;
+    payable: number;
+    hasReceivable: boolean;
+    hasPayable: boolean;
+  }>();
+
+  for (const row of rows) {
+    if (!row.shipmentId) continue;
+    const current = totals.get(row.shipmentId) ?? {
+      receivable: 0,
+      payable: 0,
+      hasReceivable: false,
+      hasPayable: false,
+    };
+    if (row.type === "RECEIVABLE") {
+      current.receivable += row.totalAmount;
+      current.hasReceivable = true;
+    } else {
+      current.payable += row.totalAmount;
+      current.hasPayable = true;
+    }
+    totals.set(row.shipmentId, current);
+  }
+
+  return new Map(
+    [...totals.entries()]
+      .filter(([, value]) => value.hasReceivable && value.hasPayable)
+      .map(([shipmentId, value]) => [shipmentId, value.receivable - value.payable])
+  );
+}
+
 export function summarizeDebts(rows: readonly DebtSummaryRow[]): DebtSummary {
   return rows.reduce<DebtSummary>(
     (summary, row) => {

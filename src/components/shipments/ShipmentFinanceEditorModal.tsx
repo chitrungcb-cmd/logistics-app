@@ -516,7 +516,7 @@ export default function ShipmentFinanceEditorModal({
                       onClick={() => setIsCopyCostsOpen(true)}
                       className="rounded-md border border-blue-300 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
                     >
-                      Sao chép từ lô đã làm
+                      Sao chép chi phí từ lô khác
                     </button>
                     <p className="text-lg font-bold text-emerald-700">{formatVnd(totalCost)}</p>
                   </div>

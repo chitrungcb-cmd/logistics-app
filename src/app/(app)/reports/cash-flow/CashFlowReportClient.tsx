@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import MoneyInput from "@/components/MoneyInput";
+import AttachmentPreviewButton from "@/components/shipments/AttachmentPreviewButton";
 import { computeCashFlowTotals } from "@/lib/cash-flow-report";
 
 type ShipmentRef = {
@@ -34,8 +35,12 @@ type Transfer = {
   transferDate: string;
   amount: number;
   note: string | null;
+  attachmentName: string | null;
+  attachmentUrl: string | null;
+  createdAt: string;
   fromUser: { id: string; name: string };
   toUser: { id: string; name: string };
+  createdBy: { id: string; name: string } | null;
 };
 
 type Report = {
@@ -44,6 +49,7 @@ type Report = {
   unassignedChi: { amount: number; count: number };
   unassignedThu: { amount: number; count: number };
   transfers: Transfer[];
+  period: { from: string; to: string } | null;
 };
 
 type LedgerEntry = {
@@ -55,6 +61,10 @@ type LedgerEntry = {
   counterparty: string | null;
   invoiceNumber: string | null;
   note: string | null;
+  attachmentName?: string | null;
+  attachmentUrl?: string | null;
+  recordedBy?: string | null;
+  recordedAt?: string | null;
   shipment: ShipmentRef | null;
 };
 
@@ -86,14 +96,38 @@ type ShipmentExpenseGroup = {
 };
 
 type LedgerFilter = "ALL" | "RECEIPT" | "EXPENSE" | "TRANSFER";
+type PeriodMode = "ALL" | "DAY" | "MONTH" | "QUARTER" | "YEAR";
+
+type PeriodSelection = {
+  from: string;
+  to: string;
+  label: string;
+};
 
 function formatVnd(n: number) {
   return Math.round(n).toLocaleString("vi-VN") + " đ";
 }
 
+function formatSignedVnd(n: number) {
+  const roundedValue = Math.round(n);
+  if (roundedValue > 0) return `+${roundedValue.toLocaleString("vi-VN")} đ`;
+  return `${roundedValue.toLocaleString("vi-VN")} đ`;
+}
+
 function formatDate(value: string | null) {
   if (!value) return "—";
   return new Date(value).toLocaleDateString("vi-VN");
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function todayInputValue() {
@@ -105,32 +139,82 @@ function todayInputValue() {
   ].join("-");
 }
 
+function currentMonthInputValue() {
+  return todayInputValue().slice(0, 7);
+}
+
+function inputDate(year: number, month: number, day: number) {
+  return [
+    String(year).padStart(4, "0"),
+    String(month).padStart(2, "0"),
+    String(day).padStart(2, "0"),
+  ].join("-");
+}
+
+function formatInputDate(value: string) {
+  const [year, month, day] = value.split("-");
+  return `${day}/${month}/${year}`;
+}
+
+function buildPeriodSelection({
+  mode,
+  day,
+  month,
+  quarter,
+  year,
+}: {
+  mode: PeriodMode;
+  day: string;
+  month: string;
+  quarter: number;
+  year: number;
+}): PeriodSelection | null {
+  if (mode === "ALL") return null;
+  if (mode === "DAY") return { from: day, to: day, label: `Ngày ${formatInputDate(day)}` };
+
+  if (mode === "MONTH") {
+    const [selectedYear, selectedMonth] = month.split("-").map(Number);
+    const lastDay = new Date(Date.UTC(selectedYear, selectedMonth, 0)).getUTCDate();
+    return {
+      from: inputDate(selectedYear, selectedMonth, 1),
+      to: inputDate(selectedYear, selectedMonth, lastDay),
+      label: `Tháng ${selectedMonth}/${selectedYear}`,
+    };
+  }
+
+  if (mode === "QUARTER") {
+    const firstMonth = (quarter - 1) * 3 + 1;
+    const lastMonth = firstMonth + 2;
+    const lastDay = new Date(Date.UTC(year, lastMonth, 0)).getUTCDate();
+    return {
+      from: inputDate(year, firstMonth, 1),
+      to: inputDate(year, lastMonth, lastDay),
+      label: `Quý ${quarter}/${year}`,
+    };
+  }
+
+  return {
+    from: inputDate(year, 1, 1),
+    to: inputDate(year, 12, 31),
+    label: `Năm ${year}`,
+  };
+}
+
 function Balance({ value }: { value: number }) {
   return <span className={value >= 0 ? "text-blue-700" : "text-orange-700"}>{formatVnd(value)}</span>;
 }
 
 function PersonalSettlementStatus({ value, compact = false }: { value: number; compact?: boolean }) {
   const roundedValue = Math.round(value);
-  if (roundedValue === 0) {
-    return (
-      <div className={`rounded-lg border border-emerald-200 bg-emerald-50 ${compact ? "px-3 py-2" : "p-4"}`}>
-        <p className="font-semibold text-emerald-700">Đã cân bằng</p>
-        <p className="text-xs text-emerald-600">Không còn nợ nhân viên · 0 đ</p>
-      </div>
-    );
-  }
-  if (roundedValue > 0) {
-    return (
-      <div className={`rounded-lg border border-blue-200 bg-blue-50 ${compact ? "px-3 py-2" : "p-4"}`}>
-        <p className="font-semibold text-blue-700">Cá nhân đang giữ tiền công ty</p>
-        <p className={`${compact ? "text-xs" : "mt-1 text-lg font-bold"} text-blue-800`}>{formatVnd(roundedValue)}</p>
-      </div>
-    );
-  }
+  const tone = roundedValue === 0
+    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+    : roundedValue > 0
+      ? "border-blue-200 bg-blue-50 text-blue-800"
+      : "border-orange-200 bg-orange-50 text-orange-800";
   return (
-    <div className={`rounded-lg border border-orange-200 bg-orange-50 ${compact ? "px-3 py-2" : "p-4"}`}>
-      <p className="font-semibold text-orange-700">Công ty đang nợ cá nhân</p>
-      <p className={`${compact ? "text-xs" : "mt-1 text-lg font-bold"} text-orange-800`}>{formatVnd(Math.abs(roundedValue))}</p>
+    <div className={`rounded-lg border ${tone} ${compact ? "px-3 py-2" : "p-4"}`}>
+      {!compact && <p className="text-xs font-medium opacity-75">Số dư đối soát</p>}
+      <p className={`${compact ? "text-sm" : "mt-1 text-xl"} font-bold`}>{formatSignedVnd(roundedValue)}</p>
     </div>
   );
 }
@@ -166,9 +250,32 @@ export default function CashFlowReportClient({
   const [ledgerFilter, setLedgerFilter] = useState<LedgerFilter>("ALL");
   const [ledgerSearch, setLedgerSearch] = useState("");
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [periodMode, setPeriodMode] = useState<PeriodMode>("ALL");
+  const [periodDay, setPeriodDay] = useState(todayInputValue());
+  const [periodMonth, setPeriodMonth] = useState(currentMonthInputValue());
+  const [periodQuarter, setPeriodQuarter] = useState(Math.floor(new Date().getMonth() / 3) + 1);
+  const [periodYear, setPeriodYear] = useState(new Date().getFullYear());
+
+  const periodSelection = useMemo(
+    () => buildPeriodSelection({
+      mode: periodMode,
+      day: periodDay,
+      month: periodMonth,
+      quarter: periodQuarter,
+      year: periodYear,
+    }),
+    [periodDay, periodMode, periodMonth, periodQuarter, periodYear]
+  );
+  const periodQuery = periodSelection
+    ? new URLSearchParams({
+        dateFrom: periodSelection.from,
+        dateTo: periodSelection.to,
+      }).toString()
+    : "";
 
   const load = useCallback(() => {
-    return fetch("/api/reports/cash-flow")
+    const url = `/api/reports/cash-flow${periodQuery ? `?${periodQuery}` : ""}`;
+    return fetch(url)
       .then((response) => response.json())
       .then((json) => {
         if (!json.success) throw new Error(json.error || "Không thể tải báo cáo.");
@@ -176,11 +283,18 @@ export default function CashFlowReportClient({
       })
       .catch((loadError) => setError(loadError instanceof Error ? loadError.message : "Đã có lỗi."))
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [periodQuery]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  function preparePeriodChange() {
+    setIsLoading(true);
+    setError(null);
+    setSelectedPersonId(null);
+    setDetail(null);
+  }
 
   const openPersonLedger = useCallback(async (personId: string) => {
     setSelectedPersonId(personId);
@@ -189,7 +303,12 @@ export default function CashFlowReportClient({
     setDetail(null);
     setDetailLoading(true);
     try {
-      const response = await fetch(`/api/reports/cash-flow/details?personId=${encodeURIComponent(personId)}`);
+      const detailParams = new URLSearchParams({ personId });
+      if (periodSelection) {
+        detailParams.set("dateFrom", periodSelection.from);
+        detailParams.set("dateTo", periodSelection.to);
+      }
+      const response = await fetch(`/api/reports/cash-flow/details?${detailParams.toString()}`);
       const json = await response.json();
       if (!response.ok || !json.success) throw new Error(json.error || "Không thể tải sổ chi tiết.");
       setDetail(json.data);
@@ -198,7 +317,7 @@ export default function CashFlowReportClient({
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [periodSelection]);
 
   async function addAccount() {
     const name = newName.trim();
@@ -259,6 +378,35 @@ export default function CashFlowReportClient({
         <Link href="/reports" className="shrink-0 text-sm text-blue-600 hover:underline">← Báo cáo</Link>
       </div>
 
+      <PeriodFilter
+        mode={periodMode}
+        day={periodDay}
+        month={periodMonth}
+        quarter={periodQuarter}
+        year={periodYear}
+        selection={periodSelection}
+        onModeChange={(value) => {
+          preparePeriodChange();
+          setPeriodMode(value);
+        }}
+        onDayChange={(value) => {
+          preparePeriodChange();
+          setPeriodDay(value);
+        }}
+        onMonthChange={(value) => {
+          preparePeriodChange();
+          setPeriodMonth(value);
+        }}
+        onQuarterChange={(value) => {
+          preparePeriodChange();
+          setPeriodQuarter(value);
+        }}
+        onYearChange={(value) => {
+          preparePeriodChange();
+          setPeriodYear(value);
+        }}
+      />
+
       {isLoading ? (
         <p className="py-16 text-center text-gray-400">Đang tải...</p>
       ) : error && !report ? (
@@ -311,7 +459,7 @@ export default function CashFlowReportClient({
               <div>
                 <h2 className="font-semibold text-gray-900">Tổng hợp theo cá nhân</h2>
                 <p className="mt-0.5 text-xs text-gray-500">
-                  Đối soát = tiền cá nhân nhận + nhận nội bộ − tiền đã chi − tiền chuyển nội bộ. Dương là đang giữ tiền công ty; âm là công ty đang nợ cá nhân.
+                  Đối soát = tiền cá nhân nhận + nhận nội bộ − tiền đã chi − tiền chuyển nội bộ. Kết quả chỉ hiển thị số dư dương (+), âm (−) hoặc 0.
                 </p>
               </div>
               {canManageTransfers && (
@@ -366,6 +514,117 @@ export default function CashFlowReportClient({
         </>
       ) : null}
     </div>
+  );
+}
+
+function PeriodFilter({
+  mode,
+  day,
+  month,
+  quarter,
+  year,
+  selection,
+  onModeChange,
+  onDayChange,
+  onMonthChange,
+  onQuarterChange,
+  onYearChange,
+}: {
+  mode: PeriodMode;
+  day: string;
+  month: string;
+  quarter: number;
+  year: number;
+  selection: PeriodSelection | null;
+  onModeChange: (mode: PeriodMode) => void;
+  onDayChange: (day: string) => void;
+  onMonthChange: (month: string) => void;
+  onQuarterChange: (quarter: number) => void;
+  onYearChange: (year: number) => void;
+}) {
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: 16 }, (_, index) => currentYear + 1 - index);
+  const modes: Array<{ value: PeriodMode; label: string }> = [
+    { value: "ALL", label: "Toàn bộ" },
+    { value: "DAY", label: "Theo ngày" },
+    { value: "MONTH", label: "Theo tháng" },
+    { value: "QUARTER", label: "Theo quý" },
+    { value: "YEAR", label: "Theo năm" },
+  ];
+
+  return (
+    <section className="rounded-xl border border-gray-200 bg-white p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="mr-2">
+          <h2 className="text-sm font-semibold text-gray-900">Kỳ tra cứu</h2>
+          <p className="text-xs text-gray-500">Lọc đồng thời toàn bộ số thu, chi và tạm/hoàn ứng.</p>
+        </div>
+        <div className="flex flex-wrap gap-1 rounded-lg bg-gray-100 p-1">
+          {modes.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              onClick={() => onModeChange(item.value)}
+              className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+                mode === item.value
+                  ? "bg-white text-blue-700 shadow-sm"
+                  : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {mode === "DAY" && (
+          <input
+            type="date"
+            value={day}
+            onChange={(event) => event.target.value && onDayChange(event.target.value)}
+            className="input w-auto min-w-44"
+          />
+        )}
+        {mode === "MONTH" && (
+          <input
+            type="month"
+            value={month}
+            onChange={(event) => event.target.value && onMonthChange(event.target.value)}
+            className="input w-auto min-w-44"
+          />
+        )}
+        {mode === "QUARTER" && (
+          <>
+            <select
+              value={quarter}
+              onChange={(event) => onQuarterChange(Number(event.target.value))}
+              className="input w-auto min-w-32"
+            >
+              {[1, 2, 3, 4].map((item) => <option key={item} value={item}>Quý {item}</option>)}
+            </select>
+            <select
+              value={year}
+              onChange={(event) => onYearChange(Number(event.target.value))}
+              className="input w-auto min-w-28"
+            >
+              {years.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </>
+        )}
+        {mode === "YEAR" && (
+          <select
+            value={year}
+            onChange={(event) => onYearChange(Number(event.target.value))}
+            className="input w-auto min-w-32"
+          >
+            {years.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        )}
+
+        <span className="ml-auto rounded-full bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700">
+          {selection?.label || "Tất cả thời gian"}
+        </span>
+      </div>
+    </section>
   );
 }
 
@@ -578,7 +837,7 @@ function PersonLedger({
           {account && (
             <p className="mt-1 text-sm text-gray-500">
               Đã nhận {formatVnd(account.thu)} + nhận nội bộ {formatVnd(account.transferIn)} − đã chi {formatVnd(account.chi)} − chuyển nội bộ {formatVnd(account.transferOut)}
-              {" = "}<b className="text-gray-900">{formatVnd(account.balance)}</b>
+              {" = "}<b className="text-gray-900">{formatSignedVnd(account.balance)}</b>
             </p>
           )}
         </div>
@@ -689,13 +948,14 @@ function PersonLedger({
                 <th className="px-3 py-2">Nội dung</th>
                 <th className="px-3 py-2">Lô hàng liên quan</th>
                 <th className="px-3 py-2">Đối tượng</th>
+                <th className="px-3 py-2">Chứng từ</th>
                 <th className="px-3 py-2 text-right">Tiền vào</th>
                 <th className="px-3 py-2 text-right">Tiền ra</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {entries.length === 0 && (
-                <tr><td colSpan={7} className="px-3 py-10 text-center text-gray-400">Không có giao dịch phù hợp.</td></tr>
+                <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-400">Không có giao dịch phù hợp.</td></tr>
               )}
               {entries.map((entry) => {
                 const isIncoming = entry.type === "RECEIPT" || entry.type === "TRANSFER_IN";
@@ -710,6 +970,22 @@ function PersonLedger({
                     </td>
                     <td className="max-w-xs px-3 py-3"><ShipmentSummary shipment={entry.shipment} /></td>
                     <td className="max-w-56 px-3 py-3 text-gray-600">{entry.counterparty || "—"}</td>
+                    <td className="px-3 py-3">
+                      {entry.attachmentUrl ? (
+                        <AttachmentPreviewButton
+                          url={entry.attachmentUrl}
+                          name={entry.attachmentName}
+                          className="font-medium text-blue-600 hover:underline"
+                        >
+                          📎 {entry.attachmentName || "Xem ảnh"}
+                        </AttachmentPreviewButton>
+                      ) : <span className="text-gray-300">—</span>}
+                      {entry.recordedBy && (
+                        <p className="mt-1 text-xs text-gray-400">
+                          Ghi nhận bởi {entry.recordedBy}{entry.recordedAt ? ` · ${formatDateTime(entry.recordedAt)}` : ""}
+                        </p>
+                      )}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-emerald-700">{isIncoming ? formatVnd(entry.amount) : "—"}</td>
                     <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-red-700">{!isIncoming ? formatVnd(entry.amount) : "—"}</td>
                   </tr>
@@ -838,7 +1114,7 @@ function TransferLedger({ transfers, onAdd }: { transfers: Transfer[]; onAdd?: (
         )}
       </div>
       <div className="overflow-x-auto rounded-lg border border-gray-200">
-        <table className="w-full min-w-[850px] text-sm">
+        <table className="w-full min-w-[1050px] text-sm">
           <thead className="bg-gray-50 text-left text-gray-500">
             <tr>
               <th className="px-3 py-2">Ngày chuyển</th>
@@ -846,12 +1122,14 @@ function TransferLedger({ transfers, onAdd }: { transfers: Transfer[]; onAdd?: (
               <th className="px-3 py-2">Người chuyển</th>
               <th className="px-3 py-2">Người nhận</th>
               <th className="px-3 py-2">Ghi chú</th>
+              <th className="px-3 py-2">Ảnh chuyển tiền</th>
+              <th className="px-3 py-2">Người ghi nhận</th>
               <th className="px-3 py-2 text-right">Số tiền</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {transfers.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-10 text-center text-gray-400">Chưa có khoản tạm ứng/hoàn ứng nào.</td></tr>
+              <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-400">Chưa có khoản tạm ứng/hoàn ứng nào.</td></tr>
             )}
             {transfers.map((transfer) => (
               <tr key={transfer.id} className="align-top">
@@ -864,6 +1142,21 @@ function TransferLedger({ transfers, onAdd }: { transfers: Transfer[]; onAdd?: (
                 <td className="px-3 py-3 font-medium text-orange-700">{transfer.fromUser.name}</td>
                 <td className="px-3 py-3 font-medium text-blue-700">{transfer.toUser.name}</td>
                 <td className="max-w-64 px-3 py-3 text-gray-500">{transfer.note || "—"}</td>
+                <td className="max-w-56 px-3 py-3">
+                  {transfer.attachmentUrl ? (
+                    <AttachmentPreviewButton
+                      url={transfer.attachmentUrl}
+                      name={transfer.attachmentName}
+                      className="inline-block max-w-52 truncate font-medium text-blue-600 hover:underline"
+                    >
+                      📎 {transfer.attachmentName || "Xem ảnh"}
+                    </AttachmentPreviewButton>
+                  ) : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-3 py-3 text-gray-600">
+                  <p>{transfer.createdBy?.name || "—"}</p>
+                  <p className="text-xs text-gray-400">{formatDateTime(transfer.createdAt)}</p>
+                </td>
                 <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-gray-900">{formatVnd(transfer.amount)}</td>
               </tr>
             ))}
@@ -889,8 +1182,39 @@ function TransferModal({
   const [amount, setAmount] = useState("");
   const [transferDate, setTransferDate] = useState(todayInputValue());
   const [note, setNote] = useState("");
+  const [attachmentName, setAttachmentName] = useState("");
+  const [attachmentUrl, setAttachmentUrl] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleProofImageChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      setFormError("Ảnh chuyển tiền chỉ chấp nhận tệp PNG, JPG hoặc JPEG.");
+      return;
+    }
+
+    setUploading(true);
+    setFormError(null);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const response = await fetch("/api/upload", { method: "POST", body });
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.error || "Không thể tải ảnh chuyển tiền.");
+      setAttachmentName(json.data.name || file.name);
+      setAttachmentUrl(json.data.url);
+    } catch (uploadError) {
+      setFormError(uploadError instanceof Error ? uploadError.message : "Không thể tải ảnh chuyển tiền.");
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -900,7 +1224,16 @@ function TransferModal({
       const response = await fetch("/api/reports/cash-flow/transfers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fromUserId, toUserId, transferType, amount, transferDate, note }),
+        body: JSON.stringify({
+          fromUserId,
+          toUserId,
+          transferType,
+          amount,
+          transferDate,
+          note,
+          attachmentName,
+          attachmentUrl,
+        }),
       });
       const json = await response.json();
       if (!response.ok || !json.success) throw new Error(json.error || "Không thể lưu khoản chuyển.");
@@ -963,9 +1296,53 @@ function TransferModal({
           <textarea value={note} onChange={(event) => setNote(event.target.value)} className="input min-h-20" placeholder="Lý do chuyển hoặc nội dung cần ghi nhớ" />
         </label>
 
+        <div className="mt-4">
+          <span className="mb-1 block text-sm font-medium text-gray-700">Ảnh chuyển tiền chứng minh</span>
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              {uploading ? "Đang tải ảnh..." : attachmentUrl ? "Đổi ảnh" : "+ Đính kèm ảnh"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+              onChange={handleProofImageChange}
+              className="hidden"
+            />
+            {attachmentUrl ? (
+              <>
+                <AttachmentPreviewButton
+                  url={attachmentUrl}
+                  name={attachmentName}
+                  className="max-w-xs truncate text-sm font-medium text-blue-600 hover:underline"
+                >
+                  📎 {attachmentName || "Xem ảnh"}
+                </AttachmentPreviewButton>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAttachmentName("");
+                    setAttachmentUrl("");
+                  }}
+                  className="text-sm text-red-600 hover:underline"
+                >
+                  Bỏ ảnh
+                </button>
+              </>
+            ) : (
+              <span className="text-xs text-gray-400">PNG, JPG hoặc JPEG · tối đa 20MB</span>
+            )}
+          </div>
+        </div>
+
         <div className="mt-6 flex justify-end gap-3">
           <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Hủy</button>
-          <button type="submit" disabled={saving} className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+          <button type="submit" disabled={saving || uploading} className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
             {saving ? "Đang lưu..." : "Lưu tạm ứng/hoàn ứng"}
           </button>
         </div>

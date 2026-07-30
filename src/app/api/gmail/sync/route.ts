@@ -14,8 +14,10 @@ import { prisma } from "@/lib/prisma";
 import {
   attachmentBelongsToDeclarationFamilies,
   attachmentMatchesDeclaration,
+  declarationNumbersFromFilename,
   generateShipmentCode,
   isClearanceDecisionFilename,
+  isHysAttachment,
   mergeUniqueAttachments,
   mergeDeclarationBranch,
   sharesDeclarationFamily,
@@ -37,7 +39,8 @@ import {
 // never reach older backlog. Capping by new-message count instead means every run makes progress
 // until the whole mailbox is caught up, however many pages that takes.
 const NEW_MESSAGES_PER_SYNC = 150;
-const SHIPMENT_SYNC_MARKER = "[shipment-attachments-v2]";
+// v3 also scans HYS-only replies in the same Gmail thread as a declaration email.
+const SHIPMENT_SYNC_MARKER = "[shipment-attachments-v3]";
 let syncInProgress = false;
 
 export const runtime = "nodejs";
@@ -280,6 +283,153 @@ async function loadGmailAttachment(
   return buffer;
 }
 
+async function findShipmentByDeclarationNumber(declarationNo: string) {
+  return prisma.shipment.findFirst({
+    where: {
+      OR: [
+        { declarationNo },
+        { declarationBranches: { array_contains: [declarationNo] } },
+      ],
+    },
+  });
+}
+
+/**
+ * HYS is commonly sent in a reply after the declaration email, without attaching ToKhai again.
+ * Resolve that reply to a shipment using an explicit declaration number first, then the Gmail
+ * thread. A thread containing more than one shipment is deliberately left unmatched rather than
+ * guessing and putting chassis/engine data on the wrong lot.
+ */
+async function findShipmentForSupplementalHys(input: {
+  gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>;
+  message: gmail_v1.Schema$Message;
+  attachmentParts: AttachmentPart[];
+}) {
+  const explicitNumbers = new Set<string>();
+  for (const part of input.attachmentParts) {
+    for (const number of declarationNumbersFromFilename(part.filename)) {
+      explicitNumbers.add(number);
+    }
+  }
+  const rawSubject = getSubject(input.message);
+  if (rawSubject) {
+    for (const number of declarationNumbersFromFilename(rawSubject)) {
+      explicitNumbers.add(number);
+    }
+  }
+
+  const explicitShipments = new Map<string, Awaited<ReturnType<typeof findShipmentByDeclarationNumber>>>();
+  for (const declarationNo of explicitNumbers) {
+    const shipment = await findShipmentByDeclarationNumber(declarationNo);
+    if (shipment) explicitShipments.set(shipment.id, shipment);
+  }
+  if (explicitShipments.size === 1) {
+    return [...explicitShipments.values()][0];
+  }
+  if (explicitShipments.size > 1 || !input.message.threadId) return null;
+
+  const thread = await input.gmail.users.threads.get({
+    userId: "me",
+    id: input.message.threadId,
+    format: "full",
+  });
+  const threadShipments = new Map<string, NonNullable<Awaited<ReturnType<typeof findMatchingShipment>>>>();
+
+  for (const threadMessage of thread.data.messages ?? []) {
+    if (!threadMessage.id) continue;
+    const declarationParts = collectAttachmentParts(threadMessage.payload).filter((part) =>
+      isDeclarationFile(part.filename)
+    );
+    const attachmentCache = new Map<string, Buffer>();
+    for (const part of declarationParts) {
+      try {
+        const buffer = await loadGmailAttachment(
+          input.gmail,
+          threadMessage.id,
+          part,
+          attachmentCache
+        );
+        const parsed = await parseTokhaiExcel(buffer);
+        if (!parsed) continue;
+        const shipment = await findMatchingShipment(parsed);
+        if (shipment) threadShipments.set(shipment.id, shipment);
+      } catch (error) {
+        console.error(
+          `Could not inspect declaration ${part.filename} in Gmail thread ${input.message.threadId}:`,
+          error
+        );
+      }
+    }
+  }
+
+  return threadShipments.size === 1 ? [...threadShipments.values()][0] : null;
+}
+
+async function syncSupplementalHysFromMessage(input: {
+  gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>;
+  messageId: string;
+  message: gmail_v1.Schema$Message;
+  attachmentParts: AttachmentPart[];
+}) {
+  const hysParts = input.attachmentParts.filter((part) =>
+    isHysAttachment(part.filename)
+  );
+  if (hysParts.length === 0) {
+    return {
+      status: "skipped" as const,
+      detail: "Email không có file HYS Excel để ghép với lô hàng.",
+    };
+  }
+
+  const shipment = await findShipmentForSupplementalHys({
+    gmail: input.gmail,
+    message: input.message,
+    attachmentParts: hysParts,
+  });
+  if (!shipment) {
+    return {
+      status: "skipped" as const,
+      detail:
+        "Có file HYS nhưng chưa xác định duy nhất được lô hàng từ số tờ khai hoặc chuỗi email.",
+    };
+  }
+
+  const attachmentCache = new Map<string, Buffer>();
+  const savedAttachments: Attachment[] = [];
+  for (const part of hysParts) {
+    const buffer = await loadGmailAttachment(
+      input.gmail,
+      input.messageId,
+      part,
+      attachmentCache
+    );
+    const saved = await saveUploadedFile(part.filename, buffer);
+    savedAttachments.push({ ...saved, uploadedAt: new Date().toISOString() });
+  }
+
+  const existingAttachments = Array.isArray(shipment.attachments)
+    ? (shipment.attachments as unknown as Attachment[])
+    : [];
+  const mergedAttachments = mergeUniqueAttachments(
+    existingAttachments,
+    savedAttachments
+  );
+  await prisma.shipment.update({
+    where: { id: shipment.id },
+    data: { attachments: mergedAttachments },
+  });
+  await indexShipmentVehiclesFromAttachments({
+    shipmentId: shipment.id,
+    attachments: mergedAttachments,
+  });
+
+  return {
+    shipmentId: shipment.id,
+    status: "updated" as const,
+    detail: `Đã ghép ${hysParts.length} file HYS vào lô ${shipment.declarationNo ?? shipment.shipmentCode}.`,
+  };
+}
+
 async function syncDeclarationFromMessage(input: {
   gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>;
   messageId: string;
@@ -487,7 +637,7 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
         // Gmail's `filename:` operator requires an exact token match, not a substring — "ToKhai" alone
         // never matches "ToKhaiHQ7N_....xlsx". Search the literal filename prefixes instead (verified
         // against the real mailbox); the isDeclarationFile() check below is the actual attachment filter.
-        q: "has:attachment (ToKhaiHQ7N OR ToKhaiHQ7X)",
+        q: "has:attachment (ToKhaiHQ7N OR ToKhaiHQ7X OR HYS OR dinhkem)",
         maxResults: 100,
         pageToken,
       });
@@ -529,10 +679,21 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
         );
 
         if (declarationParts.length === 0) {
-          skipped++;
-          const detail = "Không tìm thấy file tờ khai (ToKhai) đính kèm trong email.";
-          results.push({ messageId, status: "skipped", detail });
-          await recordProcessedEmail({ gmailMessageId: messageId, status: "skipped", detail });
+          const outcome = await syncSupplementalHysFromMessage({
+            gmail,
+            messageId,
+            message,
+            attachmentParts,
+          });
+          if (outcome.status === "updated") updated++;
+          else skipped++;
+          results.push({ messageId, status: outcome.status, detail: outcome.detail });
+          await recordProcessedEmail({
+            gmailMessageId: messageId,
+            shipmentId: outcome.shipmentId,
+            status: outcome.status,
+            detail: outcome.detail,
+          });
           continue;
         }
 

@@ -26,6 +26,7 @@ import {
 } from "@/lib/shipment-constants";
 import { applyCostPresetsToShipment } from "@/lib/cost-presets";
 import { ensureShipmentWorkflowTasks } from "@/lib/shipment-workflow";
+import { ensureConsultationTask } from "@/lib/consultation-task";
 import { syncVendorInvoices, type VendorInvoiceSyncSummary } from "@/lib/vendor-invoice-sync";
 import { notifyNewShipmentAssignees, syncMissingActualCostAlerts } from "@/lib/notifications";
 import {
@@ -564,6 +565,7 @@ async function syncDeclarationFromMessage(input: {
         shipmentId: existing.id,
         createdByUserId: user.id,
       }),
+      ensureConsultationTask({ shipmentId: existing.id, createdByUserId: user.id }),
     ]);
 
     return {
@@ -618,6 +620,7 @@ async function syncDeclarationFromMessage(input: {
       shipmentId: shipment.id,
       createdByUserId: user.id,
     }),
+    ensureConsultationTask({ shipmentId: shipment.id, createdByUserId: user.id }),
   ]);
   await notifyNewShipmentAssignees({
     shipmentId: shipment.id,

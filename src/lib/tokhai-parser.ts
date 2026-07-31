@@ -134,19 +134,24 @@ function findDocumentDirection(rows: Rows): "Nhập khẩu" | "Xuất khẩu" | 
   return null;
 }
 
+// Giờ trên tờ khai là giờ Việt Nam (+07). Dựng mốc theo UTC rồi trừ 7 tiếng để KHÔNG phụ thuộc múi
+// giờ máy chủ: Mac dev chạy +07, còn Hostinger chạy UTC — nếu dùng new Date(y,m,d,h,...) theo giờ local
+// thì cùng một tờ khai parse ở hai nơi sẽ ra hai mốc lệch 7 tiếng, làm sai cả "ngày" hiển thị lẫn thứ
+// tự cùng ngày (tờ khai buổi tối còn bị nhảy sang ngày hôm sau).
+const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
 function parseVnDateTime(raw: string): Date | null {
   const match = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}):(\d{2}))?/);
   if (!match) return null;
   const [, dd, mm, yyyy, hh, mi, ss] = match;
-  const date = new Date(
+  const ms = Date.UTC(
     Number(yyyy),
     Number(mm) - 1,
     Number(dd),
     hh ? Number(hh) : 0,
     mi ? Number(mi) : 0,
     ss ? Number(ss) : 0
-  );
-  return Number.isNaN(date.getTime()) ? null : date;
+  ) - VN_OFFSET_MS;
+  return Number.isNaN(ms) ? null : new Date(ms);
 }
 
 /** Raw "Địa điểm dỡ hàng"/"Địa điểm xếp hàng" text — verbose fallback when no code lookup matches. */

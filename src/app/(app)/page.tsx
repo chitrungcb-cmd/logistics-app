@@ -7,6 +7,7 @@ import { statusBadgeClass, isDateApproaching } from "@/lib/shipment-constants";
 import { isOverdue, sumPayments } from "@/lib/debt-constants";
 import { adHocTaskWhere, TASK_STATUS_LABELS, taskStatusBadgeClass } from "@/lib/task-constants";
 import { CONSULTATION_TASK_TITLE } from "@/lib/consultation-task";
+import ConsultationTable from "./ConsultationTable";
 
 function formatVnd(amount: number) {
   return amount.toLocaleString("vi-VN") + " đ";
@@ -104,6 +105,20 @@ export default async function DashboardPage() {
       return (a.consultationDate?.getTime() ?? 0) - (b.consultationDate?.getTime() ?? 0);
     });
   const overdueConsultationCount = openConsultations.filter((s) => s.overdue).length;
+  // Chuẩn hóa cho bảng client (Date -> nhãn ngày giờ VN) — bấm cả dòng để mở cửa sổ lô.
+  const consultationTableRows = openConsultations.map((s) => ({
+    id: s.id,
+    goodsName: s.goodsName,
+    customerName: s.customerName,
+    declarationNo: s.declarationNo,
+    status: s.status,
+    port: s.port,
+    dateLabel: s.consultationDate
+      ? s.consultationDate.toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })
+      : "—",
+    overdue: s.overdue,
+    approaching: !s.overdue && isDateApproaching(s.consultationDate),
+  }));
 
   const statusCount = (status: string) =>
     statusGroups.find((g) => g.status === status)?._count._all ?? 0;
@@ -306,49 +321,10 @@ export default async function DashboardPage() {
               {openConsultations.length}
             </span>
           </div>
-          {openConsultations.length === 0 ? (
+          {consultationTableRows.length === 0 ? (
             <p className="text-sm text-gray-400">Tất cả lịch tham vấn đã được tích hoàn thành.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200 text-sm">
-                <thead>
-                  <tr>
-                    <th className="py-2 pr-3 text-left text-xs font-medium text-gray-500">Tên hàng</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Khách hàng</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Số tờ khai</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Trạng thái</th>
-                    <th className="py-2 pl-3 text-right text-xs font-medium text-gray-500">Ngày tham vấn</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {openConsultations.map((s) => {
-                    const approaching = !s.overdue && isDateApproaching(s.consultationDate);
-                    const dateClass = s.overdue ? "text-red-600" : approaching ? "text-amber-700" : "text-gray-600";
-                    return (
-                      <tr key={s.id} className={`hover:bg-gray-50 ${s.overdue ? "bg-red-50/40" : ""}`}>
-                        <td className="max-w-[14rem] py-2.5 pr-3">
-                          <ShipmentLink shipmentId={s.id} className="block truncate text-left font-medium text-gray-900 hover:underline">
-                            {s.goodsName || "Chưa có tên hàng"}
-                          </ShipmentLink>
-                          {s.port && <p className="truncate text-xs text-gray-400">{s.port}</p>}
-                        </td>
-                        <td className="max-w-[10rem] truncate px-3 py-2.5 text-gray-600">{s.customerName}</td>
-                        <td className="px-3 py-2.5 text-gray-600">{s.declarationNo || "—"}</td>
-                        <td className="px-3 py-2.5">
-                          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusBadgeClass(s.status)}`}>
-                            {s.status}
-                          </span>
-                        </td>
-                        <td className={`whitespace-nowrap py-2.5 pl-3 text-right font-medium ${dateClass}`}>
-                          {s.overdue ? "⚠ Quá hạn · " : approaching ? "⏰ " : ""}
-                          {s.consultationDate ? new Date(s.consultationDate).toLocaleDateString("vi-VN") : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ConsultationTable rows={consultationTableRows} />
           )}
         </section>
       </div>

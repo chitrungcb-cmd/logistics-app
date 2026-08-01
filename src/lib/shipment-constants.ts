@@ -53,7 +53,31 @@ export type Attachment = {
   name: string;
   url: string;
   uploadedAt: string;
+  // Email Gmail nguồn của đính kèm. CÓ giá trị = do sync kéo từ Gmail về (được phép tự gỡ khi email
+  // đó bị xóa/vào Thùng rác). KHÔNG có = file tự upload trong app hoặc dữ liệu cũ → KHÔNG BAO GIỜ tự gỡ.
+  gmailMessageId?: string;
+  gmailThreadId?: string;
 };
+
+/**
+ * Bỏ khỏi danh sách những đính kèm có email nguồn nằm trong tập email đã bị xóa/Thùng rác (Phần B của
+ * "app soi gương Gmail"). Chỉ đụng đến đính kèm CÓ gmailMessageId; file tự upload (không nguồn) luôn giữ.
+ */
+export function removeAttachmentsFromDeletedMessages(
+  attachments: Attachment[],
+  deletedMessageIds: Set<string>
+): { kept: Attachment[]; removed: Attachment[] } {
+  const kept: Attachment[] = [];
+  const removed: Attachment[] = [];
+  for (const attachment of attachments) {
+    if (attachment.gmailMessageId && deletedMessageIds.has(attachment.gmailMessageId)) {
+      removed.push(attachment);
+    } else {
+      kept.push(attachment);
+    }
+  }
+  return { kept, removed };
+}
 
 function normalizeDocumentText(value: string) {
   return value

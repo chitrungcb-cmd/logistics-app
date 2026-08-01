@@ -15,10 +15,12 @@ function formatDate(value: string | null | undefined) {
 export default function ShipmentDetailsTable({
   shipment,
   linkCustomer = false,
+  onCustomerClick,
   warnConsultationDate = false,
 }: {
   shipment: ShipmentDTO;
   linkCustomer?: boolean;
+  onCustomerClick?: () => void;
   warnConsultationDate?: boolean;
 }) {
   const branches = getDeclarationBranches(shipment.declarationBranches);
@@ -33,7 +35,15 @@ export default function ShipmentDetailsTable({
   ) : (
     shipment.declarationNo
   );
-  const customerValue = linkCustomer && shipment.customerId ? (
+  const customerValue = onCustomerClick && shipment.customerId ? (
+    <button
+      type="button"
+      onClick={onCustomerClick}
+      className="text-left font-medium text-blue-600 hover:underline"
+    >
+      {shipment.customerName}
+    </button>
+  ) : linkCustomer && shipment.customerId ? (
     <Link href={`/customers/${shipment.customerId}`} className="font-medium text-blue-600 hover:underline">
       {shipment.customerName}
     </Link>

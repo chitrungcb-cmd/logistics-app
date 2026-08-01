@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import CustomerInfoModal from "@/components/customers/CustomerInfoModal";
 import AttachmentPreviewModal from "@/components/shipments/AttachmentPreviewModal";
 import Badge from "@/components/shipments/Badge";
 import ShipmentEditModal from "@/components/shipments/ShipmentEditModal";
@@ -70,6 +71,7 @@ export default function ShipmentInfoModal({
   const [error, setError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState<Attachment | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [debts, setDebts] = useState<ShipmentDebt[]>([]);
   const [selectedDebtId, setSelectedDebtId] = useState<string | null>(null);
   const [viewer, setViewer] = useState<Viewer | null>(null);
@@ -167,7 +169,9 @@ export default function ShipmentInfoModal({
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
-      if (isEditing) {
+      if (selectedCustomerId) {
+        setSelectedCustomerId(null);
+      } else if (isEditing) {
         setIsEditing(false);
       } else if (selectedDebtId) {
         setSelectedDebtId(null);
@@ -179,7 +183,7 @@ export default function ShipmentInfoModal({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [isEditing, loadDebts, onClose, selectedDebtId]);
+  }, [isEditing, loadDebts, onClose, selectedCustomerId, selectedDebtId]);
 
   return (
     <>
@@ -244,7 +248,14 @@ export default function ShipmentInfoModal({
 
                 <section className="rounded-lg border border-gray-200 bg-white p-5">
                   <h3 className="mb-4 text-base font-semibold text-gray-900">Thông tin chi tiết</h3>
-                  <ShipmentDetailsTable shipment={shipment} />
+                  <ShipmentDetailsTable
+                    shipment={shipment}
+                    onCustomerClick={
+                      shipment.customerId
+                        ? () => setSelectedCustomerId(shipment.customerId)
+                        : undefined
+                    }
+                  />
                 </section>
 
                 {debts.length > 0 && (
@@ -403,6 +414,13 @@ export default function ShipmentInfoModal({
             setShipment(updatedShipment);
             setIsEditing(false);
           }}
+        />
+      )}
+
+      {selectedCustomerId && (
+        <CustomerInfoModal
+          customerId={selectedCustomerId}
+          onClose={() => setSelectedCustomerId(null)}
         />
       )}
 

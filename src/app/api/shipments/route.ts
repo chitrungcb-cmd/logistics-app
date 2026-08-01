@@ -39,8 +39,12 @@ const SHIPMENT_LIST_SELECT = {
   },
 } as const;
 
+// Cùng ngày tờ khai thì tờ khai đăng ký muộn hơn nằm trên: declarationDate (đã gồm giờ đăng ký) giảm
+// dần lo phần lớn; số tờ khai giảm dần là tie-breaker cho các bản ghi mất giờ (00:00) — VNACCS cấp số
+// tuần tự nên số lớn hơn = khai muộn hơn (số tờ khai ở đây đồng nhất 12 chữ số nên so chuỗi = so số).
 const SHIPMENT_LIST_ORDER: Prisma.ShipmentOrderByWithRelationInput[] = [
   { declarationDate: { sort: "desc", nulls: "last" } },
+  { declarationNo: { sort: "desc", nulls: "last" } },
   { createdAt: "desc" },
 ];
 

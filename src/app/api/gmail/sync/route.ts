@@ -19,6 +19,7 @@ import {
   isClearanceDecisionFilename,
   isHysAttachment,
   mergeUniqueAttachments,
+  removeAttachmentsFromDeletedMessages,
   mergeDeclarationBranch,
   sharesDeclarationFamily,
   resolveSyncedShipmentStatus,
@@ -26,6 +27,7 @@ import {
 } from "@/lib/shipment-constants";
 import { applyCostPresetsToShipment } from "@/lib/cost-presets";
 import { ensureShipmentWorkflowTasks } from "@/lib/shipment-workflow";
+import { ensureConsultationTask } from "@/lib/consultation-task";
 import { syncVendorInvoices, type VendorInvoiceSyncSummary } from "@/lib/vendor-invoice-sync";
 import { notifyNewShipmentAssignees, syncMissingActualCostAlerts } from "@/lib/notifications";
 import {
@@ -41,7 +43,15 @@ import {
 const NEW_MESSAGES_PER_SYNC = 150;
 // v3 also scans HYS-only replies in the same Gmail thread as a declaration email.
 const SHIPMENT_SYNC_MARKER = "[shipment-attachments-v3]";
-let syncInProgress = false;
+
+// Khoá đồng bộ trong bộ nhớ tiến trình. Lưu MỐC bắt đầu (thay cho cờ bật/tắt) để nếu một lần sync bị
+// treo và không bao giờ nhả khoá, lần gọi kế tiếp vẫn tự vượt qua sau SYNC_STALE_MS — khoá không thể
+// kẹt vĩnh viễn khiến "đồng bộ ngay"/cron mãi báo "đang chạy" cho tới khi restart server.
+const SYNC_STALE_MS = 5 * 60 * 1000;
+let syncStartedAt: number | null = null;
+function syncIsRunning() {
+  return syncStartedAt !== null && Date.now() - syncStartedAt < SYNC_STALE_MS;
+}
 
 export const runtime = "nodejs";
 
@@ -404,7 +414,12 @@ async function syncSupplementalHysFromMessage(input: {
       attachmentCache
     );
     const saved = await saveUploadedFile(part.filename, buffer);
-    savedAttachments.push({ ...saved, uploadedAt: new Date().toISOString() });
+    savedAttachments.push({
+      ...saved,
+      uploadedAt: new Date().toISOString(),
+      gmailMessageId: input.messageId,
+      gmailThreadId: input.message.threadId ?? undefined,
+    });
   }
 
   const existingAttachments = Array.isArray(shipment.attachments)
@@ -422,6 +437,7 @@ async function syncSupplementalHysFromMessage(input: {
     shipmentId: shipment.id,
     attachments: mergedAttachments,
   });
+  await mirrorThreadAttachments({ gmail: input.gmail, threadId: input.message.threadId, shipmentId: shipment.id });
 
   return {
     shipmentId: shipment.id,
@@ -430,9 +446,113 @@ async function syncSupplementalHysFromMessage(input: {
   };
 }
 
+// "App soi gương Gmail" — Phần A: lấy MỌI đính kèm trong cả chuỗi email (không chỉ ToKhai/HYS) gắn vào
+// lô, mỗi đính kèm ghi rõ email nguồn (gmailMessageId) để Phần B đối chiếu xóa. Bỏ qua đính kèm đã có
+// (theo email nguồn + tên) để không tải trùng khi chuỗi bị quét lại nhiều lần; bỏ qua email đang ở
+// Thùng rác. Lỗi tải một file không làm hỏng cả lô.
+async function mirrorThreadAttachments(input: {
+  gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>;
+  threadId: string | null | undefined;
+  shipmentId: string;
+}) {
+  if (!input.threadId) return;
+  const shipment = await prisma.shipment.findUnique({
+    where: { id: input.shipmentId },
+    select: { attachments: true },
+  });
+  const existing: Attachment[] = Array.isArray(shipment?.attachments)
+    ? (shipment!.attachments as unknown as Attachment[])
+    : [];
+  const present = new Set(
+    existing.filter((a) => a.gmailMessageId).map((a) => `${a.gmailMessageId}::${a.name}`)
+  );
+
+  let thread;
+  try {
+    thread = await input.gmail.users.threads.get({ userId: "me", id: input.threadId, format: "full" });
+  } catch (error) {
+    console.error(`Không lấy được chuỗi email ${input.threadId} để soi đính kèm:`, error);
+    return;
+  }
+
+  const cache = new Map<string, Buffer>();
+  const added: Attachment[] = [];
+  for (const msg of thread.data.messages ?? []) {
+    if (!msg.id) continue;
+    if ((msg.labelIds ?? []).includes("TRASH")) continue; // email đang bị xóa → không kéo về
+    for (const part of collectAttachmentParts(msg.payload)) {
+      const key = `${msg.id}::${part.filename}`;
+      if (present.has(key)) continue;
+      present.add(key);
+      try {
+        const buffer = await loadGmailAttachment(input.gmail, msg.id, part, cache);
+        const saved = await saveUploadedFile(part.filename, buffer);
+        added.push({
+          ...saved,
+          uploadedAt: new Date().toISOString(),
+          gmailMessageId: msg.id,
+          gmailThreadId: input.threadId,
+        });
+      } catch (error) {
+        console.error(`Không tải được đính kèm ${part.filename} từ email ${msg.id}:`, error);
+      }
+    }
+  }
+
+  if (added.length === 0) return;
+  const merged = mergeUniqueAttachments(existing, added);
+  await prisma.shipment.update({ where: { id: input.shipmentId }, data: { attachments: merged } });
+  await indexShipmentVehiclesFromAttachments({ shipmentId: input.shipmentId, attachments: merged });
+}
+
+// "App soi gương Gmail" — Phần B: đối chiếu email nguồn của các đính kèm; email nào Gmail báo 404 hoặc
+// đã vào Thùng rác thì GỠ các đính kèm của email đó khỏi lô. TUYỆT ĐỐI không đụng file tự upload (không
+// có gmailMessageId). Lỗi mạng/không xác định → giữ nguyên, không xóa. Chạy tối đa 1 lần/giờ cho nhẹ.
+let lastReconcileAt = 0;
+const RECONCILE_EVERY_MS = 60 * 60 * 1000;
+async function reconcileDeletedGmailAttachments(
+  gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>
+) {
+  if (Date.now() - lastReconcileAt < RECONCILE_EVERY_MS) return { removed: 0, checked: 0 };
+  lastReconcileAt = Date.now();
+
+  const shipments = await prisma.shipment.findMany({ select: { id: true, attachments: true } });
+  const sourceIds = new Set<string>();
+  for (const s of shipments) {
+    const atts = Array.isArray(s.attachments) ? (s.attachments as unknown as Attachment[]) : [];
+    for (const a of atts) if (a.gmailMessageId) sourceIds.add(a.gmailMessageId);
+  }
+
+  const deleted = new Set<string>();
+  for (const id of sourceIds) {
+    try {
+      const res = await gmail.users.messages.get({ userId: "me", id, format: "minimal" });
+      if ((res.data.labelIds ?? []).includes("TRASH")) deleted.add(id);
+    } catch (error) {
+      const status =
+        (error as { code?: number; response?: { status?: number } })?.code ??
+        (error as { response?: { status?: number } })?.response?.status;
+      if (status === 404) deleted.add(id); // chỉ 404 mới coi là đã xóa; lỗi khác thì giữ nguyên
+    }
+  }
+  if (deleted.size === 0) return { removed: 0, checked: sourceIds.size };
+
+  let removed = 0;
+  for (const s of shipments) {
+    const atts = Array.isArray(s.attachments) ? (s.attachments as unknown as Attachment[]) : [];
+    const { kept, removed: gone } = removeAttachmentsFromDeletedMessages(atts, deleted);
+    if (gone.length > 0) {
+      await prisma.shipment.update({ where: { id: s.id }, data: { attachments: kept } });
+      removed += gone.length;
+    }
+  }
+  return { removed, checked: sourceIds.size };
+}
+
 async function syncDeclarationFromMessage(input: {
   gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>;
   messageId: string;
+  threadId: string | null;
   parsed: ParsedDeclaration;
   attachmentParts: AttachmentPart[];
   attachmentCache: Map<string, Buffer>;
@@ -442,6 +562,7 @@ async function syncDeclarationFromMessage(input: {
   const {
     gmail,
     messageId,
+    threadId,
     parsed,
     attachmentParts,
     attachmentCache,
@@ -495,7 +616,12 @@ async function syncDeclarationFromMessage(input: {
       attachmentCache
     );
     const saved = await saveUploadedFile(part.filename, buffer);
-    savedAttachments.push({ ...saved, uploadedAt: new Date().toISOString() });
+    savedAttachments.push({
+      ...saved,
+      uploadedAt: new Date().toISOString(),
+      gmailMessageId: messageId,
+      gmailThreadId: threadId ?? undefined,
+    });
   }
 
   if (existing) {
@@ -550,12 +676,14 @@ async function syncDeclarationFromMessage(input: {
       shipmentId: existing.id,
       attachments: mergedAttachments,
     });
+    await mirrorThreadAttachments({ gmail, threadId, shipmentId: existing.id });
     await Promise.all([
       applyCostPresetsToShipment({ shipmentId: existing.id, userId: user.id }),
       ensureShipmentWorkflowTasks({
         shipmentId: existing.id,
         createdByUserId: user.id,
       }),
+      ensureConsultationTask({ shipmentId: existing.id, createdByUserId: user.id }),
     ]);
 
     return {
@@ -604,12 +732,14 @@ async function syncDeclarationFromMessage(input: {
     shipmentId: shipment.id,
     attachments: mergeUniqueAttachments(savedAttachments),
   });
+  await mirrorThreadAttachments({ gmail, threadId, shipmentId: shipment.id });
   await Promise.all([
     applyCostPresetsToShipment({ shipmentId: shipment.id, userId: user.id }),
     ensureShipmentWorkflowTasks({
       shipmentId: shipment.id,
       createdByUserId: user.id,
     }),
+    ensureConsultationTask({ shipmentId: shipment.id, createdByUserId: user.id }),
   ]);
   await notifyNewShipmentAssignees({
     shipmentId: shipment.id,
@@ -767,6 +897,7 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
           const outcome = await syncDeclarationFromMessage({
             gmail,
             messageId,
+            threadId: message.threadId ?? null,
             parsed: group.parsed,
             attachmentParts: matchingParts,
             attachmentCache,
@@ -843,6 +974,15 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
       console.error("Vehicle workbook backfill failed:", vehicleIndexError);
     }
 
+    try {
+      // "App soi gương Gmail" — Phần B: gỡ đính kèm của các email đã bị xóa/vào Thùng rác. Tự giới hạn
+      // 1 lần/giờ bên trong hàm; chỉ đụng đính kèm có nguồn Gmail, không đụng file tự upload.
+      const rec = await reconcileDeletedGmailAttachments(gmail);
+      if (rec.removed > 0) console.log(`[gmail-mirror] Đã gỡ ${rec.removed} đính kèm của email đã xóa.`);
+    } catch (reconcileError) {
+      console.error("Đối chiếu đính kèm Gmail đã xóa thất bại:", reconcileError);
+    }
+
     return {
       scanned,
       newlyFound: messageIds.length,
@@ -882,7 +1022,7 @@ export async function POST(request: NextRequest) {
       return apiError("Không thể xác thực Gmail lúc này. Vui lòng thử lại.", 502);
     }
 
-    if (syncInProgress) {
+    if (syncIsRunning()) {
       return apiSuccess({
         scanned: 0,
         newlyFound: 0,
@@ -900,7 +1040,7 @@ export async function POST(request: NextRequest) {
         inProgress: true,
       }, 202);
     }
-    syncInProgress = true;
+    syncStartedAt = Date.now();
     ownsSyncLock = true;
 
     // Cron (gọi bằng Bearer CRON_SECRET) chạy ngầm và trả 202 ngay để dịch vụ cron timeout ngắn
@@ -910,7 +1050,7 @@ export async function POST(request: NextRequest) {
       void runGmailSync(gmail, user)
         .catch((error) => console.error("Background Gmail sync failed:", error))
         .finally(() => {
-          syncInProgress = false;
+          syncStartedAt = null;
         });
       ownsSyncLock = false; // tác vụ nền tự nhả khóa; finally ngoài không đụng tới
       return apiSuccess({ started: true, inProgress: true }, 202);
@@ -921,6 +1061,6 @@ export async function POST(request: NextRequest) {
     console.error("POST /api/gmail/sync failed:", error);
     return apiError("Đồng bộ email thất bại.", 500);
   } finally {
-    if (ownsSyncLock) syncInProgress = false;
+    if (ownsSyncLock) syncStartedAt = null;
   }
 }

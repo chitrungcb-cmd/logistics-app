@@ -6,6 +6,8 @@ import { prisma } from "@/lib/prisma";
 import { statusBadgeClass, isDateApproaching } from "@/lib/shipment-constants";
 import { isOverdue, sumPayments } from "@/lib/debt-constants";
 import { adHocTaskWhere, TASK_STATUS_LABELS, taskStatusBadgeClass } from "@/lib/task-constants";
+import { CONSULTATION_TASK_TITLE } from "@/lib/consultation-task";
+import ConsultationTable from "./ConsultationTable";
 
 function formatVnd(amount: number) {
   return amount.toLocaleString("vi-VN") + " đ";
@@ -40,7 +42,7 @@ export default async function DashboardPage() {
     taskGroups,
     taskAssignees,
     recentShipments,
-    upcomingConsultations,
+    consultationRows,
   ] = await Promise.all([
     prisma.shipment.count(),
     prisma.shipment.groupBy({ by: ["status"], _count: { _all: true } }),
@@ -74,7 +76,7 @@ export default async function DashboardPage() {
       select: { id: true, goodsName: true, customerName: true, status: true, declarationNo: true, createdAt: true },
     }),
     prisma.shipment.findMany({
-      where: { consultationDate: { gte: startOfToday } },
+      where: { consultationDate: { not: null } },
       orderBy: { consultationDate: "asc" },
       select: {
         id: true,
@@ -84,9 +86,39 @@ export default async function DashboardPage() {
         declarationNo: true,
         status: true,
         port: true,
+        // Trạng thái nhiệm vụ "Tham vấn giá" của Linh — nguồn xác định đã tích hoàn thành hay chưa.
+        tasks: { where: { title: CONSULTATION_TASK_TITLE }, select: { status: true }, take: 1 },
       },
     }),
   ]);
+
+  // Lô có lịch tham vấn mà nhiệm vụ "Tham vấn giá" CHƯA tích hoàn thành. Quá hạn = đã qua ngày tham vấn
+  // mà vẫn chưa xong → bảng tổng quan cảnh báo đỏ; sắp tới (trong ~7 ngày) cảnh báo hổ phách.
+  const openConsultations = consultationRows
+    .filter((s) => s.tasks[0]?.status !== "DONE")
+    .map((s) => ({
+      ...s,
+      overdue: Boolean(s.consultationDate && s.consultationDate < startOfToday),
+    }))
+    .sort((a, b) => {
+      if (a.overdue !== b.overdue) return a.overdue ? -1 : 1; // quá hạn lên đầu
+      return (a.consultationDate?.getTime() ?? 0) - (b.consultationDate?.getTime() ?? 0);
+    });
+  const overdueConsultationCount = openConsultations.filter((s) => s.overdue).length;
+  // Chuẩn hóa cho bảng client (Date -> nhãn ngày giờ VN) — bấm cả dòng để mở cửa sổ lô.
+  const consultationTableRows = openConsultations.map((s) => ({
+    id: s.id,
+    goodsName: s.goodsName,
+    customerName: s.customerName,
+    declarationNo: s.declarationNo,
+    status: s.status,
+    port: s.port,
+    dateLabel: s.consultationDate
+      ? s.consultationDate.toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })
+      : "—",
+    overdue: s.overdue,
+    approaching: !s.overdue && isDateApproaching(s.consultationDate),
+  }));
 
   const statusCount = (status: string) =>
     statusGroups.find((g) => g.status === status)?._count._all ?? 0;
@@ -158,11 +190,21 @@ export default async function DashboardPage() {
             />
             <ActionItem
               icon="📅"
-              label="Lịch tham vấn sắp tới"
-              value={String(upcomingConsultations.length)}
-              hint="Theo ngày tham vấn đã nhập"
+              label="Tham vấn cần xử lý"
+              value={String(openConsultations.length)}
+              hint={
+                overdueConsultationCount > 0
+                  ? `${overdueConsultationCount} lô đã quá hạn — chưa tích hoàn thành`
+                  : "Nhiệm vụ tham vấn của Linh chưa tích hoàn thành"
+              }
               href="#upcoming-consultations"
-              tone={upcomingConsultations.some((shipment) => isDateApproaching(shipment.consultationDate)) ? "amber" : "neutral"}
+              tone={
+                overdueConsultationCount > 0
+                  ? "red"
+                  : openConsultations.some((s) => isDateApproaching(s.consultationDate))
+                    ? "amber"
+                    : "neutral"
+              }
             />
             {overdueDebt !== null && (
               <ActionItem
@@ -269,51 +311,20 @@ export default async function DashboardPage() {
 
         <section id="upcoming-consultations" className="scroll-mt-6 rounded-xl border border-gray-200 bg-white p-5">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-gray-900">Ngày tham vấn sắp tới</h2>
-            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">{upcomingConsultations.length}</span>
+            <h2 className="text-base font-semibold text-gray-900">Lịch tham vấn cần xử lý</h2>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                overdueConsultationCount > 0 ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600"
+              }`}
+            >
+              {overdueConsultationCount > 0 ? `${overdueConsultationCount} quá hạn / ` : ""}
+              {openConsultations.length}
+            </span>
           </div>
-          {upcomingConsultations.length === 0 ? (
-            <p className="text-sm text-gray-400">Không có lịch tham vấn nào sắp tới.</p>
+          {consultationTableRows.length === 0 ? (
+            <p className="text-sm text-gray-400">Tất cả lịch tham vấn đã được tích hoàn thành.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200 text-sm">
-                <thead>
-                  <tr>
-                    <th className="py-2 pr-3 text-left text-xs font-medium text-gray-500">Tên hàng</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Khách hàng</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Số tờ khai</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Trạng thái</th>
-                    <th className="py-2 pl-3 text-right text-xs font-medium text-gray-500">Ngày tham vấn</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {upcomingConsultations.map((s) => {
-                    const warn = isDateApproaching(s.consultationDate);
-                    return (
-                      <tr key={s.id} className="hover:bg-gray-50">
-                        <td className="max-w-[14rem] py-2.5 pr-3">
-                          <ShipmentLink shipmentId={s.id} className="block truncate text-left font-medium text-gray-900 hover:underline">
-                            {s.goodsName || "Chưa có tên hàng"}
-                          </ShipmentLink>
-                          {s.port && <p className="truncate text-xs text-gray-400">{s.port}</p>}
-                        </td>
-                        <td className="max-w-[10rem] truncate px-3 py-2.5 text-gray-600">{s.customerName}</td>
-                        <td className="px-3 py-2.5 text-gray-600">{s.declarationNo || "—"}</td>
-                        <td className="px-3 py-2.5">
-                          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusBadgeClass(s.status)}`}>
-                            {s.status}
-                          </span>
-                        </td>
-                        <td className={`whitespace-nowrap py-2.5 pl-3 text-right font-medium ${warn ? "text-red-600" : "text-gray-600"}`}>
-                          {warn ? "⚠ " : ""}
-                          {s.consultationDate ? new Date(s.consultationDate).toLocaleDateString("vi-VN") : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ConsultationTable rows={consultationTableRows} />
           )}
         </section>
       </div>

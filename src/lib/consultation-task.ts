@@ -14,6 +14,13 @@ async function findAssignee() {
   });
 }
 
+// Mô tả ghi RÕ ngày tham vấn (định dạng theo giờ VN) để Linh nhìn nhiệm vụ là biết ngày phải tham vấn.
+function buildDescription(consultationDate: Date, declarationNo: string | null) {
+  const day = consultationDate.toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+  const tk = declarationNo ? ` tờ khai ${declarationNo}` : "";
+  return `Tham vấn giá${tk} — ngày tham vấn ${day}`;
+}
+
 /**
  * Đảm bảo lô có lịch tham vấn (consultationDate/TGTV) thì có đúng MỘT nhiệm vụ "Tham vấn giá" giao cho
  * Linh, hạn = ngày tham vấn. Idempotent theo (title + relatedShipmentId): chạy lại sync không tạo trùng,
@@ -26,13 +33,19 @@ export async function ensureConsultationTask(params: { shipmentId: string; creat
   });
   if (!shipment?.consultationDate) return null;
 
+  const description = buildDescription(shipment.consultationDate, shipment.declarationNo);
   const existing = await prisma.task.findFirst({
     where: { relatedShipmentId: shipment.id, title: CONSULTATION_TASK_TITLE },
-    select: { id: true, dueDate: true },
+    select: { id: true, dueDate: true, description: true },
   });
   if (existing) {
-    if (!existing.dueDate || existing.dueDate.getTime() !== shipment.consultationDate.getTime()) {
-      await prisma.task.update({ where: { id: existing.id }, data: { dueDate: shipment.consultationDate } });
+    const dueChanged = !existing.dueDate || existing.dueDate.getTime() !== shipment.consultationDate.getTime();
+    const descChanged = existing.description !== description;
+    if (dueChanged || descChanged) {
+      await prisma.task.update({
+        where: { id: existing.id },
+        data: { dueDate: shipment.consultationDate, description },
+      });
     }
     return existing.id;
   }
@@ -43,7 +56,7 @@ export async function ensureConsultationTask(params: { shipmentId: string; creat
   const task = await prisma.task.create({
     data: {
       title: CONSULTATION_TASK_TITLE,
-      description: shipment.declarationNo ? `Tham vấn giá tờ khai ${shipment.declarationNo}` : "Tham vấn giá",
+      description,
       assignedToUserId: assignee.id,
       createdByUserId: params.createdByUserId,
       dueDate: shipment.consultationDate,

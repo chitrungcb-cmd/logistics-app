@@ -66,6 +66,7 @@ export async function GET(request: NextRequest) {
         createdAt: true,
         note: true,
         invoiceNumber: true,
+        attachmentUrl: true,
         vendor: { select: { name: true } },
         shipment: { select: SHIPMENT_SELECT },
       },
@@ -79,6 +80,7 @@ export async function GET(request: NextRequest) {
         paymentDate: true,
         method: true,
         note: true,
+        attachmentUrl: true,
         debt: {
           select: {
             type: true,
@@ -111,31 +113,6 @@ export async function GET(request: NextRequest) {
     }),
   ]);
 
-  const shipmentIds = [...new Set(expenses.map((expense) => expense.shipment.id))];
-  const shipmentCosts = shipmentIds.length === 0
-    ? []
-    : await prisma.shipmentCost.findMany({
-        where: {
-          shipmentId: { in: shipmentIds },
-          isActual: true,
-          costPrice: { gt: 0 },
-          ...expensePeriod,
-        },
-        orderBy: [{ shipmentId: "asc" }, { createdAt: "asc" }],
-        select: {
-          id: true,
-          shipmentId: true,
-          category: true,
-          customLabel: true,
-          costPrice: true,
-          invoiceNumber: true,
-          note: true,
-          paidBy: { select: { id: true, name: true } },
-          paidFromCompanyAccount: { select: { id: true, name: true } },
-          vendor: { select: { name: true } },
-        },
-      });
-
   const entries = [
     ...expenses.map((expense) => ({
       id: `expense:${expense.id}`,
@@ -146,6 +123,7 @@ export async function GET(request: NextRequest) {
       counterparty: expense.vendor?.name ?? null,
       invoiceNumber: expense.invoiceNumber,
       note: expense.note,
+      attachmentUrl: expense.attachmentUrl,
       shipment: expense.shipment,
     })),
     ...receipts.map((receipt) => ({
@@ -157,6 +135,7 @@ export async function GET(request: NextRequest) {
       counterparty: receipt.debt.customer?.companyName ?? receipt.debt.vendor?.name ?? null,
       invoiceNumber: null,
       note: [receipt.method, receipt.note].filter(Boolean).join(" · ") || null,
+      attachmentUrl: receipt.attachmentUrl,
       shipment: receipt.debt.shipment,
     })),
     ...transfers.map((transfer) => {
@@ -185,17 +164,5 @@ export async function GET(request: NextRequest) {
   return apiSuccess({
     person,
     entries,
-    shipmentCosts: shipmentCosts.map((cost) => ({
-      id: cost.id,
-      shipmentId: cost.shipmentId,
-      label: cost.customLabel || COST_CATEGORY_LABELS[cost.category] || cost.category,
-      amount: cost.costPrice,
-      invoiceNumber: cost.invoiceNumber,
-      vendorName: cost.vendor?.name ?? null,
-      payerId: cost.paidBy?.id ?? null,
-      payerName: cost.paidBy?.name ?? cost.paidFromCompanyAccount?.name ?? null,
-      payerType: cost.paidBy ? "PERSON" as const : cost.paidFromCompanyAccount ? "COMPANY" as const : null,
-      note: cost.note,
-    })),
   });
 }

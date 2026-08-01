@@ -5,6 +5,9 @@ import Link from "next/link";
 import MoneyInput from "@/components/MoneyInput";
 import AttachmentPreviewButton from "@/components/shipments/AttachmentPreviewButton";
 import { computeCashFlowTotals } from "@/lib/cash-flow-report";
+import CashFlowShipmentDrilldownModal, {
+  type CashFlowKind,
+} from "./CashFlowShipmentDrilldownModal";
 
 type ShipmentRef = {
   id: string;
@@ -71,28 +74,18 @@ type LedgerEntry = {
 type Detail = {
   person: { id: string; name: string };
   entries: LedgerEntry[];
-  shipmentCosts: ShipmentCostDetail[];
 };
 
-type ShipmentCostDetail = {
-  id: string;
-  shipmentId: string;
-  label: string;
+type PersonFlowKind = "RECEIPT" | "EXPENSE";
+
+type PersonShipmentFlowGroup = {
+  key: string;
+  shipment: ShipmentRef | null;
+  fallbackLabel: string;
   amount: number;
-  invoiceNumber: string | null;
-  vendorName: string | null;
-  payerId: string | null;
-  payerName: string | null;
-  payerType: "PERSON" | "COMPANY" | null;
-  note: string | null;
-};
-
-type ShipmentExpenseGroup = {
-  shipment: ShipmentRef;
-  personAmount: number;
-  personCostCount: number;
-  totalAmount: number;
-  totalCostCount: number;
+  transactionCount: number;
+  latestDate: string;
+  entries: LedgerEntry[];
 };
 
 type PeriodMode = "ALL" | "DAY" | "MONTH" | "QUARTER" | "YEAR";
@@ -233,12 +226,14 @@ export default function CashFlowReportClient({
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [ledgerSearch, setLedgerSearch] = useState("");
+  const [personLedgerKind, setPersonLedgerKind] = useState<PersonFlowKind>("RECEIPT");
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [periodMode, setPeriodMode] = useState<PeriodMode>("ALL");
   const [periodDay, setPeriodDay] = useState(todayInputValue());
   const [periodMonth, setPeriodMonth] = useState(currentMonthInputValue());
   const [periodQuarter, setPeriodQuarter] = useState(Math.floor(new Date().getMonth() / 3) + 1);
   const [periodYear, setPeriodYear] = useState(new Date().getFullYear());
+  const [shipmentDrilldownKind, setShipmentDrilldownKind] = useState<CashFlowKind | null>(null);
 
   const periodSelection = useMemo(
     () => buildPeriodSelection({
@@ -278,10 +273,15 @@ export default function CashFlowReportClient({
     setError(null);
     setSelectedPersonId(null);
     setDetail(null);
+    setShipmentDrilldownKind(null);
   }
 
-  const openPersonLedger = useCallback(async (personId: string) => {
+  const openPersonLedger = useCallback(async (
+    personId: string,
+    initialKind: PersonFlowKind = "RECEIPT"
+  ) => {
     setSelectedPersonId(personId);
+    setPersonLedgerKind(initialKind);
     setLedgerSearch("");
     setDetail(null);
     setDetailLoading(true);
@@ -349,7 +349,7 @@ export default function CashFlowReportClient({
     setShowTransferModal(false);
     await load();
     if (selectedPersonId && personIds.includes(selectedPersonId)) {
-      await openPersonLedger(selectedPersonId);
+      await openPersonLedger(selectedPersonId, personLedgerKind);
     }
   }
 
@@ -417,8 +417,20 @@ export default function CashFlowReportClient({
           )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <SummaryCard label="Tổng tiền đã nhận" value={totals.thu} tone="green" />
-            <SummaryCard label="Tổng tiền đã chi" value={totals.chi} tone="red" />
+            <SummaryCard
+              label="Tổng tiền đã nhận"
+              value={totals.thu}
+              tone="green"
+              hint="Bấm để xem các lô đã thu"
+              onClick={() => setShipmentDrilldownKind("RECEIPT")}
+            />
+            <SummaryCard
+              label="Tổng tiền đã chi"
+              value={totals.chi}
+              tone="red"
+              hint="Bấm để xem các lô đã chi"
+              onClick={() => setShipmentDrilldownKind("EXPENSE")}
+            />
             <SummaryCard label="Chênh lệch thu – chi" value={totals.balance} tone={totals.balance >= 0 ? "blue" : "orange"} />
           </div>
 
@@ -474,9 +486,11 @@ export default function CashFlowReportClient({
 
           {selectedPersonId && (
             <PersonLedger
+              key={`${selectedPersonId}:${personLedgerKind}`}
               account={report.persons.find((person) => person.id === selectedPersonId) ?? null}
               detail={detail}
               loading={detailLoading}
+              initialKind={personLedgerKind}
               search={ledgerSearch}
               onSearchChange={setLedgerSearch}
               onClose={() => {
@@ -504,6 +518,15 @@ export default function CashFlowReportClient({
               persons={report.persons}
               onClose={() => setShowTransferModal(false)}
               onSaved={handleTransferSaved}
+            />
+          )}
+
+          {shipmentDrilldownKind && (
+            <CashFlowShipmentDrilldownModal
+              kind={shipmentDrilldownKind}
+              dateFrom={periodSelection?.from}
+              dateTo={periodSelection?.to}
+              onClose={() => setShipmentDrilldownKind(null)}
             />
           )}
         </>
@@ -623,18 +646,42 @@ function PeriodFilter({
   );
 }
 
-function SummaryCard({ label, value, tone }: { label: string; value: number; tone: "green" | "red" | "blue" | "orange" }) {
+function SummaryCard({
+  label,
+  value,
+  tone,
+  hint,
+  onClick,
+}: {
+  label: string;
+  value: number;
+  tone: "green" | "red" | "blue" | "orange";
+  hint?: string;
+  onClick?: () => void;
+}) {
   const tones = {
     green: "border-emerald-200 bg-emerald-50 text-emerald-800",
     red: "border-red-200 bg-red-50 text-red-800",
     blue: "border-blue-200 bg-blue-50 text-blue-800",
     orange: "border-orange-200 bg-orange-50 text-orange-800",
   };
-  return (
-    <div className={`rounded-xl border p-4 ${tones[tone]}`}>
+  const content = (
+    <>
       <p className="text-xs font-medium">{label}</p>
       <p className="mt-1 text-2xl font-bold">{formatVnd(value)}</p>
-    </div>
+      {hint && <p className="mt-2 text-xs font-medium opacity-75">{hint} →</p>}
+    </>
+  );
+  return onClick ? (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${tones[tone]}`}
+    >
+      {content}
+    </button>
+  ) : (
+    <div className={`rounded-xl border p-4 ${tones[tone]}`}>{content}</div>
   );
 }
 
@@ -762,7 +809,7 @@ function PersonTable({
 }: {
   rows: Account[];
   selectedPersonId: string | null;
-  onOpen: (personId: string) => void;
+  onOpen: (personId: string, initialKind: PersonFlowKind) => void;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -786,11 +833,27 @@ function PersonTable({
             <tr key={person.id} className={selectedPersonId === person.id ? "bg-blue-50/70" : ""}>
               <td className="py-3 font-semibold text-gray-900">{person.name}</td>
               <td className="py-3 text-right">
-                <p className="font-medium text-emerald-700">{person.thu ? formatVnd(person.thu) : "—"}</p>
+                {person.thu ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpen(person.id, "RECEIPT")}
+                    className="font-medium text-emerald-700 hover:underline"
+                  >
+                    {formatVnd(person.thu)}
+                  </button>
+                ) : "—"}
                 {person.thuCount > 0 && <p className="text-xs text-gray-400">{person.thuCount} khoản</p>}
               </td>
               <td className="py-3 text-right">
-                <p className="font-medium text-red-700">{person.chi ? formatVnd(person.chi) : "—"}</p>
+                {person.chi ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpen(person.id, "EXPENSE")}
+                    className="font-medium text-red-700 hover:underline"
+                  >
+                    {formatVnd(person.chi)}
+                  </button>
+                ) : "—"}
                 {person.chiCount > 0 && <p className="text-xs text-gray-400">{person.chiCount} khoản</p>}
               </td>
               <td className="py-3 text-right">
@@ -805,7 +868,11 @@ function PersonTable({
                 <PersonalSettlementStatus value={person.balance} compact />
               </td>
               <td className="py-3 text-right">
-                <button type="button" onClick={() => onOpen(person.id)} className="rounded-md border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50">
+                <button
+                  type="button"
+                  onClick={() => onOpen(person.id, person.thu > 0 ? "RECEIPT" : "EXPENSE")}
+                  className="rounded-md border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                >
                   Xem sổ chi tiết
                 </button>
               </td>
@@ -821,6 +888,7 @@ function PersonLedger({
   account,
   detail,
   loading,
+  initialKind,
   search,
   onSearchChange,
   onClose,
@@ -828,61 +896,74 @@ function PersonLedger({
   account: Account | null;
   detail: Detail | null;
   loading: boolean;
+  initialKind: PersonFlowKind;
   search: string;
   onSearchChange: (search: string) => void;
   onClose: () => void;
 }) {
-  const [selectedShipmentId, setSelectedShipmentId] = useState<string | null>(null);
+  const [activeKind, setActiveKind] = useState<PersonFlowKind>(initialKind);
+  const [selectedGroupKey, setSelectedGroupKey] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const expenseGroups = useMemo<ShipmentExpenseGroup[]>(() => {
+  const flowGroups = useMemo<PersonShipmentFlowGroup[]>(() => {
     if (!detail) return [];
-    const groups = new Map<string, ShipmentExpenseGroup>();
+    const groups = new Map<string, PersonShipmentFlowGroup>();
     for (const entry of detail.entries) {
-      if (entry.type !== "EXPENSE" || !entry.shipment) continue;
-      const current = groups.get(entry.shipment.id) ?? {
+      if (entry.type !== activeKind) continue;
+      const key = entry.shipment?.id ?? `${entry.type}:${entry.id}`;
+      const current = groups.get(key) ?? {
+        key,
         shipment: entry.shipment,
-        personAmount: 0,
-        personCostCount: 0,
-        totalAmount: 0,
-        totalCostCount: 0,
+        fallbackLabel: entry.counterparty || entry.label,
+        amount: 0,
+        transactionCount: 0,
+        latestDate: entry.date,
+        entries: [],
       };
-      current.personAmount += entry.amount;
-      current.personCostCount += 1;
-      groups.set(entry.shipment.id, current);
-    }
-    for (const cost of detail.shipmentCosts) {
-      const current = groups.get(cost.shipmentId);
-      if (!current) continue;
-      current.totalAmount += cost.amount;
-      current.totalCostCount += 1;
+      current.amount += entry.amount;
+      current.transactionCount += 1;
+      current.entries.push(entry);
+      if (new Date(entry.date).getTime() > new Date(current.latestDate).getTime()) {
+        current.latestDate = entry.date;
+      }
+      groups.set(key, current);
     }
     const normalizedSearch = search.trim().toLocaleLowerCase("vi");
     return [...groups.values()].filter((group) => {
       if (!normalizedSearch) return true;
       return [
-        group.shipment.declarationNo,
-        group.shipment.goodsName,
-        group.shipment.customerName,
+        group.shipment?.declarationNo,
+        group.shipment?.goodsName,
+        group.shipment?.customerName,
+        group.fallbackLabel,
+        ...group.entries.flatMap((entry) => [
+          entry.label,
+          entry.counterparty,
+          entry.invoiceNumber,
+          entry.note,
+        ]),
       ].some((value) => value?.toLocaleLowerCase("vi").includes(normalizedSearch));
     }).sort((a, b) => {
       const dateDifference =
-        new Date(b.shipment.declarationDate ?? 0).getTime() -
-        new Date(a.shipment.declarationDate ?? 0).getTime();
-      return dateDifference || b.personAmount - a.personAmount;
+        new Date(b.shipment?.declarationDate ?? 0).getTime() -
+        new Date(a.shipment?.declarationDate ?? 0).getTime();
+      return dateDifference ||
+        new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime();
     });
-  }, [detail, search]);
+  }, [activeKind, detail, search]);
 
-  const selectedExpenseGroup = expenseGroups.find(
-    (group) => group.shipment.id === selectedShipmentId
+  const selectedGroup = flowGroups.find(
+    (group) => group.key === selectedGroupKey
   ) ?? null;
+  const isReceipt = activeKind === "RECEIPT";
+  const personName = account?.name || detail?.person.name || "Cá nhân";
 
   return (
     <section className="rounded-xl border-2 border-blue-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Sổ chi tiết cá nhân</p>
-          <h2 className="mt-1 text-xl font-semibold text-gray-900">{account?.name || detail?.person.name || "Cá nhân"}</h2>
+          <h2 className="mt-1 text-xl font-semibold text-gray-900">{personName}</h2>
           {account && (
             <p className="mt-1 text-sm text-gray-500">
               Đã nhận {formatVnd(account.thu)} + nhận nội bộ {formatVnd(account.transferIn)} − đã chi {formatVnd(account.chi)} − chuyển nội bộ {formatVnd(account.transferOut)}
@@ -911,7 +992,39 @@ function PersonLedger({
       ) : (
         <>
       {account && (
-        <div className="mb-4 max-w-lg">
+        <div className="mb-4 grid gap-3 sm:grid-cols-3">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveKind("RECEIPT");
+              setSelectedGroupKey(null);
+            }}
+            className={`rounded-xl border p-4 text-left transition ${
+              isReceipt
+                ? "border-emerald-400 bg-emerald-50 ring-2 ring-emerald-100"
+                : "border-emerald-200 bg-white hover:bg-emerald-50/60"
+            }`}
+          >
+            <p className="text-xs font-medium text-emerald-700">Đã thu của {personName}</p>
+            <p className="mt-1 text-xl font-bold text-emerald-800">{formatVnd(account.thu)}</p>
+            <p className="mt-1 text-xs text-emerald-600">{account.thuCount} khoản · Bấm để xem</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveKind("EXPENSE");
+              setSelectedGroupKey(null);
+            }}
+            className={`rounded-xl border p-4 text-left transition ${
+              !isReceipt
+                ? "border-red-400 bg-red-50 ring-2 ring-red-100"
+                : "border-red-200 bg-white hover:bg-red-50/60"
+            }`}
+          >
+            <p className="text-xs font-medium text-red-700">Đã chi của {personName}</p>
+            <p className="mt-1 text-xl font-bold text-red-800">{formatVnd(account.chi)}</p>
+            <p className="mt-1 text-xs text-red-600">{account.chiCount} khoản · Bấm để xem</p>
+          </button>
           <PersonalSettlementStatus value={account.balance} />
         </div>
       )}
@@ -931,8 +1044,12 @@ function PersonLedger({
         <>
           <div className="mb-5 overflow-x-auto rounded-lg border border-blue-200">
             <div className="border-b border-blue-100 bg-blue-50 px-4 py-3">
-              <h3 className="font-semibold text-gray-900">Các lô cá nhân đã chi</h3>
-              <p className="mt-0.5 text-xs text-gray-500">Mỗi lô một dòng; tổng chi lô bao gồm tất cả người và tài khoản công ty đã chi.</p>
+              <h3 className="font-semibold text-gray-900">
+                Các lô {personName} đã {isReceipt ? "thu" : "chi"}
+              </h3>
+              <p className="mt-0.5 text-xs text-gray-500">
+                Chỉ hiển thị các khoản của {personName}, không cộng giao dịch của người khác hoặc tài khoản công ty.
+              </p>
             </div>
             <table className="w-full min-w-[920px] text-sm">
               <thead className="bg-gray-50 text-left text-gray-500">
@@ -940,44 +1057,44 @@ function PersonLedger({
                   <th className="px-3 py-2 text-center">STT</th>
                   <th className="px-3 py-2">Số TK / ngày TK</th>
                   <th className="px-3 py-2">Tên hàng / khách hàng</th>
-                  <th className="px-3 py-2 text-right">Cá nhân đã chi</th>
-                  <th className="px-3 py-2 text-right">Tổng chi lô</th>
+                  <th className="px-3 py-2 text-center">Số khoản</th>
+                  <th className="px-3 py-2 text-right">{isReceipt ? "Đã thu" : "Đã chi"}</th>
                   <th className="px-3 py-2 text-right">Chi tiết</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {expenseGroups.length === 0 && (
-                  <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-400">Cá nhân này chưa chi khoản nào cho lô hàng.</td></tr>
+                {flowGroups.length === 0 && (
+                  <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-400">{personName} chưa có khoản {isReceipt ? "thu" : "chi"} nào trong kỳ này.</td></tr>
                 )}
-                {expenseGroups.map((group, index) => (
+                {flowGroups.map((group, index) => (
                   <tr
-                    key={group.shipment.id}
-                    onClick={() => setSelectedShipmentId(group.shipment.id)}
+                    key={group.key}
+                    onClick={() => setSelectedGroupKey(group.key)}
                     className="cursor-pointer hover:bg-blue-50/60"
                   >
                     <td className="px-3 py-3 text-center text-gray-400">{index + 1}</td>
                     <td className="px-3 py-3">
-                      <p className="font-medium text-blue-700">TK {group.shipment.declarationNo || "chưa có số"}</p>
-                      <p className="text-xs text-gray-500">{formatDate(group.shipment.declarationDate)}</p>
+                      {group.shipment ? (
+                        <>
+                          <p className="font-medium text-blue-700">TK {group.shipment.declarationNo || "chưa có số"}</p>
+                          <p className="text-xs text-gray-500">{formatDate(group.shipment.declarationDate)}</p>
+                        </>
+                      ) : (
+                        <p className="font-medium text-amber-700">Chưa gắn lô</p>
+                      )}
                     </td>
                     <td className="max-w-sm px-3 py-3">
-                      <p className="font-medium text-gray-900">{group.shipment.goodsName || "Chưa có tên hàng"}</p>
-                      <p className="truncate text-xs text-gray-500">{group.shipment.customerName}</p>
+                      <p className="font-medium text-gray-900">{group.shipment?.goodsName || group.fallbackLabel}</p>
+                      {group.shipment && <p className="truncate text-xs text-gray-500">{group.shipment.customerName}</p>}
                     </td>
-                    <td className="px-3 py-3 text-right">
-                      <p className="font-semibold text-red-700">{formatVnd(group.personAmount)}</p>
-                      <p className="text-xs text-gray-400">{group.personCostCount} khoản</p>
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <p className="font-semibold text-gray-900">{formatVnd(group.totalAmount)}</p>
-                      <p className="text-xs text-gray-400">{group.totalCostCount} khoản</p>
-                    </td>
+                    <td className="px-3 py-3 text-center text-gray-600">{group.transactionCount}</td>
+                    <td className={`px-3 py-3 text-right font-semibold ${isReceipt ? "text-emerald-700" : "text-red-700"}`}>{formatVnd(group.amount)}</td>
                     <td className="px-3 py-3 text-right">
                       <button
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          setSelectedShipmentId(group.shipment.id);
+                          setSelectedGroupKey(group.key);
                         }}
                         className="rounded-md border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
                       >
@@ -990,14 +1107,12 @@ function PersonLedger({
             </table>
           </div>
 
-          {selectedExpenseGroup && detail && (
-            <ShipmentExpenseDetailModal
+          {selectedGroup && detail && (
+            <PersonShipmentFlowDetailModal
               person={detail.person}
-              group={selectedExpenseGroup}
-              costs={detail.shipmentCosts.filter(
-                (cost) => cost.shipmentId === selectedExpenseGroup.shipment.id
-              )}
-              onClose={() => setSelectedShipmentId(null)}
+              group={selectedGroup}
+              kind={activeKind}
+              onClose={() => setSelectedGroupKey(null)}
             />
           )}
         </>
@@ -1008,76 +1123,80 @@ function PersonLedger({
   );
 }
 
-function ShipmentExpenseDetailModal({
+function PersonShipmentFlowDetailModal({
   person,
   group,
-  costs,
+  kind,
   onClose,
 }: {
   person: { id: string; name: string };
-  group: ShipmentExpenseGroup;
-  costs: ShipmentCostDetail[];
+  group: PersonShipmentFlowGroup;
+  kind: PersonFlowKind;
   onClose: () => void;
 }) {
+  const isReceipt = kind === "RECEIPT";
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-gray-200 bg-white px-6 py-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Chi tiết chi phí lô hàng</p>
-            <h2 className="mt-1 text-xl font-semibold text-gray-900">
-              TK {group.shipment.declarationNo || "chưa có số"} · {group.shipment.goodsName || "Chưa có tên hàng"}
-            </h2>
-            <p className="mt-1 text-sm text-gray-500">
-              {formatDate(group.shipment.declarationDate)} · {group.shipment.customerName}
+            <p className={`text-xs font-semibold uppercase tracking-wide ${isReceipt ? "text-emerald-700" : "text-red-700"}`}>
+              Chi tiết {isReceipt ? "đã thu" : "đã chi"} của {person.name}
             </p>
+            <h2 className="mt-1 text-xl font-semibold text-gray-900">
+              {group.shipment
+                ? `TK ${group.shipment.declarationNo || "chưa có số"} · ${group.shipment.goodsName || "Chưa có tên hàng"}`
+                : group.fallbackLabel}
+            </h2>
+            {group.shipment && <p className="mt-1 text-sm text-gray-500">{formatDate(group.shipment.declarationDate)} · {group.shipment.customerName}</p>}
           </div>
           <button type="button" onClick={onClose} className="text-2xl leading-none text-gray-400 hover:text-gray-700">×</button>
         </div>
 
-        <div className="grid gap-3 px-6 py-5 sm:grid-cols-2">
-          <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-            <p className="text-xs font-medium text-red-700">{person.name} đã chi</p>
-            <p className="mt-1 text-xl font-bold text-red-800">{formatVnd(group.personAmount)}</p>
-            <p className="mt-1 text-xs text-red-600">{group.personCostCount} khoản</p>
-          </div>
-          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-            <p className="text-xs font-medium text-gray-600">Tổng chi toàn lô</p>
-            <p className="mt-1 text-xl font-bold text-gray-900">{formatVnd(group.totalAmount)}</p>
-            <p className="mt-1 text-xs text-gray-500">{group.totalCostCount} khoản</p>
+        <div className="px-6 py-5">
+          <div className={`rounded-xl border p-4 ${isReceipt ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`}>
+            <p className={`text-xs font-medium ${isReceipt ? "text-emerald-700" : "text-red-700"}`}>{person.name} đã {isReceipt ? "thu" : "chi"}</p>
+            <p className={`mt-1 text-xl font-bold ${isReceipt ? "text-emerald-800" : "text-red-800"}`}>{formatVnd(group.amount)}</p>
+            <p className={`mt-1 text-xs ${isReceipt ? "text-emerald-600" : "text-red-600"}`}>{group.transactionCount} khoản · Chỉ tính giao dịch của {person.name}</p>
           </div>
         </div>
 
         <div className="px-6 pb-6">
           <div className="overflow-x-auto rounded-lg border border-gray-200">
-            <table className="w-full min-w-[850px] text-sm">
+            <table className="w-full min-w-[820px] text-sm">
               <thead className="bg-gray-50 text-left text-gray-500">
                 <tr>
-                  <th className="px-3 py-2">Hạng mục</th>
-                  <th className="px-3 py-2">Nhà cung cấp</th>
-                  <th className="px-3 py-2">Người/TK đã chi</th>
+                  <th className="px-3 py-2">Ngày</th>
+                  <th className="px-3 py-2">Nội dung</th>
+                  <th className="px-3 py-2">Đối tượng</th>
                   <th className="px-3 py-2">Số hóa đơn</th>
                   <th className="px-3 py-2">Ghi chú</th>
+                  <th className="px-3 py-2">Chứng từ</th>
                   <th className="px-3 py-2 text-right">Số tiền</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {costs.map((cost) => {
-                  const paidBySelectedPerson = cost.payerType === "PERSON" && cost.payerId === person.id;
-                  return (
-                    <tr key={cost.id} className={paidBySelectedPerson ? "bg-blue-50/70" : ""}>
-                      <td className="px-3 py-3">
-                        <p className="font-medium text-gray-900">{cost.label}</p>
-                        {paidBySelectedPerson && <p className="text-xs font-medium text-blue-600">Khoản {person.name} đã chi</p>}
-                      </td>
-                      <td className="px-3 py-3 text-gray-600">{cost.vendorName || "—"}</td>
-                      <td className="px-3 py-3 text-gray-600">{cost.payerName || "Chưa xác định"}</td>
-                      <td className="px-3 py-3 text-gray-600">{cost.invoiceNumber || "—"}</td>
-                      <td className="max-w-64 px-3 py-3 text-gray-500">{cost.note || "—"}</td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-gray-900">{formatVnd(cost.amount)}</td>
-                    </tr>
-                  );
-                })}
+                {group.entries.map((entry) => (
+                  <tr key={entry.id}>
+                    <td className="whitespace-nowrap px-3 py-3 text-gray-600">{formatDate(entry.date)}</td>
+                    <td className="px-3 py-3 font-medium text-gray-900">{entry.label}</td>
+                    <td className="max-w-56 px-3 py-3 text-gray-600">{entry.counterparty || "—"}</td>
+                    <td className="px-3 py-3 text-gray-600">{entry.invoiceNumber || "—"}</td>
+                    <td className="max-w-64 px-3 py-3 text-gray-500">{entry.note || "—"}</td>
+                    <td className="px-3 py-3">
+                      {entry.attachmentUrl ? (
+                        <AttachmentPreviewButton
+                          url={entry.attachmentUrl}
+                          name={entry.attachmentName || "Chứng từ giao dịch"}
+                          className="font-medium text-blue-600 hover:underline"
+                        >
+                          Xem tệp
+                        </AttachmentPreviewButton>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className={`whitespace-nowrap px-3 py-3 text-right font-semibold ${isReceipt ? "text-emerald-700" : "text-red-700"}`}>{formatVnd(entry.amount)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

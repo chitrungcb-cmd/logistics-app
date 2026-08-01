@@ -463,9 +463,14 @@ async function mirrorThreadAttachments(input: {
   const existing: Attachment[] = Array.isArray(shipment?.attachments)
     ? (shipment!.attachments as unknown as Attachment[])
     : [];
-  const present = new Set(
-    existing.filter((a) => a.gmailMessageId).map((a) => `${a.gmailMessageId}::${a.name}`)
-  );
+  // Chống trùng: theo (email nguồn + tên) và theo TÊN file. Dedup theo tên để backfill lô cũ không tải
+  // lại file lô đã có sẵn (đính kèm cũ chưa gắn nguồn nên chỉ so được theo tên).
+  const present = new Set<string>();
+  const presentNames = new Set<string>();
+  for (const a of existing) {
+    if (a.gmailMessageId) present.add(`${a.gmailMessageId}::${a.name}`);
+    presentNames.add(a.name);
+  }
 
   let thread;
   try {
@@ -482,8 +487,9 @@ async function mirrorThreadAttachments(input: {
     if ((msg.labelIds ?? []).includes("TRASH")) continue; // email đang bị xóa → không kéo về
     for (const part of collectAttachmentParts(msg.payload)) {
       const key = `${msg.id}::${part.filename}`;
-      if (present.has(key)) continue;
+      if (present.has(key) || presentNames.has(part.filename)) continue;
       present.add(key);
+      presentNames.add(part.filename);
       try {
         const buffer = await loadGmailAttachment(input.gmail, msg.id, part, cache);
         const saved = await saveUploadedFile(part.filename, buffer);
@@ -547,6 +553,45 @@ async function reconcileDeletedGmailAttachments(
     }
   }
   return { removed, checked: sourceIds.size };
+}
+
+// Backfill "app soi gương Gmail" cho các lô CŨ (xử lý trước khi có tính năng): mỗi lần sync soi vài lô
+// chưa từng mirror để kéo nốt chứng từ còn thiếu trong chuỗi email, tránh một lần chạy nặng. Đánh dấu đã
+// thử trong vòng đời tiến trình để không lặp lại lô mà chuỗi email không có gì thêm.
+const backfillAttempted = new Set<string>();
+async function backfillThreadAttachments(
+  gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>,
+  limit: number
+) {
+  const sourced = await prisma.processedEmail.findMany({
+    where: { shipmentId: { not: null } },
+    select: { shipmentId: true, gmailMessageId: true },
+    orderBy: { processedAt: "desc" },
+  });
+  const msgByShipment = new Map<string, string>();
+  for (const p of sourced) {
+    if (p.shipmentId && !msgByShipment.has(p.shipmentId)) msgByShipment.set(p.shipmentId, p.gmailMessageId);
+  }
+
+  const shipments = await prisma.shipment.findMany({ select: { id: true, attachments: true } });
+  let done = 0;
+  for (const s of shipments) {
+    if (done >= limit) break;
+    if (backfillAttempted.has(s.id)) continue;
+    const atts = Array.isArray(s.attachments) ? (s.attachments as unknown as Attachment[]) : [];
+    if (atts.some((a) => a.gmailThreadId)) continue; // đã mirror rồi
+    const msgId = msgByShipment.get(s.id);
+    if (!msgId) continue; // lô không có email nguồn (tạo tay) → bỏ qua
+    backfillAttempted.add(s.id);
+    try {
+      const msg = await gmail.users.messages.get({ userId: "me", id: msgId, format: "minimal" });
+      await mirrorThreadAttachments({ gmail, threadId: msg.data.threadId, shipmentId: s.id });
+      done += 1;
+    } catch (error) {
+      console.error(`Backfill soi đính kèm lô ${s.id} lỗi:`, error);
+    }
+  }
+  return done;
 }
 
 async function syncDeclarationFromMessage(input: {
@@ -972,6 +1017,14 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
       await backfillShipmentVehicleIndex(25);
     } catch (vehicleIndexError) {
       console.error("Vehicle workbook backfill failed:", vehicleIndexError);
+    }
+
+    try {
+      // "App soi gương Gmail" — backfill lô cũ: mỗi lần sync soi vài lô để kéo nốt chứng từ còn thiếu.
+      const filled = await backfillThreadAttachments(gmail, 15);
+      if (filled > 0) console.log(`[gmail-mirror] Backfill soi đính kèm ${filled} lô.`);
+    } catch (backfillError) {
+      console.error("Backfill soi đính kèm Gmail thất bại:", backfillError);
     }
 
     try {

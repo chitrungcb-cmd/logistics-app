@@ -69,6 +69,13 @@ export default function GmailSyncPanel({ onSynced }: { onSynced?: () => void }) 
       const text = await res.text();
       const json = text ? JSON.parse(text) : null;
       if (!res.ok || !json.success) {
+        if (res.status === 401) {
+          setIsConnected(false);
+          setReconnectRequired(true);
+          setConnectionError(
+            "Phiên Gmail đã hết hạn hoặc bị Google thu hồi. Hãy kết nối lại Gmail."
+          );
+        }
         throw new Error(json?.error || "Đồng bộ email thất bại.");
       }
       setSummary(json.data);

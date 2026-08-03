@@ -11,6 +11,28 @@ type StorageConfig = {
   bucket: string;
 };
 
+export class PrivateStorageError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly responseBody: string
+  ) {
+    super(
+      `Private storage request failed (${status}): ${responseBody || "Unknown storage error"}`
+    );
+    this.name = "PrivateStorageError";
+  }
+}
+
+export function isPrivateStorageRestrictedError(error: unknown) {
+  return (
+    error instanceof PrivateStorageError &&
+    (error.status === 402 ||
+      /exceed_egress_quota|service for this project is restricted|spend caps/i.test(
+        error.responseBody
+      ))
+  );
+}
+
 function storageConfig(): StorageConfig | null {
   const baseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -98,7 +120,7 @@ function storageHeaders(config: StorageConfig) {
 
 async function storageError(response: Response) {
   const message = (await response.text()).slice(0, 500);
-  return new Error(`Private storage request failed (${response.status}): ${message || response.statusText}`);
+  return new PrivateStorageError(response.status, message || response.statusText);
 }
 
 export async function uploadPrivateObject(fileName: string, buffer: Buffer) {
@@ -129,13 +151,17 @@ export async function uploadPrivateObject(fileName: string, buffer: Buffer) {
   );
 
   if (!response.ok) {
+    const originalError = await storageError(response);
+    // A restricted/quota-exhausted project cannot contain a usable duplicate. Do not issue the
+    // fallback GET because it consumes more egress and turns one failed upload into two requests.
+    if (response.status !== 400 && response.status !== 409) throw originalError;
     // Supabase rejects an existing object when x-upsert=false. Verify that the deterministic key
     // already exists; this also resolves concurrent uploads of the same bytes without overwriting.
     const existing = await fetch(objectUrl, {
       headers: { ...storageHeaders(config), Range: "bytes=0-0" },
       cache: "no-store",
     });
-    if (!existing.ok) throw await storageError(response);
+    if (!existing.ok) throw originalError;
     await existing.body?.cancel();
   }
   return { key, url: privateFileUrl(key, fileName) };

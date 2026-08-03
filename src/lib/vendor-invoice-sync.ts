@@ -7,8 +7,12 @@ import {
   reconcileStoredVendorInvoices,
   recomputeShipmentInvoicedReceivable,
 } from "@/lib/vendor-invoice-reconciliation";
+import { isPrivateStorageRestrictedError } from "@/lib/private-storage";
+import { isGmailRateLimitError } from "@/lib/gmail-errors";
 
-const NEW_INVOICES_PER_SYNC = 100;
+const NEW_INVOICES_PER_SYNC = 25;
+const MAX_MESSAGES_INSPECTED_PER_SYNC = 30;
+const MAX_LIST_PAGES_PER_SYNC = 2;
 
 type AttachmentPart = {
   filename: string;
@@ -89,18 +93,25 @@ export async function syncVendorInvoices(gmail: gmail_v1.Gmail): Promise<VendorI
   };
 
   let pageToken: string | undefined;
+  let inspected = 0;
+  let listPages = 0;
   do {
     const list = await gmail.users.messages.list({
       userId: "me",
-      q: "has:attachment (filename:xml OR filename:pdf)",
-      maxResults: 100,
+      q: "newer_than:30d has:attachment (filename:xml OR filename:pdf)",
+      maxResults: 50,
       pageToken,
     });
+    listPages++;
     const messageIds = (list.data.messages ?? []).map((message) => message.id).filter((id): id is string => Boolean(id));
     summary.scanned += messageIds.length;
 
     for (const messageId of messageIds) {
-      if (summary.created >= NEW_INVOICES_PER_SYNC) break;
+      if (
+        summary.created >= NEW_INVOICES_PER_SYNC ||
+        inspected >= MAX_MESSAGES_INSPECTED_PER_SYNC
+      ) break;
+      inspected++;
       try {
         const response = await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" });
         const message = response.data;
@@ -232,13 +243,19 @@ export async function syncVendorInvoices(gmail: gmail_v1.Gmail): Promise<VendorI
           }
         }
       } catch (error) {
+        if (isPrivateStorageRestrictedError(error) || isGmailRateLimitError(error)) throw error;
         summary.errors++;
         console.error(`Invoice sync failed for Gmail message ${messageId}:`, error);
       }
     }
 
     pageToken = list.data.nextPageToken ?? undefined;
-  } while (pageToken && summary.created < NEW_INVOICES_PER_SYNC);
+  } while (
+    pageToken &&
+    summary.created < NEW_INVOICES_PER_SYNC &&
+    inspected < MAX_MESSAGES_INSPECTED_PER_SYNC &&
+    listPages < MAX_LIST_PAGES_PER_SYNC
+  );
 
   // A cost row may receive its invoice number/vendor after the email was first imported. Re-run
   // matching on every automatic Gmail pass so accounting never needs a separate sync button.

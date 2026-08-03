@@ -7,7 +7,11 @@ import {
   getAuthorizedGmailClient,
   verifyGmailClient,
 } from "@/lib/google";
-import { isExpiredGmailTokenError } from "@/lib/gmail-errors";
+import {
+  gmailRetryAfterSeconds,
+  isExpiredGmailTokenError,
+  isGmailRateLimitError,
+} from "@/lib/gmail-errors";
 import { parseTokhaiExcel, type ParsedDeclaration } from "@/lib/tokhai-parser";
 import { saveUploadedFile } from "@/lib/save-upload";
 import { prisma } from "@/lib/prisma";
@@ -34,13 +38,16 @@ import {
   backfillShipmentVehicleIndex,
   indexShipmentVehiclesFromAttachments,
 } from "@/lib/shipment-vehicle-index";
+import { isPrivateStorageRestrictedError } from "@/lib/private-storage";
 
 // How many *new* (not-yet-processed) messages one sync call takes on. Gmail returns matches
 // newest-first, and every call starts pagination from page 1 — so once the newest ~500 are already
 // processed, capping by raw messages-seen would keep re-fetching the same done page forever and
 // never reach older backlog. Capping by new-message count instead means every run makes progress
 // until the whole mailbox is caught up, however many pages that takes.
-const NEW_MESSAGES_PER_SYNC = 150;
+const NEW_MESSAGES_PER_SYNC = 30;
+const MAX_GMAIL_LIST_PAGES_PER_SYNC = 3;
+const AUTOMATIC_QUERY_WINDOW = "newer_than:30d";
 // v3 also scans HYS-only replies in the same Gmail thread as a declaration email.
 const SHIPMENT_SYNC_MARKER = "[shipment-attachments-v3]";
 
@@ -49,8 +56,22 @@ const SHIPMENT_SYNC_MARKER = "[shipment-attachments-v3]";
 // kẹt vĩnh viễn khiến "đồng bộ ngay"/cron mãi báo "đang chạy" cho tới khi restart server.
 const SYNC_STALE_MS = 5 * 60 * 1000;
 let syncStartedAt: number | null = null;
+let automaticSyncBlockedUntil = 0;
+let automaticSyncBlockedReason: "gmail_rate_limit" | "storage_restricted" | null = null;
 function syncIsRunning() {
   return syncStartedAt !== null && Date.now() - syncStartedAt < SYNC_STALE_MS;
+}
+
+function deferAutomaticSync(
+  reason: NonNullable<typeof automaticSyncBlockedReason>,
+  seconds: number
+) {
+  automaticSyncBlockedReason = reason;
+  automaticSyncBlockedUntil = Date.now() + seconds * 1_000;
+}
+
+function shouldAbortCurrentSync(error: unknown) {
+  return isPrivateStorageRestrictedError(error) || isGmailRateLimitError(error);
 }
 
 export const runtime = "nodejs";
@@ -364,6 +385,7 @@ async function findShipmentForSupplementalHys(input: {
         const shipment = await findMatchingShipment(parsed);
         if (shipment) threadShipments.set(shipment.id, shipment);
       } catch (error) {
+        if (shouldAbortCurrentSync(error)) throw error;
         console.error(
           `Could not inspect declaration ${part.filename} in Gmail thread ${input.message.threadId}:`,
           error
@@ -476,6 +498,7 @@ async function mirrorThreadAttachments(input: {
   try {
     thread = await input.gmail.users.threads.get({ userId: "me", id: input.threadId, format: "full" });
   } catch (error) {
+    if (shouldAbortCurrentSync(error)) throw error;
     console.error(`Không lấy được chuỗi email ${input.threadId} để soi đính kèm:`, error);
     return;
   }
@@ -500,6 +523,7 @@ async function mirrorThreadAttachments(input: {
           gmailThreadId: input.threadId,
         });
       } catch (error) {
+        if (shouldAbortCurrentSync(error)) throw error;
         console.error(`Không tải được đính kèm ${part.filename} từ email ${msg.id}:`, error);
       }
     }
@@ -535,6 +559,7 @@ async function reconcileDeletedGmailAttachments(
       const res = await gmail.users.messages.get({ userId: "me", id, format: "minimal" });
       if ((res.data.labelIds ?? []).includes("TRASH")) deleted.add(id);
     } catch (error) {
+      if (isGmailRateLimitError(error)) throw error;
       const status =
         (error as { code?: number; response?: { status?: number } })?.code ??
         (error as { response?: { status?: number } })?.response?.status;
@@ -588,6 +613,7 @@ async function backfillThreadAttachments(
       await mirrorThreadAttachments({ gmail, threadId: msg.data.threadId, shipmentId: s.id });
       done += 1;
     } catch (error) {
+      if (shouldAbortCurrentSync(error)) throw error;
       console.error(`Backfill soi đính kèm lô ${s.id} lỗi:`, error);
     }
   }
@@ -798,13 +824,18 @@ async function syncDeclarationFromMessage(input: {
   };
 }
 
-async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>, user: NonNullable<Awaited<ReturnType<typeof getSyncActor>>>) {
+async function runGmailSync(
+  gmail: NonNullable<Awaited<ReturnType<typeof getAuthorizedGmailClient>>>,
+  user: NonNullable<Awaited<ReturnType<typeof getSyncActor>>>,
+  options: { maintenance: boolean }
+) {
     // Set, not array: Gmail's search pagination isn't guaranteed collision-free across pages (seen
     // in practice returning the same message ID twice), and a duplicate ID in this list would hit
     // the ProcessedEmail unique constraint the second time it's processed.
     const messageIdSet = new Set<string>();
     let pageToken: string | undefined;
     let scanned = 0;
+    let listPages = 0;
 
     do {
       const listRes = await gmail.users.messages.list({
@@ -812,10 +843,11 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
         // Gmail's `filename:` operator requires an exact token match, not a substring — "ToKhai" alone
         // never matches "ToKhaiHQ7N_....xlsx". Search the literal filename prefixes instead (verified
         // against the real mailbox); the isDeclarationFile() check below is the actual attachment filter.
-        q: "has:attachment (ToKhaiHQ7N OR ToKhaiHQ7X OR HYS OR dinhkem)",
-        maxResults: 100,
+        q: `${AUTOMATIC_QUERY_WINDOW} has:attachment (ToKhaiHQ7N OR ToKhaiHQ7X OR HYS OR dinhkem)`,
+        maxResults: 50,
         pageToken,
       });
+      listPages++;
 
       const pageIds = (listRes.data.messages ?? []).map((m) => m.id!).filter(Boolean);
       scanned += pageIds.length;
@@ -834,7 +866,11 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
       }
 
       pageToken = listRes.data.nextPageToken ?? undefined;
-    } while (pageToken && messageIdSet.size < NEW_MESSAGES_PER_SYNC);
+    } while (
+      pageToken &&
+      messageIdSet.size < NEW_MESSAGES_PER_SYNC &&
+      listPages < MAX_GMAIL_LIST_PAGES_PER_SYNC
+    );
 
     const messageIds = [...messageIdSet];
 
@@ -975,6 +1011,7 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
           detail: messageDetails.join(" "),
         });
       } catch (error) {
+        if (shouldAbortCurrentSync(error)) throw error;
         // Deliberately does NOT write a ProcessedEmail row here: this is an unexpected failure
         // (network hiccup, transient DB error, etc.), not "this email will never be valid" — leaving
         // it unmarked means the next sync run retries it instead of skipping it forever.
@@ -1000,13 +1037,14 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
     try {
       invoiceSummary = await syncVendorInvoices(gmail);
     } catch (invoiceError) {
+      if (shouldAbortCurrentSync(invoiceError)) throw invoiceError;
       invoiceSummary.errors++;
       console.error("Gmail vendor-invoice sync failed:", invoiceError);
     }
 
     try {
       // This reconciliation used to run every time every browser polled the notification bell.
-      // Running it once per scheduled sync keeps alerts within the same five-minute SLA without
+      // Running it once per scheduled sync keeps alerts within the same fifteen-minute SLA without
       // making ordinary notification reads scan every shipment and notification row.
       await syncMissingActualCostAlerts();
     } catch (notificationError) {
@@ -1019,21 +1057,24 @@ async function runGmailSync(gmail: NonNullable<Awaited<ReturnType<typeof getAuth
       console.error("Vehicle workbook backfill failed:", vehicleIndexError);
     }
 
-    try {
-      // "App soi gương Gmail" — backfill lô cũ: mỗi lần sync soi vài lô để kéo nốt chứng từ còn thiếu.
-      const filled = await backfillThreadAttachments(gmail, 15);
-      if (filled > 0) console.log(`[gmail-mirror] Backfill soi đính kèm ${filled} lô.`);
-    } catch (backfillError) {
-      console.error("Backfill soi đính kèm Gmail thất bại:", backfillError);
-    }
+    if (options.maintenance) {
+      try {
+        // Backfill is intentionally manual: doing it on every cron pass repeatedly consumed Gmail's
+        // per-user quota when private storage was unavailable.
+        const filled = await backfillThreadAttachments(gmail, 3);
+        if (filled > 0) console.log(`[gmail-mirror] Backfill soi đính kèm ${filled} lô.`);
+      } catch (backfillError) {
+        if (shouldAbortCurrentSync(backfillError)) throw backfillError;
+        console.error("Backfill soi đính kèm Gmail thất bại:", backfillError);
+      }
 
-    try {
-      // "App soi gương Gmail" — Phần B: gỡ đính kèm của các email đã bị xóa/vào Thùng rác. Tự giới hạn
-      // 1 lần/giờ bên trong hàm; chỉ đụng đính kèm có nguồn Gmail, không đụng file tự upload.
-      const rec = await reconcileDeletedGmailAttachments(gmail);
-      if (rec.removed > 0) console.log(`[gmail-mirror] Đã gỡ ${rec.removed} đính kèm của email đã xóa.`);
-    } catch (reconcileError) {
-      console.error("Đối chiếu đính kèm Gmail đã xóa thất bại:", reconcileError);
+      try {
+        const rec = await reconcileDeletedGmailAttachments(gmail);
+        if (rec.removed > 0) console.log(`[gmail-mirror] Đã gỡ ${rec.removed} đính kèm của email đã xóa.`);
+      } catch (reconcileError) {
+        if (shouldAbortCurrentSync(reconcileError)) throw reconcileError;
+        console.error("Đối chiếu đính kèm Gmail đã xóa thất bại:", reconcileError);
+      }
     }
 
     return {
@@ -1061,6 +1102,15 @@ export async function POST(request: NextRequest) {
     if (!user) return apiError("Chưa đăng nhập hoặc khóa tác vụ máy chủ không hợp lệ.", 401);
     if (user.role !== "ADMIN") return apiError("Chỉ Admin mới được đồng bộ Gmail.", 403);
 
+    if (isCron && automaticSyncBlockedUntil > Date.now()) {
+      return apiSuccess({
+        started: false,
+        deferred: true,
+        reason: automaticSyncBlockedReason,
+        retryAfterSeconds: Math.ceil((automaticSyncBlockedUntil - Date.now()) / 1_000),
+      }, 202);
+    }
+
     const gmail = await getAuthorizedGmailClient();
     if (!gmail) {
       return apiError("Chưa kết nối Gmail. Hãy bấm \"Kết nối Gmail\" trước.", 400);
@@ -1070,6 +1120,23 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       if (isExpiredGmailTokenError(error)) {
         return apiError("Phiên Gmail đã hết hạn hoặc bị thu hồi. Hãy kết nối lại Gmail.", 401);
+      }
+      if (isGmailRateLimitError(error)) {
+        const retryAfterSeconds = gmailRetryAfterSeconds(error) ?? 15 * 60;
+        console.warn(`Gmail tạm giới hạn tần suất; thử lại sau ${retryAfterSeconds} giây.`);
+        if (isCron) {
+          deferAutomaticSync("gmail_rate_limit", retryAfterSeconds);
+          return apiSuccess({
+            started: false,
+            deferred: true,
+            reason: "gmail_rate_limit",
+            retryAfterSeconds,
+          }, 202);
+        }
+        return apiError(
+          `Gmail đang tạm giới hạn tần suất. Hãy thử lại sau khoảng ${Math.ceil(retryAfterSeconds / 60)} phút.`,
+          429
+        );
       }
       console.error("Gmail credential verification failed:", error);
       return apiError("Không thể xác thực Gmail lúc này. Vui lòng thử lại.", 502);
@@ -1100,8 +1167,26 @@ export async function POST(request: NextRequest) {
     // (vd cron-job.org 30s) không hiểu nhầm là lỗi; server Hostinger là tiến trình lâu dài nên
     // tác vụ nền vẫn chạy tới khi xong. UI vẫn await để hiện kết quả đồng bộ như cũ.
     if (isCron) {
-      void runGmailSync(gmail, user)
-        .catch((error) => console.error("Background Gmail sync failed:", error))
+      void runGmailSync(gmail, user, { maintenance: false })
+        .catch((error) => {
+          if (isPrivateStorageRestrictedError(error)) {
+            deferAutomaticSync("storage_restricted", 30 * 60);
+            console.error(
+              "Background Gmail sync paused: Supabase Storage is restricted or over quota.",
+              error
+            );
+            return;
+          }
+          if (isGmailRateLimitError(error)) {
+            deferAutomaticSync(
+              "gmail_rate_limit",
+              gmailRetryAfterSeconds(error) ?? 15 * 60
+            );
+            console.warn("Background Gmail sync deferred because Gmail rate-limited the mailbox.");
+            return;
+          }
+          console.error("Background Gmail sync failed:", error);
+        })
         .finally(() => {
           syncStartedAt = null;
         });
@@ -1109,8 +1194,21 @@ export async function POST(request: NextRequest) {
       return apiSuccess({ started: true, inProgress: true }, 202);
     }
 
-    return apiSuccess(await runGmailSync(gmail, user));
+    return apiSuccess(await runGmailSync(gmail, user, { maintenance: true }));
   } catch (error) {
+    if (isPrivateStorageRestrictedError(error)) {
+      return apiError(
+        "Kho lưu trữ Supabase đang bị khóa hoặc vượt hạn mức. Hãy mở lại Storage trước khi đồng bộ.",
+        507
+      );
+    }
+    if (isGmailRateLimitError(error)) {
+      const retryAfterSeconds = gmailRetryAfterSeconds(error) ?? 15 * 60;
+      return apiError(
+        `Gmail đang tạm giới hạn tần suất. Hãy thử lại sau khoảng ${Math.ceil(retryAfterSeconds / 60)} phút.`,
+        429
+      );
+    }
     console.error("POST /api/gmail/sync failed:", error);
     return apiError("Đồng bộ email thất bại.", 500);
   } finally {

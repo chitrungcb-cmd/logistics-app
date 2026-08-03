@@ -39,6 +39,7 @@ import {
   indexShipmentVehiclesFromAttachments,
 } from "@/lib/shipment-vehicle-index";
 import { isPrivateStorageRestrictedError } from "@/lib/private-storage";
+import { backfillLegacyGmailAttachmentsToR2 } from "@/lib/gmail-r2-backfill";
 
 // How many *new* (not-yet-processed) messages one sync call takes on. Gmail returns matches
 // newest-first, and every call starts pagination from page 1 — so once the newest ~500 are already
@@ -1101,7 +1102,6 @@ export async function POST(request: NextRequest) {
     const user = await getSyncActor(request);
     if (!user) return apiError("Chưa đăng nhập hoặc khóa tác vụ máy chủ không hợp lệ.", 401);
     if (user.role !== "ADMIN") return apiError("Chỉ Admin mới được đồng bộ Gmail.", 403);
-
     if (isCron && automaticSyncBlockedUntil > Date.now()) {
       return apiSuccess({
         started: false,
@@ -1167,7 +1167,18 @@ export async function POST(request: NextRequest) {
     // (vd cron-job.org 30s) không hiểu nhầm là lỗi; server Hostinger là tiến trình lâu dài nên
     // tác vụ nền vẫn chạy tới khi xong. UI vẫn await để hiện kết quả đồng bộ như cũ.
     if (isCron) {
-      void runGmailSync(gmail, user, { maintenance: false })
+      void (async () => {
+        await runGmailSync(gmail, user, { maintenance: false });
+        try {
+          const recovery = await backfillLegacyGmailAttachmentsToR2(gmail, 1);
+          if (!recovery.done || recovery.filesUploaded > 0 || recovery.errors > 0) {
+            console.log("[gmail-r2-recovery]", recovery);
+          }
+        } catch (recoveryError) {
+          if (shouldAbortCurrentSync(recoveryError)) throw recoveryError;
+          console.error("Phục hồi tệp Gmail cũ sang R2 thất bại:", recoveryError);
+        }
+      })()
         .catch((error) => {
           if (isPrivateStorageRestrictedError(error)) {
             deferAutomaticSync("storage_restricted", 30 * 60);

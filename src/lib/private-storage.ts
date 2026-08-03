@@ -105,6 +105,30 @@ export function isPrivateStorageConfigured() {
   return r2StorageConfig() !== null || supabaseStorageConfig() !== null;
 }
 
+/** True only when Cloudflare R2 is the primary private attachment store. */
+export function isR2StorageConfigured() {
+  return r2StorageConfig() !== null;
+}
+
+/**
+ * Checks R2 directly, deliberately without the legacy Supabase read fallback. The one-time Gmail
+ * recovery uses this to find provider-neutral attachment URLs whose bytes still exist only in the
+ * old bucket.
+ */
+export async function privateObjectExistsInR2(key: string) {
+  if (!isSafeObjectKey(key)) throw new Error("Invalid private storage object key.");
+  const config = r2StorageConfig();
+  if (!config) throw new Error("Cloudflare R2 is not configured.");
+
+  try {
+    await r2Client(config).send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }));
+    return true;
+  } catch (error) {
+    if (isR2NotFound(error)) return false;
+    throw error;
+  }
+}
+
 function requireSupabaseStorageConfig() {
   const config = supabaseStorageConfig();
   if (!config) {

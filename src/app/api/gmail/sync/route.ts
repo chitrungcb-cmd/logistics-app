@@ -58,7 +58,11 @@ const SHIPMENT_SYNC_MARKER = "[shipment-attachments-v3]";
 const SYNC_STALE_MS = 5 * 60 * 1000;
 let syncStartedAt: number | null = null;
 let automaticSyncBlockedUntil = 0;
-let automaticSyncBlockedReason: "gmail_rate_limit" | "storage_restricted" | null = null;
+let automaticSyncBlockedReason:
+  | "gmail_rate_limit"
+  | "gmail_auth_expired"
+  | "storage_restricted"
+  | null = null;
 function syncIsRunning() {
   return syncStartedAt !== null && Date.now() - syncStartedAt < SYNC_STALE_MS;
 }
@@ -1115,31 +1119,27 @@ export async function POST(request: NextRequest) {
     if (!gmail) {
       return apiError("Chưa kết nối Gmail. Hãy bấm \"Kết nối Gmail\" trước.", 400);
     }
-    try {
-      await verifyGmailClient(gmail);
-    } catch (error) {
-      if (isExpiredGmailTokenError(error)) {
-        return apiError("Phiên Gmail đã hết hạn hoặc bị thu hồi. Hãy kết nối lại Gmail.", 401);
-      }
-      if (isGmailRateLimitError(error)) {
-        const retryAfterSeconds = gmailRetryAfterSeconds(error) ?? 15 * 60;
-        console.warn(`Gmail tạm giới hạn tần suất; thử lại sau ${retryAfterSeconds} giây.`);
-        if (isCron) {
-          deferAutomaticSync("gmail_rate_limit", retryAfterSeconds);
-          return apiSuccess({
-            started: false,
-            deferred: true,
-            reason: "gmail_rate_limit",
-            retryAfterSeconds,
-          }, 202);
+    // A scheduled request must be acknowledged before any external Google API call. Otherwise a
+    // slow Gmail token/profile request can make cron-job.org or GitHub Actions mark a healthy sync
+    // as timed out. Manual UI sync still verifies synchronously so the admin gets immediate feedback.
+    if (!isCron) {
+      try {
+        await verifyGmailClient(gmail);
+      } catch (error) {
+        if (isExpiredGmailTokenError(error)) {
+          return apiError("Phiên Gmail đã hết hạn hoặc bị thu hồi. Hãy kết nối lại Gmail.", 401);
         }
-        return apiError(
-          `Gmail đang tạm giới hạn tần suất. Hãy thử lại sau khoảng ${Math.ceil(retryAfterSeconds / 60)} phút.`,
-          429
-        );
+        if (isGmailRateLimitError(error)) {
+          const retryAfterSeconds = gmailRetryAfterSeconds(error) ?? 15 * 60;
+          console.warn(`Gmail tạm giới hạn tần suất; thử lại sau ${retryAfterSeconds} giây.`);
+          return apiError(
+            `Gmail đang tạm giới hạn tần suất. Hãy thử lại sau khoảng ${Math.ceil(retryAfterSeconds / 60)} phút.`,
+            429
+          );
+        }
+        console.error("Gmail credential verification failed:", error);
+        return apiError("Không thể xác thực Gmail lúc này. Vui lòng thử lại.", 502);
       }
-      console.error("Gmail credential verification failed:", error);
-      return apiError("Không thể xác thực Gmail lúc này. Vui lòng thử lại.", 502);
     }
 
     if (syncIsRunning()) {
@@ -1168,6 +1168,25 @@ export async function POST(request: NextRequest) {
     // tác vụ nền vẫn chạy tới khi xong. UI vẫn await để hiện kết quả đồng bộ như cũ.
     if (isCron) {
       void (async () => {
+        try {
+          await verifyGmailClient(gmail);
+        } catch (error) {
+          if (isExpiredGmailTokenError(error)) {
+            deferAutomaticSync("gmail_auth_expired", 24 * 60 * 60);
+            console.error("Background Gmail sync paused: Gmail authorization has expired.");
+            return;
+          }
+          if (isGmailRateLimitError(error)) {
+            const retryAfterSeconds = gmailRetryAfterSeconds(error) ?? 15 * 60;
+            deferAutomaticSync("gmail_rate_limit", retryAfterSeconds);
+            console.warn(
+              `Background Gmail verification deferred for ${retryAfterSeconds} seconds because Gmail rate-limited the mailbox.`
+            );
+            return;
+          }
+          console.error("Background Gmail credential verification failed:", error);
+          return;
+        }
         await runGmailSync(gmail, user, { maintenance: false });
         try {
           const recovery = await backfillLegacyGmailAttachmentsToR2(gmail, 1);

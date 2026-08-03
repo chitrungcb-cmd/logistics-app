@@ -23,4 +23,21 @@ describe("Google OAuth redirect URI", () => {
       })
     ).toBe("https://nqlogistics.click/api/gmail/callback");
   });
+
+  it("uses localhost over HTTP when the development listener is 0.0.0.0", () => {
+    expect(
+      resolveGoogleRedirectUri({
+        requestUrl: "https://0.0.0.0:3000/api/gmail/auth",
+      })
+    ).toBe("http://localhost:3000/api/gmail/callback");
+  });
+
+  it("accepts an explicitly configured localhost development URL", () => {
+    expect(
+      resolveGoogleRedirectUri({
+        configuredAppUrl: "http://localhost:3000",
+        requestUrl: "https://0.0.0.0:3000/api/gmail/auth",
+      })
+    ).toBe("http://localhost:3000/api/gmail/callback");
+  });
 });

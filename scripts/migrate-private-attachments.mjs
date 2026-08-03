@@ -146,10 +146,10 @@ try {
   }
 
   if (!apply) {
-    console.log("Chạy npm run storage:migrate sau khi đã cấu hình Supabase Storage.");
+    console.log("Chạy npm run storage:migrate sau khi đã cấu hình kho tệp riêng tư.");
   } else if (missing.length === 0) {
     if (!isPrivateStorageConfigured()) {
-      throw new Error("Thiếu SUPABASE_URL hoặc SUPABASE_SERVICE_ROLE_KEY.");
+      throw new Error("Thiếu cấu hình Cloudflare R2 hoặc kho tệp riêng tư dự phòng.");
     }
 
     let migrated = 0;

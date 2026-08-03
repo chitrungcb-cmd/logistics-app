@@ -41,10 +41,12 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Production storage and Gmail sync
 
-Production attachments are stored in a private Supabase Storage bucket instead of `public/uploads`.
+Production attachments are stored in the private Cloudflare R2 bucket `nq-logistics-documents`
+instead of `public/uploads`. Supabase Storage remains an automatic read fallback until the old
+objects have been copied to R2.
 
-1. Create a private bucket named `logistics-attachments` in the Supabase project. Set its file-size
-   limit to 20 MB and allow PDF, Excel, Word, PNG/JPEG, and XML MIME types.
+1. Create an R2 Standard bucket named `nq-logistics-documents`, keep Public Access and `r2.dev`
+   disabled, and create an Object Read & Write token restricted to that bucket.
 2. Add every variable listed in `.env.example` to the Hostinger environment. `AUTH_SECRET`,
    `TOKEN_ENCRYPTION_KEY`, `INITIAL_SETUP_SECRET`, and `CRON_SECRET` must be separate random values
    of at least 32 bytes. Never prefix a server secret with `NEXT_PUBLIC_`.
@@ -61,10 +63,20 @@ curl --fail --silent --show-error --output /dev/null --request POST --header "Au
 Use the exact same secret in the header and the hosting environment. Browser polling is deliberately
 disabled; administrators can still use **Đồng bộ ngay** for troubleshooting.
 
-Local development falls back to `public/uploads` when Supabase Storage is not configured. Production
+New uploads use R2 as soon as all four R2 variables are present. Existing provider-neutral attachment
+URLs do not need database changes: reads try R2 first and fall back to the old Supabase bucket only
+when the object has not been migrated. Copy old Supabase objects with a resumable dry run first; this
+never deletes the source:
+
+```bash
+npm run storage:migrate-to-r2 -- --dry-run
+npm run storage:migrate-to-r2
+```
+
+Local development falls back to `public/uploads` when neither private store is configured. Production
 fails closed instead of writing sensitive files to local application storage. Existing `/uploads/*`
 records are ignored by Git and must be migrated before deploying from GitHub. Audit first, then run
-the resumable migration; the local recovery copy is retained:
+the resumable local-file migration; the local recovery copy is retained:
 
 ```bash
 npm run storage:audit

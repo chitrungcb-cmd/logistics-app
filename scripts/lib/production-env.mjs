@@ -70,14 +70,37 @@ export function validateProductionEnvironment(env) {
     issues.push("NQ_TAX_CODE: phải là mã số thuế 10 hoặc 13 chữ số.");
   }
 
-  requireValue("SUPABASE_URL");
-  requireSecret("SUPABASE_SERVICE_ROLE_KEY");
-  requireValue("SUPABASE_STORAGE_BUCKET");
-  if (env.SUPABASE_URL && !validUrl(env.SUPABASE_URL, ["https:"])) {
-    issues.push("SUPABASE_URL: phải là URL HTTPS hợp lệ.");
+  for (const key of [
+    "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET_NAME",
+  ]) {
+    requireValue(key);
   }
-  if (env.SUPABASE_STORAGE_BUCKET && !/^[a-z0-9][a-z0-9._-]{1,62}$/i.test(env.SUPABASE_STORAGE_BUCKET)) {
-    issues.push("SUPABASE_STORAGE_BUCKET: tên bucket không hợp lệ.");
+  if (env.R2_ACCOUNT_ID && !/^[a-z0-9_-]{8,64}$/i.test(env.R2_ACCOUNT_ID)) {
+    issues.push("R2_ACCOUNT_ID: mã tài khoản không hợp lệ.");
+  }
+  if (env.R2_ENDPOINT && !validUrl(env.R2_ENDPOINT, ["https:"])) {
+    issues.push("R2_ENDPOINT: nếu sử dụng phải là URL HTTPS hợp lệ.");
+  }
+  if (env.R2_BUCKET_NAME && !/^[a-z0-9][a-z0-9._-]{1,62}$/i.test(env.R2_BUCKET_NAME)) {
+    issues.push("R2_BUCKET_NAME: tên bucket không hợp lệ.");
+  }
+
+  const supabaseKeys = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_STORAGE_BUCKET"];
+  const hasSupabaseFallback = supabaseKeys.some((key) => env[key]?.trim());
+  if (hasSupabaseFallback) {
+    for (const key of supabaseKeys) requireValue(key);
+    if (env.SUPABASE_URL && !validUrl(env.SUPABASE_URL, ["https:"])) {
+      issues.push("SUPABASE_URL: phải là URL HTTPS hợp lệ.");
+    }
+    if (
+      env.SUPABASE_STORAGE_BUCKET &&
+      !/^[a-z0-9][a-z0-9._-]{1,62}$/i.test(env.SUPABASE_STORAGE_BUCKET)
+    ) {
+      issues.push("SUPABASE_STORAGE_BUCKET: tên bucket không hợp lệ.");
+    }
   }
 
   return issues;

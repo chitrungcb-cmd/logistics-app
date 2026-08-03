@@ -14,8 +14,8 @@ import {
 const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads");
 
 /**
- * Saves production files in a private Supabase Storage bucket. Local disk remains a development-only
- * fallback so contributors can run the app before provisioning Supabase; production fails closed.
+ * Saves production files in the configured private object store. Cloudflare R2 is preferred, while
+ * Supabase remains a read fallback during migration. Local disk remains development-only.
  */
 export async function saveUploadedFile(originalName: string, buffer: Buffer) {
   validateUploadedFile(originalName, buffer);

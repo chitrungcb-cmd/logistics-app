@@ -18,7 +18,14 @@ function statesMatch(received: string | null, expected: string | undefined) {
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
   const state = request.nextUrl.searchParams.get("state");
-  const shipmentsUrl = new URL("/shipments", request.url);
+  // Hostinger forwards the public request to Next.js through an internal 0.0.0.0 listener. Using
+  // request.url for the browser redirect would therefore send the admin to
+  // https://0.0.0.0:3000/shipments after Google finishes OAuth. The already-resolved Google
+  // callback URL has the trusted public origin (APP_URL / GOOGLE_REDIRECT_URI / forwarded host),
+  // so reuse that origin for every browser redirect from this handler.
+  const googleRedirectUri = getGoogleRedirectUri(request);
+  const publicOrigin = new URL(googleRedirectUri).origin;
+  const shipmentsUrl = new URL("/shipments", publicOrigin);
   const cookieStore = await cookies();
   const expectedState = cookieStore.get(GOOGLE_OAUTH_STATE_COOKIE)?.value;
   cookieStore.set(GOOGLE_OAUTH_STATE_COOKIE, "", {
@@ -35,7 +42,7 @@ export async function GET(request: NextRequest) {
   // Redirect (not JSON 401) because this is a browser navigation, not an XHR call.
   const user = await getCurrentUser();
   if (!user) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(new URL("/login", publicOrigin));
   }
   if (user.role !== "ADMIN") {
     shipmentsUrl.searchParams.set("gmail_error", "Chỉ Admin mới được kết nối Gmail.");
@@ -53,7 +60,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const client = createOAuth2Client(getGoogleRedirectUri(request));
+    const client = createOAuth2Client(googleRedirectUri);
     const { tokens } = await client.getToken(code);
 
     if (!tokens.refresh_token) {

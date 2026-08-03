@@ -14,19 +14,15 @@ import {
 const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads");
 
 /**
- * Saves production files in the configured private object store. Cloudflare R2 is preferred, while
- * Supabase remains a read fallback during migration. Local disk remains development-only.
+ * Saves production files in Cloudflare R2. Supabase is read-only legacy storage during migration;
+ * local disk remains development-only.
  */
 export async function saveUploadedFile(originalName: string, buffer: Buffer) {
   validateUploadedFile(originalName, buffer);
 
-  if (isPrivateStorageConfigured()) {
+  if (isPrivateStorageConfigured() || process.env.NODE_ENV === "production") {
     const saved = await uploadPrivateObject(originalName, buffer);
     return { name: originalName, url: saved.url };
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("Private attachment storage is required in production.");
   }
 
   await mkdir(UPLOAD_DIR, { recursive: true });
@@ -71,17 +67,13 @@ export async function saveEditableUploadedFile(
 ) {
   validateUploadedFile(originalName, buffer);
 
-  if (isPrivateStorageConfigured()) {
+  if (isPrivateStorageConfigured() || process.env.NODE_ENV === "production") {
     const currentKey = privateObjectKeyFromUrl(currentUrl);
     const editableKey = currentKey?.startsWith("attachments/editable/")
       ? currentKey
       : editableStorageKey(originalName, currentUrl, scopeId);
     await overwritePrivateObject(editableKey, originalName, buffer);
     return { name: originalName, url: privateFileUrl(editableKey, originalName) };
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("Private attachment storage is required in production.");
   }
 
   await mkdir(UPLOAD_DIR, { recursive: true });

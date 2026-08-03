@@ -38,7 +38,10 @@ import {
   backfillShipmentVehicleIndex,
   indexShipmentVehiclesFromAttachments,
 } from "@/lib/shipment-vehicle-index";
-import { isPrivateStorageRestrictedError } from "@/lib/private-storage";
+import {
+  isPrivateStorageConfigurationError,
+  isPrivateStorageRestrictedError,
+} from "@/lib/private-storage";
 import { backfillLegacyGmailAttachmentsToR2 } from "@/lib/gmail-r2-backfill";
 
 // How many *new* (not-yet-processed) messages one sync call takes on. Gmail returns matches
@@ -61,6 +64,7 @@ let automaticSyncBlockedUntil = 0;
 let automaticSyncBlockedReason:
   | "gmail_rate_limit"
   | "gmail_auth_expired"
+  | "storage_configuration"
   | "storage_restricted"
   | null = null;
 function syncIsRunning() {
@@ -76,7 +80,11 @@ function deferAutomaticSync(
 }
 
 function shouldAbortCurrentSync(error: unknown) {
-  return isPrivateStorageRestrictedError(error) || isGmailRateLimitError(error);
+  return (
+    isPrivateStorageConfigurationError(error) ||
+    isPrivateStorageRestrictedError(error) ||
+    isGmailRateLimitError(error)
+  );
 }
 
 export const runtime = "nodejs";
@@ -1199,10 +1207,18 @@ export async function POST(request: NextRequest) {
         }
       })()
         .catch((error) => {
+          if (isPrivateStorageConfigurationError(error)) {
+            deferAutomaticSync("storage_configuration", 30 * 60);
+            console.error(
+              "Background Gmail sync paused: Cloudflare R2 is not configured.",
+              error
+            );
+            return;
+          }
           if (isPrivateStorageRestrictedError(error)) {
             deferAutomaticSync("storage_restricted", 30 * 60);
             console.error(
-              "Background Gmail sync paused: Supabase Storage is restricted or over quota.",
+              "Background Gmail sync paused while reading a legacy Supabase attachment.",
               error
             );
             return;
@@ -1226,9 +1242,15 @@ export async function POST(request: NextRequest) {
 
     return apiSuccess(await runGmailSync(gmail, user, { maintenance: true }));
   } catch (error) {
+    if (isPrivateStorageConfigurationError(error)) {
+      return apiError(
+        `${error.message} Hãy bổ sung đủ 4 biến trên Hostinger rồi tái triển khai ứng dụng.`,
+        503
+      );
+    }
     if (isPrivateStorageRestrictedError(error)) {
       return apiError(
-        "Kho lưu trữ Supabase đang bị khóa hoặc vượt hạn mức. Hãy mở lại Storage trước khi đồng bộ.",
+        "Không thể đọc một tệp cũ vì Supabase đã bị khóa. Tệp mới vẫn phải được lưu vào Cloudflare R2.",
         507
       );
     }

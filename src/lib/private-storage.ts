@@ -25,6 +25,13 @@ type R2StorageConfig = {
   bucket: string;
 };
 
+const REQUIRED_R2_VARIABLES = [
+  "R2_ACCOUNT_ID",
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "R2_BUCKET_NAME",
+] as const;
+
 let cachedR2Client: { signature: string; client: S3Client } | null = null;
 
 export class PrivateStorageError extends Error {
@@ -37,6 +44,19 @@ export class PrivateStorageError extends Error {
     );
     this.name = "PrivateStorageError";
   }
+}
+
+export class PrivateStorageConfigurationError extends Error {
+  constructor(public readonly missingVariables: readonly string[]) {
+    super(
+      `Cloudflare R2 chưa được cấu hình đầy đủ. Thiếu: ${missingVariables.join(", ")}.`
+    );
+    this.name = "PrivateStorageConfigurationError";
+  }
+}
+
+export function isPrivateStorageConfigurationError(error: unknown) {
+  return error instanceof PrivateStorageConfigurationError;
 }
 
 export function isPrivateStorageRestrictedError(error: unknown) {
@@ -54,13 +74,18 @@ function r2StorageConfig(): R2StorageConfig | null {
   const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim();
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY?.trim();
   const bucket = process.env.R2_BUCKET_NAME?.trim();
-  const configuredValues = [accountId, accessKeyId, secretAccessKey, bucket].filter(Boolean).length;
+  const values = {
+    R2_ACCOUNT_ID: accountId,
+    R2_ACCESS_KEY_ID: accessKeyId,
+    R2_SECRET_ACCESS_KEY: secretAccessKey,
+    R2_BUCKET_NAME: bucket,
+  };
+  const configuredValues = Object.values(values).filter(Boolean).length;
 
   if (configuredValues === 0) return null;
   if (configuredValues !== 4) {
-    throw new Error(
-      "R2 storage configuration is incomplete. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, " +
-        "R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME."
+    throw new PrivateStorageConfigurationError(
+      REQUIRED_R2_VARIABLES.filter((key) => !values[key])
     );
   }
 
@@ -102,7 +127,7 @@ function r2Client(config: R2StorageConfig) {
 }
 
 export function isPrivateStorageConfigured() {
-  return r2StorageConfig() !== null || supabaseStorageConfig() !== null;
+  return r2StorageConfig() !== null;
 }
 
 /** True only when Cloudflare R2 is the primary private attachment store. */
@@ -137,6 +162,12 @@ function requireSupabaseStorageConfig() {
         "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY variables."
     );
   }
+  return config;
+}
+
+function requireR2StorageConfig() {
+  const config = r2StorageConfig();
+  if (!config) throw new PrivateStorageConfigurationError(REQUIRED_R2_VARIABLES);
   return config;
 }
 
@@ -257,49 +288,12 @@ async function uploadR2Object(
   }
 }
 
-async function uploadSupabaseObject(
-  config: SupabaseStorageConfig,
-  key: string,
-  fileName: string,
-  buffer: Buffer,
-  overwrite: boolean
-) {
-  const objectUrl =
-    `${config.baseUrl}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodePath(key)}`;
-  const response = await fetch(objectUrl, {
-    method: "POST",
-    headers: {
-      ...storageHeaders(config),
-      "Content-Type": contentTypeForFileName(fileName),
-      "Cache-Control": "private, no-store",
-      "x-upsert": overwrite ? "true" : "false",
-    },
-    body: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const originalError = await storageError(response);
-    if (overwrite || (response.status !== 400 && response.status !== 409)) throw originalError;
-    const existing = await fetch(objectUrl, {
-      headers: { ...storageHeaders(config), Range: "bytes=0-0" },
-      cache: "no-store",
-    });
-    if (!existing.ok) throw originalError;
-    await existing.body?.cancel();
-  }
-}
-
 export async function uploadPrivateObject(fileName: string, buffer: Buffer) {
   const storedName = contentAddressedFileName(fileName, buffer);
   const key = [OBJECT_ROOT, "sha256", storedName.slice(0, 2), storedName].join("/");
-  const r2 = r2StorageConfig();
-
-  if (r2) {
-    await uploadR2Object(r2, key, fileName, buffer, false);
-  } else {
-    await uploadSupabaseObject(requireSupabaseStorageConfig(), key, fileName, buffer, false);
-  }
+  // New and edited files must never silently fall back to the legacy Supabase bucket. A missing
+  // R2 configuration is an operational error that the hosting panel must surface explicitly.
+  await uploadR2Object(requireR2StorageConfig(), key, fileName, buffer, false);
   return { key, url: privateFileUrl(key, fileName) };
 }
 
@@ -308,12 +302,7 @@ export async function overwritePrivateObject(key: string, fileName: string, buff
   if (!isSafeObjectKey(key) || !key.startsWith(`${OBJECT_ROOT}/editable/`)) {
     throw new Error("Invalid editable private storage object key.");
   }
-  const r2 = r2StorageConfig();
-  if (r2) {
-    await uploadR2Object(r2, key, fileName, buffer, true);
-  } else {
-    await uploadSupabaseObject(requireSupabaseStorageConfig(), key, fileName, buffer, true);
-  }
+  await uploadR2Object(requireR2StorageConfig(), key, fileName, buffer, true);
 }
 
 async function fetchSupabaseObject(

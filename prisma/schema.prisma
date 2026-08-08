@@ -164,6 +164,7 @@ model CompanyAccount {
   costs            ShipmentCost[] @relation("CostPaidFromCompanyAccount")
   costPresets      CostPreset[]   @relation("CostPresetPaidFrom")
   paymentsReceived Payment[]      @relation("PaymentReceivedToCompanyAccount")
+  otherEntries     OtherExpense[] @relation("OtherEntryAccount")
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 }
@@ -197,6 +198,9 @@ model OtherExpense {
   expenseDate    DateTime
   payee          String?
   paymentMethod  String?
+  // Tài khoản công ty nhận tiền (khoản THU) hoặc chi tiền (khoản CHI). SetNull khi TK bị xóa để không vỡ FK.
+  companyAccount   CompanyAccount?    @relation("OtherEntryAccount", fields: [companyAccountId], references: [id], onDelete: SetNull)
+  companyAccountId String?
   invoiceNumber  String?
   attachmentName String?
   attachmentUrl  String?
@@ -209,6 +213,7 @@ model OtherExpense {
   @@index([expenseDate])
   @@index([category])
   @@index([createdById])
+  @@index([companyAccountId])
 }
 
 // Bảng giá chi phí được thiết lập trước theo nhóm tên hàng. Khi lô có số tờ khai, các dòng đang

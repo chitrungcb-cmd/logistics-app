@@ -70,6 +70,13 @@ export async function POST(request: NextRequest) {
       return apiError("Đường dẫn chứng từ không hợp lệ.", 400);
     }
 
+    const companyAccountId =
+      typeof body.companyAccountId === "string" && body.companyAccountId ? body.companyAccountId : null;
+    if (companyAccountId) {
+      const account = await prisma.companyAccount.findUnique({ where: { id: companyAccountId }, select: { id: true } });
+      if (!account) return apiError("Tài khoản công ty không hợp lệ.", 400);
+    }
+
     const expense = await prisma.otherExpense.create({
       data: {
         type,
@@ -79,13 +86,14 @@ export async function POST(request: NextRequest) {
         expenseDate,
         payee,
         paymentMethod,
+        companyAccountId,
         invoiceNumber,
         attachmentName,
         attachmentUrl,
         note,
         createdById: user.id,
       },
-      include: { createdBy: { select: CREATOR_SELECT } },
+      include: { createdBy: { select: CREATOR_SELECT }, companyAccount: { select: { id: true, name: true } } },
     });
     return apiSuccess(expense, 201);
   } catch (error) {

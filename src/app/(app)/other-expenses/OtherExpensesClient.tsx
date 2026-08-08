@@ -27,6 +27,7 @@ type OtherExpense = {
   expenseDate: string;
   payee: string | null;
   paymentMethod: string | null;
+  companyAccount: { id: string; name: string } | null;
   invoiceNumber: string | null;
   attachmentName: string | null;
   attachmentUrl: string | null;
@@ -44,6 +45,7 @@ type ExpenseForm = {
   expenseDate: string;
   payee: string;
   paymentMethod: string;
+  companyAccountId: string;
   invoiceNumber: string;
   attachmentName: string;
   attachmentUrl: string;
@@ -66,6 +68,7 @@ function emptyForm(): ExpenseForm {
     expenseDate: localDateInputValue(),
     payee: "",
     paymentMethod: "",
+    companyAccountId: "",
     invoiceNumber: "",
     attachmentName: "",
     attachmentUrl: "",
@@ -93,6 +96,7 @@ async function readApiJson(response: Response) {
 
 export default function OtherExpensesClient() {
   const [expenses, setExpenses] = useState<OtherExpense[]>([]);
+  const [companyAccounts, setCompanyAccounts] = useState<{ id: string; name: string; isActive: boolean }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -132,6 +136,15 @@ export default function OtherExpensesClient() {
       cancelled = true;
     };
   }, [reloadKey]);
+
+  useEffect(() => {
+    fetch("/api/company-accounts", { cache: "no-store" })
+      .then(readApiJson)
+      .then((json) => {
+        if (json.success && Array.isArray(json.data)) setCompanyAccounts(json.data);
+      })
+      .catch(() => {});
+  }, []);
 
   const filteredExpenses = useMemo(() => {
     const query = filters.query.trim().toLowerCase();
@@ -193,6 +206,7 @@ export default function OtherExpensesClient() {
       expenseDate: expenseDateValue(expense.expenseDate),
       payee: expense.payee || "",
       paymentMethod: expense.paymentMethod || "",
+      companyAccountId: expense.companyAccount?.id || "",
       invoiceNumber: expense.invoiceNumber || "",
       attachmentName: expense.attachmentName || "",
       attachmentUrl: expense.attachmentUrl || "",
@@ -293,6 +307,7 @@ export default function OtherExpensesClient() {
           "Số tiền": expense.type === "THU" ? expense.amount : -expense.amount,
           "Người/đơn vị": expense.payee || "",
           "Phương thức": expense.paymentMethod || "",
+          "Tài khoản": expense.companyAccount?.name || "",
           "Số hóa đơn": expense.invoiceNumber || "",
           "Ghi chú": expense.note || "",
           "Người nhập": expense.createdBy?.name || "",
@@ -424,6 +439,7 @@ export default function OtherExpensesClient() {
                   <td className="max-w-xs px-3 py-3 text-gray-600">{expense.payee || "—"}</td>
                   <td className="px-3 py-3 text-gray-600">
                     <span>{expense.paymentMethod || "—"}</span>
+                    {expense.companyAccount && <span className="block text-xs text-gray-500">TK: {expense.companyAccount.name}</span>}
                     <span className="block text-xs text-gray-400">HĐ: {expense.invoiceNumber || "—"}</span>
                   </td>
                   <td className={`whitespace-nowrap px-3 py-3 text-right font-semibold ${expense.type === "THU" ? "text-emerald-700" : "text-red-700"}`}>
@@ -536,6 +552,17 @@ export default function OtherExpensesClient() {
                 <select value={form.paymentMethod} onChange={(event) => setForm((current) => ({ ...current, paymentMethod: event.target.value }))} className="input">
                   <option value="">— Chọn —</option>
                   {OTHER_EXPENSE_PAYMENT_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">{form.type === "THU" ? "Tài khoản nhận tiền" : "Tài khoản chi"}</span>
+                <select value={form.companyAccountId} onChange={(event) => setForm((current) => ({ ...current, companyAccountId: event.target.value }))} className="input">
+                  <option value="">— Không chọn —</option>
+                  {companyAccounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}{account.isActive ? "" : " (đã khóa)"}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="block">

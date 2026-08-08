@@ -81,12 +81,20 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (typeof data.attachmentUrl === "string" && !isStoredAttachmentUrl(data.attachmentUrl)) {
       return apiError("Đường dẫn chứng từ không hợp lệ.", 400);
     }
+    if ("companyAccountId" in body) {
+      const val = typeof body.companyAccountId === "string" && body.companyAccountId ? body.companyAccountId : null;
+      if (val) {
+        const account = await prisma.companyAccount.findUnique({ where: { id: val }, select: { id: true } });
+        if (!account) return apiError("Tài khoản công ty không hợp lệ.", 400);
+      }
+      data.companyAccountId = val;
+    }
     if (Object.keys(data).length === 0) return apiError("Không có dữ liệu để cập nhật.", 400);
 
     const expense = await prisma.otherExpense.update({
       where: { id },
       data,
-      include: { createdBy: { select: CREATOR_SELECT } },
+      include: { createdBy: { select: CREATOR_SELECT }, companyAccount: { select: { id: true, name: true } } },
     });
     return apiSuccess(expense);
   } catch (error) {

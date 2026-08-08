@@ -1195,8 +1195,9 @@ export async function POST(request: NextRequest) {
           console.error("Background Gmail credential verification failed:", error);
           return;
         }
-        await runGmailSync(gmail, user, { maintenance: false });
         try {
+          // Recover old references first. Regular sync may abort when the legacy Supabase project
+          // is billing-restricted; recovery reads the original Gmail bytes and writes them to R2.
           const recovery = await backfillLegacyGmailAttachmentsToR2(gmail, 1);
           if (!recovery.done || recovery.filesUploaded > 0 || recovery.errors > 0) {
             console.log("[gmail-r2-recovery]", recovery);
@@ -1205,6 +1206,7 @@ export async function POST(request: NextRequest) {
           if (shouldAbortCurrentSync(recoveryError)) throw recoveryError;
           console.error("Phục hồi tệp Gmail cũ sang R2 thất bại:", recoveryError);
         }
+        await runGmailSync(gmail, user, { maintenance: false });
       })()
         .catch((error) => {
           if (isPrivateStorageConfigurationError(error)) {

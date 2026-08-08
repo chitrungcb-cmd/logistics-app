@@ -180,9 +180,17 @@ enum OtherExpenseCategory {
   KHAC
 }
 
-// Chi phí vận hành chung, hoàn toàn độc lập với ShipmentCost và tài chính/công nợ từng lô hàng.
+// Mô-đun "Thu chi khác": mỗi khoản là một chiều THU hoặc CHI. Mặc định CHI để mọi dòng cũ (vốn chỉ là
+// chi phí) giữ nguyên ý nghĩa. Khoản THU chỉ có một nhóm chung ("Thu khác"), lưu category = KHAC.
+enum OtherEntryType {
+  THU
+  CHI
+}
+
+// Thu/chi vận hành chung, hoàn toàn độc lập với ShipmentCost và tài chính/công nợ từng lô hàng.
 model OtherExpense {
   id             String               @id @default(cuid())
+  type           OtherEntryType       @default(CHI)
   category       OtherExpenseCategory
   description    String
   amount         Float

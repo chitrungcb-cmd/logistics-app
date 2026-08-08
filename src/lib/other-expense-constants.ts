@@ -45,3 +45,27 @@ export const OTHER_EXPENSE_PAYMENT_METHODS = [
   "Chuyển khoản",
   "Thẻ công ty",
 ] as const;
+
+// Chiều của một khoản: THU (tiền vào) hay CHI (tiền ra).
+export const OTHER_ENTRY_TYPES = ["CHI", "THU"] as const;
+export type OtherEntryType = (typeof OTHER_ENTRY_TYPES)[number];
+
+export function isOtherEntryType(value: unknown): value is OtherEntryType {
+  return value === "THU" || value === "CHI";
+}
+
+export const OTHER_ENTRY_TYPE_LABELS: Record<OtherEntryType, string> = {
+  CHI: "Chi",
+  THU: "Thu",
+};
+
+// Khoản THU chỉ có một nhóm chung "Thu khác" (lưu category = KHAC), nên hiển thị nhãn nhóm theo chiều:
+// THU → "Thu khác"; CHI → nhãn nhóm chi tương ứng.
+export const OTHER_INCOME_CATEGORY_LABEL = "Thu khác";
+export function otherEntryCategoryLabel(type: OtherEntryType, category: OtherExpenseCategory) {
+  return type === "THU" ? OTHER_INCOME_CATEGORY_LABEL : OTHER_EXPENSE_CATEGORY_LABELS[category];
+}
+export const OTHER_INCOME_CATEGORY_STYLE = "bg-emerald-100 text-emerald-700";
+export function otherEntryCategoryStyle(type: OtherEntryType, category: OtherExpenseCategory) {
+  return type === "THU" ? OTHER_INCOME_CATEGORY_STYLE : OTHER_EXPENSE_CATEGORY_STYLES[category];
+}

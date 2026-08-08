@@ -6,7 +6,7 @@ export const APP_MODULES = [
   { key: "TASKS", label: "Nhiệm vụ", href: "/tasks", icon: "✅" },
   { key: "MESSAGES", label: "Tin nhắn", href: "/messages", icon: "💬" },
   { key: "COSTS", label: "Chi phí lô hàng", href: "/costs", icon: "💰" },
-  { key: "OTHER_EXPENSES", label: "Chi phí khác", href: "/other-expenses", icon: "🧾" },
+  { key: "OTHER_EXPENSES", label: "Thu chi khác", href: "/other-expenses", icon: "🧾" },
   { key: "DEBTS", label: "Công nợ", href: "/debts", icon: "📒" },
   { key: "PERSONAL_ACCOUNT", label: "Tài khoản cá nhân", href: "/personal-account", icon: "💼" },
   { key: "REPORTS", label: "Báo cáo", href: "/reports", icon: "📊" },

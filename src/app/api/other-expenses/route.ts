@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
-import { isOtherExpenseCategory } from "@/lib/other-expense-constants";
+import { isOtherEntryType, isOtherExpenseCategory } from "@/lib/other-expense-constants";
 import { hasModuleAccess } from "@/lib/module-permissions";
 
 const CREATOR_SELECT = { id: true, name: true } as const;
@@ -41,11 +41,14 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    if (!isOtherExpenseCategory(body.category)) return apiError("Nhóm chi phí không hợp lệ.", 400);
+    // Khoản THU chỉ có một nhóm "Thu khác" → lưu category = KHAC; khoản CHI dùng nhóm chi do client gửi.
+    const type = isOtherEntryType(body.type) ? body.type : "CHI";
+    const category = type === "THU" ? "KHAC" : body.category;
+    if (!isOtherExpenseCategory(category)) return apiError("Nhóm không hợp lệ.", 400);
 
     const description = typeof body.description === "string" ? body.description.trim() : "";
     if (!description || description.length > 300) {
-      return apiError("Nội dung chi phí là bắt buộc và không vượt quá 300 ký tự.", 400);
+      return apiError("Nội dung là bắt buộc và không vượt quá 300 ký tự.", 400);
     }
 
     const amount = Number(body.amount);
@@ -69,7 +72,8 @@ export async function POST(request: NextRequest) {
 
     const expense = await prisma.otherExpense.create({
       data: {
-        category: body.category,
+        type,
+        category,
         description,
         amount,
         expenseDate,

@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/api-response";
-import { isOtherExpenseCategory } from "@/lib/other-expense-constants";
+import { isOtherEntryType, isOtherExpenseCategory } from "@/lib/other-expense-constants";
 import { hasModuleAccess } from "@/lib/module-permissions";
 
 const CREATOR_SELECT = { id: true, name: true } as const;
@@ -33,9 +33,17 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const body = await request.json();
     const data: Record<string, unknown> = {};
 
-    if ("category" in body) {
-      if (!isOtherExpenseCategory(body.category)) return apiError("Nhóm chi phí không hợp lệ.", 400);
-      data.category = body.category;
+    let nextType: "THU" | "CHI" | undefined;
+    if ("type" in body) {
+      if (!isOtherEntryType(body.type)) return apiError("Loại thu/chi không hợp lệ.", 400);
+      nextType = body.type;
+      data.type = body.type;
+    }
+    // Khoản THU chỉ có nhóm "Thu khác" (category = KHAC); khoản CHI dùng nhóm client gửi.
+    if ("category" in body || nextType === "THU") {
+      const category = nextType === "THU" ? "KHAC" : body.category;
+      if (!isOtherExpenseCategory(category)) return apiError("Nhóm không hợp lệ.", 400);
+      data.category = category;
     }
     if ("description" in body) {
       const description = typeof body.description === "string" ? body.description.trim() : "";

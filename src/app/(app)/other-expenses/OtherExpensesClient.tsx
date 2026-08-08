@@ -5,8 +5,12 @@ import { downloadExcel } from "@/lib/export-excel";
 import {
   OTHER_EXPENSE_CATEGORY_LABELS,
   OTHER_EXPENSE_CATEGORY_OPTIONS,
-  OTHER_EXPENSE_CATEGORY_STYLES,
   OTHER_EXPENSE_PAYMENT_METHODS,
+  OTHER_ENTRY_TYPES,
+  OTHER_ENTRY_TYPE_LABELS,
+  otherEntryCategoryLabel,
+  otherEntryCategoryStyle,
+  type OtherEntryType,
   type OtherExpenseCategory,
 } from "@/lib/other-expense-constants";
 import AttachmentPreviewButton from "@/components/shipments/AttachmentPreviewButton";
@@ -16,6 +20,7 @@ const PAGE_SIZE = 20;
 
 type OtherExpense = {
   id: string;
+  type: OtherEntryType;
   category: OtherExpenseCategory;
   description: string;
   amount: number;
@@ -32,6 +37,7 @@ type OtherExpense = {
 };
 
 type ExpenseForm = {
+  type: OtherEntryType;
   category: OtherExpenseCategory;
   description: string;
   amount: string;
@@ -53,6 +59,7 @@ function localDateInputValue(date = new Date()) {
 
 function emptyForm(): ExpenseForm {
   return {
+    type: "CHI",
     category: "TIEP_KHACH",
     description: "",
     amount: "",
@@ -91,6 +98,7 @@ export default function OtherExpensesClient() {
   const [reloadKey, setReloadKey] = useState(0);
   const [filters, setFilters] = useState({
     query: "",
+    type: "",
     category: "",
     dateFrom: "",
     dateTo: "",
@@ -128,6 +136,7 @@ export default function OtherExpensesClient() {
   const filteredExpenses = useMemo(() => {
     const query = filters.query.trim().toLowerCase();
     return expenses.filter((expense) => {
+      if (filters.type && expense.type !== filters.type) return false;
       if (filters.category && expense.category !== filters.category) return false;
       const date = expenseDateValue(expense.expenseDate);
       if (filters.dateFrom && date < filters.dateFrom) return false;
@@ -139,7 +148,7 @@ export default function OtherExpensesClient() {
           expense.payee,
           expense.invoiceNumber,
           expense.note,
-          OTHER_EXPENSE_CATEGORY_LABELS[expense.category],
+          otherEntryCategoryLabel(expense.type, expense.category),
         ]
           .filter(Boolean)
           .some((value) => value!.toLowerCase().includes(query))
@@ -150,18 +159,16 @@ export default function OtherExpensesClient() {
     });
   }, [expenses, filters]);
 
-  const currentMonthTotal = useMemo(() => {
-    const now = new Date();
-    return expenses
-      .filter((expense) => {
-        const date = new Date(expense.expenseDate);
-        return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
-      })
-      .reduce((sum, expense) => sum + expense.amount, 0);
-  }, [expenses]);
+  const totals = useMemo(() => {
+    let thu = 0;
+    let chi = 0;
+    for (const expense of filteredExpenses) {
+      if (expense.type === "THU") thu += expense.amount;
+      else chi += expense.amount;
+    }
+    return { thu, chi, net: thu - chi };
+  }, [filteredExpenses]);
 
-  const filteredTotal = filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-  const average = filteredExpenses.length > 0 ? filteredTotal / filteredExpenses.length : 0;
   const pageCount = Math.max(1, Math.ceil(filteredExpenses.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, pageCount);
   const paginatedExpenses = filteredExpenses.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -179,6 +186,7 @@ export default function OtherExpensesClient() {
 
   function openEdit(expense: OtherExpense) {
     setForm({
+      type: expense.type,
       category: expense.category,
       description: expense.description,
       amount: String(expense.amount),
@@ -198,7 +206,7 @@ export default function OtherExpensesClient() {
     event.preventDefault();
     setFormError(null);
     if (!form.description.trim()) {
-      setFormError("Vui lòng nhập nội dung chi phí.");
+      setFormError("Vui lòng nhập nội dung.");
       return;
     }
     if (!form.amount || Number(form.amount) <= 0) {
@@ -206,7 +214,7 @@ export default function OtherExpensesClient() {
       return;
     }
     if (!form.expenseDate) {
-      setFormError("Vui lòng chọn ngày chi.");
+      setFormError("Vui lòng chọn ngày.");
       return;
     }
 
@@ -262,7 +270,7 @@ export default function OtherExpensesClient() {
   }
 
   async function handleDelete(expense: OtherExpense) {
-    if (!confirm(`Xóa khoản chi “${expense.description}”?`)) return;
+    if (!confirm(`Xóa khoản “${expense.description}”?`)) return;
     const response = await fetch(`/api/other-expenses/${expense.id}`, { method: "DELETE" });
     const json = await readApiJson(response);
     if (!response.ok || !json.success) {
@@ -273,16 +281,17 @@ export default function OtherExpensesClient() {
   }
 
   async function exportExpenses() {
-    await downloadExcel(`chi-phi-khac-${localDateInputValue()}.xlsx`, [
+    await downloadExcel(`thu-chi-khac-${localDateInputValue()}.xlsx`, [
       {
-        name: "Chi phí khác",
+        name: "Thu chi khác",
         rows: filteredExpenses.map((expense, index) => ({
           STT: index + 1,
-          "Ngày chi": new Date(expense.expenseDate).toLocaleDateString("vi-VN"),
-          "Nhóm chi": OTHER_EXPENSE_CATEGORY_LABELS[expense.category],
+          Ngày: new Date(expense.expenseDate).toLocaleDateString("vi-VN"),
+          "Loại": OTHER_ENTRY_TYPE_LABELS[expense.type],
+          "Nhóm": otherEntryCategoryLabel(expense.type, expense.category),
           "Nội dung": expense.description,
-          "Số tiền": expense.amount,
-          "Người/đơn vị nhận": expense.payee || "",
+          "Số tiền": expense.type === "THU" ? expense.amount : -expense.amount,
+          "Người/đơn vị": expense.payee || "",
           "Phương thức": expense.paymentMethod || "",
           "Số hóa đơn": expense.invoiceNumber || "",
           "Ghi chú": expense.note || "",
@@ -298,9 +307,9 @@ export default function OtherExpensesClient() {
     <div className="p-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Chi phí khác</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">Thu chi khác</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Theo dõi chi phí vận hành ngoài lô hàng: tiếp khách, ăn uống, văn phòng phẩm và các khoản khác.
+            Theo dõi các khoản thu và chi vận hành ngoài lô hàng: tiếp khách, ăn uống, văn phòng phẩm, thu khác...
           </p>
         </div>
         <div className="flex gap-2">
@@ -316,7 +325,7 @@ export default function OtherExpensesClient() {
             onClick={openCreate}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
           >
-            + Thêm chi phí
+            + Thêm khoản
           </button>
         </div>
       </div>
@@ -339,21 +348,30 @@ export default function OtherExpensesClient() {
       )}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi label="Tổng theo bộ lọc" value={formatVnd(filteredTotal)} className="border-red-100 bg-red-50 text-red-800" />
-        <Kpi label="Chi trong tháng này" value={formatVnd(currentMonthTotal)} className="border-blue-100 bg-blue-50 text-blue-800" />
+        <Kpi label="Tổng thu" value={formatVnd(totals.thu)} className="border-emerald-100 bg-emerald-50 text-emerald-800" />
+        <Kpi label="Tổng chi" value={formatVnd(totals.chi)} className="border-red-100 bg-red-50 text-red-800" />
+        <Kpi
+          label="Chênh lệch (thu − chi)"
+          value={`${totals.net < 0 ? "−" : ""}${formatVnd(Math.abs(totals.net))}`}
+          className={totals.net < 0 ? "border-red-100 bg-red-50 text-red-800" : "border-blue-100 bg-blue-50 text-blue-800"}
+        />
         <Kpi label="Số khoản" value={String(filteredExpenses.length)} className="border-gray-200 bg-white text-gray-900" />
-        <Kpi label="Bình quân mỗi khoản" value={formatVnd(average)} className="border-amber-100 bg-amber-50 text-amber-800" />
       </div>
 
       <section className="rounded-xl border border-gray-200 bg-white p-5">
-        <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
           <input
             value={filters.query}
             onChange={(event) => updateFilters({ query: event.target.value })}
-            placeholder="Tìm nội dung, người nhận, số hóa đơn..."
+            placeholder="Tìm nội dung, người, số hóa đơn..."
             className="input xl:col-span-2"
           />
-          <select value={filters.category} onChange={(event) => updateFilters({ category: event.target.value })} className="input">
+          <select value={filters.type} onChange={(event) => updateFilters({ type: event.target.value, category: "" })} className="input">
+            <option value="">Thu & Chi</option>
+            <option value="THU">Chỉ Thu</option>
+            <option value="CHI">Chỉ Chi</option>
+          </select>
+          <select value={filters.category} onChange={(event) => updateFilters({ category: event.target.value })} className="input" disabled={filters.type === "THU"}>
             <option value="">Tất cả nhóm chi</option>
             {OTHER_EXPENSE_CATEGORY_OPTIONS.map((category) => (
               <option key={category} value={category}>{OTHER_EXPENSE_CATEGORY_LABELS[category]}</option>
@@ -367,10 +385,10 @@ export default function OtherExpensesClient() {
           <table className="min-w-[1180px] divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-3 py-3 text-left font-medium text-gray-500">Ngày chi</th>
-                <th className="px-3 py-3 text-left font-medium text-gray-500">Nhóm chi</th>
+                <th className="px-3 py-3 text-left font-medium text-gray-500">Ngày</th>
+                <th className="px-3 py-3 text-left font-medium text-gray-500">Loại / Nhóm</th>
                 <th className="px-3 py-3 text-left font-medium text-gray-500">Nội dung</th>
-                <th className="px-3 py-3 text-left font-medium text-gray-500">Người/đơn vị nhận</th>
+                <th className="px-3 py-3 text-left font-medium text-gray-500">Người/đơn vị</th>
                 <th className="px-3 py-3 text-left font-medium text-gray-500">Thanh toán / HĐ</th>
                 <th className="px-3 py-3 text-right font-medium text-gray-500">Số tiền</th>
                 <th className="px-3 py-3 text-left font-medium text-gray-500">Người nhập</th>
@@ -382,7 +400,7 @@ export default function OtherExpensesClient() {
                 <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">Đang tải dữ liệu...</td></tr>
               )}
               {!isLoading && !loadError && paginatedExpenses.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">Chưa có chi phí khác phù hợp.</td></tr>
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">Chưa có khoản thu chi nào phù hợp.</td></tr>
               )}
               {!isLoading && paginatedExpenses.map((expense) => (
                 <tr key={expense.id} className="hover:bg-gray-50">
@@ -390,8 +408,8 @@ export default function OtherExpensesClient() {
                     {new Date(expense.expenseDate).toLocaleDateString("vi-VN")}
                   </td>
                   <td className="px-3 py-3">
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${OTHER_EXPENSE_CATEGORY_STYLES[expense.category]}`}>
-                      {OTHER_EXPENSE_CATEGORY_LABELS[expense.category]}
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${otherEntryCategoryStyle(expense.type, expense.category)}`}>
+                      {otherEntryCategoryLabel(expense.type, expense.category)}
                     </span>
                   </td>
                   <td className="max-w-sm px-3 py-3">
@@ -408,7 +426,9 @@ export default function OtherExpensesClient() {
                     <span>{expense.paymentMethod || "—"}</span>
                     <span className="block text-xs text-gray-400">HĐ: {expense.invoiceNumber || "—"}</span>
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-red-700">{formatVnd(expense.amount)}</td>
+                  <td className={`whitespace-nowrap px-3 py-3 text-right font-semibold ${expense.type === "THU" ? "text-emerald-700" : "text-red-700"}`}>
+                    {expense.type === "THU" ? "+" : "−"} {formatVnd(expense.amount)}
+                  </td>
                   <td className="px-3 py-3 text-gray-600">{expense.createdBy?.name || "—"}</td>
                   <td className="px-3 py-3">
                     <div className="flex justify-end gap-3">
@@ -422,8 +442,12 @@ export default function OtherExpensesClient() {
             {!isLoading && filteredExpenses.length > 0 && (
               <tfoot className="bg-gray-50">
                 <tr>
-                  <td colSpan={5} className="px-3 py-3 text-right font-medium text-gray-700">Tổng ({filteredExpenses.length} khoản)</td>
-                  <td className="px-3 py-3 text-right font-bold text-red-700">{formatVnd(filteredTotal)}</td>
+                  <td colSpan={5} className="px-3 py-3 text-right font-medium text-gray-700">
+                    Chênh lệch ({filteredExpenses.length} khoản) · Thu {formatVnd(totals.thu)} − Chi {formatVnd(totals.chi)}
+                  </td>
+                  <td className={`px-3 py-3 text-right font-bold ${totals.net < 0 ? "text-red-700" : "text-emerald-700"}`}>
+                    {totals.net < 0 ? "−" : "+"} {formatVnd(Math.abs(totals.net))}
+                  </td>
                   <td colSpan={2}></td>
                 </tr>
               </tfoot>
@@ -447,36 +471,65 @@ export default function OtherExpensesClient() {
           <div className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">{editingExpense ? "Sửa chi phí khác" : "Thêm chi phí khác"}</h2>
+                <h2 className="text-lg font-semibold text-gray-900">{editingExpense ? "Sửa khoản thu chi" : "Thêm khoản thu chi"}</h2>
                 <p className="text-xs text-gray-500">Khoản này không liên kết với lô hàng hoặc nhà cung cấp.</p>
               </div>
               <button type="button" onClick={() => setEditingExpense(undefined)} className="text-xl text-gray-400 hover:text-gray-700">✕</button>
             </div>
 
             <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-2">
+              <div className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">Loại khoản *</span>
+                <div className="grid grid-cols-2 gap-1 rounded-md border border-gray-300 p-1">
+                  {OTHER_ENTRY_TYPES.map((entryType) => (
+                    <button
+                      key={entryType}
+                      type="button"
+                      onClick={() =>
+                        setForm((current) => ({
+                          ...current,
+                          type: entryType,
+                          category: entryType === "THU" ? "KHAC" : current.category,
+                        }))
+                      }
+                      className={`rounded px-3 py-1.5 text-sm font-medium transition ${
+                        form.type === entryType
+                          ? entryType === "THU"
+                            ? "bg-emerald-600 text-white"
+                            : "bg-red-600 text-white"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      {OTHER_ENTRY_TYPE_LABELS[entryType]}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-gray-700">Ngày chi *</span>
+                <span className="mb-1 block text-sm font-medium text-gray-700">Ngày *</span>
                 <input type="date" value={form.expenseDate} onChange={(event) => setForm((current) => ({ ...current, expenseDate: event.target.value }))} className="input" required />
               </label>
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-gray-700">Nhóm chi *</span>
-                <select value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value as OtherExpenseCategory }))} className="input">
-                  {OTHER_EXPENSE_CATEGORY_OPTIONS.map((category) => (
-                    <option key={category} value={category}>{OTHER_EXPENSE_CATEGORY_LABELS[category]}</option>
-                  ))}
-                </select>
-              </label>
+              {form.type === "CHI" && (
+                <label className="block sm:col-span-2">
+                  <span className="mb-1 block text-sm font-medium text-gray-700">Nhóm chi *</span>
+                  <select value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value as OtherExpenseCategory }))} className="input">
+                    {OTHER_EXPENSE_CATEGORY_OPTIONS.map((category) => (
+                      <option key={category} value={category}>{OTHER_EXPENSE_CATEGORY_LABELS[category]}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label className="block sm:col-span-2">
-                <span className="mb-1 block text-sm font-medium text-gray-700">Nội dung chi phí *</span>
-                <input value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} className="input" maxLength={300} placeholder="Ví dụ: Tiếp khách Công ty ABC" required />
+                <span className="mb-1 block text-sm font-medium text-gray-700">Nội dung *</span>
+                <input value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} className="input" maxLength={300} placeholder={form.type === "THU" ? "Ví dụ: Thu lãi ngân hàng" : "Ví dụ: Tiếp khách Công ty ABC"} required />
               </label>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Số tiền *</span>
                 <MoneyInput value={form.amount} onValueChange={(raw) => setForm((current) => ({ ...current, amount: raw }))} className="input" placeholder="0" required />
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-gray-700">Người/đơn vị nhận</span>
-                <input value={form.payee} onChange={(event) => setForm((current) => ({ ...current, payee: event.target.value }))} className="input" maxLength={200} placeholder="Không bắt buộc là nhà cung cấp" />
+                <span className="mb-1 block text-sm font-medium text-gray-700">{form.type === "THU" ? "Người/đơn vị nộp" : "Người/đơn vị nhận"}</span>
+                <input value={form.payee} onChange={(event) => setForm((current) => ({ ...current, payee: event.target.value }))} className="input" maxLength={200} placeholder={form.type === "THU" ? "Nguồn thu (không bắt buộc)" : "Không bắt buộc là nhà cung cấp"} />
               </label>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-gray-700">Phương thức thanh toán</span>
@@ -513,7 +566,7 @@ export default function OtherExpensesClient() {
 
               <div className="flex gap-3 sm:col-span-2">
                 <button type="submit" disabled={isSaving || isUploading} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                  {isSaving ? "Đang lưu..." : "Lưu chi phí"}
+                  {isSaving ? "Đang lưu..." : "Lưu"}
                 </button>
                 <button type="button" onClick={() => setEditingExpense(undefined)} className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Hủy</button>
               </div>

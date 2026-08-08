@@ -35,6 +35,11 @@ const BACKFILL_MARKER_PREFIX = "__system_r2_gmail_attachment_v1__:";
 const BACKFILL_DONE_ID = `${BACKFILL_MARKER_PREFIX}complete`;
 const MAX_SOURCE_MESSAGES_INSPECTED_PER_RUN = 25;
 
+// A few legacy rows can point at the wrong fallback Gmail message. Keep a rotating in-process
+// cursor so those unresolved messages cannot permanently block every older recoverable file.
+// Persistent completion markers still provide the actual idempotency across restarts.
+let candidateSearchCursor = 0;
+
 export type GmailR2BackfillSummary = {
   done: boolean;
   sourceMessagesRemaining: number;
@@ -237,7 +242,12 @@ async function findCandidates(limit: number): Promise<CandidateSearchResult> {
   const existenceCache = new Map<string, Promise<boolean>>();
   let sourceMessagesRemaining = pending.length;
 
-  for (const candidate of pending.slice(0, MAX_SOURCE_MESSAGES_INSPECTED_PER_RUN)) {
+  const inspectCount = Math.min(MAX_SOURCE_MESSAGES_INSPECTED_PER_RUN, pending.length);
+  const startIndex = pending.length > 0 ? candidateSearchCursor % pending.length : 0;
+  let inspected = 0;
+
+  for (; inspected < inspectCount; inspected++) {
+    const candidate = pending[(startIndex + inspected) % pending.length];
     const missingReferences = new Map<string, StoredReference>();
     for (const [url, reference] of candidate.references) {
       if (await missingFromR2(url, existenceCache)) missingReferences.set(url, reference);
@@ -250,8 +260,14 @@ async function findCandidates(limit: number): Promise<CandidateSearchResult> {
     }
 
     selected.push({ ...candidate, references: missingReferences });
-    if (selected.length >= limit) break;
+    if (selected.length >= limit) {
+      inspected++;
+      break;
+    }
   }
+
+  candidateSearchCursor =
+    pending.length > 0 ? (startIndex + Math.max(inspected, 1)) % pending.length : 0;
 
   return { candidates: selected, sourceMessagesRemaining };
 }

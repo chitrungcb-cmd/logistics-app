@@ -1,4 +1,5 @@
 import type { gmail_v1 } from "googleapis";
+import JSZip from "jszip";
 import { prisma } from "@/lib/prisma";
 import { saveUploadedFile } from "@/lib/save-upload";
 import {
@@ -31,9 +32,9 @@ type SavedAttachment = {
   url: string;
 };
 
-const BACKFILL_MARKER_PREFIX = "__system_r2_gmail_attachment_v1__:";
+const BACKFILL_MARKER_PREFIX = "__system_r2_gmail_attachment_v2__:";
 const BACKFILL_DONE_ID = `${BACKFILL_MARKER_PREFIX}complete`;
-const BACKFILL_UNRESOLVED_PREFIX = "__system_r2_gmail_attachment_unresolved_v1__:";
+const BACKFILL_UNRESOLVED_PREFIX = "__system_r2_gmail_attachment_unresolved_v2__:";
 const MAX_SOURCE_MESSAGES_INSPECTED_PER_RUN = 25;
 
 // A few legacy rows can point at the wrong fallback Gmail message. Keep a rotating in-process
@@ -186,7 +187,9 @@ async function findCandidates(limit: number): Promise<CandidateSearchResult> {
     prisma.processedEmail.findMany({
       where: { shipmentId: { not: null } },
       select: { shipmentId: true, gmailMessageId: true },
-      orderBy: { processedAt: "desc" },
+      // Attachments without a stored Gmail id came from the email that originally created the
+      // shipment, not from the newest status update. Oldest-first selects that source safely.
+      orderBy: { processedAt: "asc" },
     }),
     prisma.processedEmail.findMany({
       where: { gmailMessageId: { startsWith: BACKFILL_MARKER_PREFIX } },
@@ -501,7 +504,8 @@ export async function backfillLegacyGmailAttachmentsToR2(
       let selected = parts.filter(
         (part) =>
           wantedNames.has(part.filename.toLowerCase()) ||
-          wantedExtensions.has(extension(part.filename))
+          wantedExtensions.has(extension(part.filename)) ||
+          (wantedExtensions.has("xml") && extension(part.filename) === "zip")
       );
       // Legacy rows occasionally lost the original display name. In that case, recovering all
       // attachments from this one known source email is safer than leaving the referenced file dead.
@@ -511,6 +515,17 @@ export async function backfillLegacyGmailAttachmentsToR2(
       for (const part of selected) {
         const buffer = await loadAttachment(gmail, candidate.gmailMessageId, part);
         if (buffer.length === 0) continue;
+        if (extension(part.filename) === "zip" && wantedExtensions.has("xml")) {
+          const archive = await JSZip.loadAsync(buffer);
+          const xmlEntries = Object.values(archive.files).filter(
+            (entry) => !entry.dir && extension(entry.name) === "xml"
+          );
+          for (const entry of xmlEntries) {
+            const extractedName = entry.name.split("/").pop() || "invoice.xml";
+            saved.push(await saveUploadedFile(extractedName, await entry.async("nodebuffer")));
+          }
+          continue;
+        }
         saved.push(await saveUploadedFile(part.filename, buffer));
       }
       if (saved.length === 0) {

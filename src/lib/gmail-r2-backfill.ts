@@ -33,12 +33,20 @@ type SavedAttachment = {
 
 const BACKFILL_MARKER_PREFIX = "__system_r2_gmail_attachment_v1__:";
 const BACKFILL_DONE_ID = `${BACKFILL_MARKER_PREFIX}complete`;
+const BACKFILL_UNRESOLVED_PREFIX = "__system_r2_gmail_attachment_unresolved_v1__:";
 const MAX_SOURCE_MESSAGES_INSPECTED_PER_RUN = 25;
 
 // A few legacy rows can point at the wrong fallback Gmail message. Keep a rotating in-process
 // cursor so those unresolved messages cannot permanently block every older recoverable file.
 // Persistent completion markers still provide the actual idempotency across restarts.
 let candidateSearchCursor = 0;
+
+class UnrecoverableGmailAttachmentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnrecoverableGmailAttachmentError";
+  }
+}
 
 export type GmailR2BackfillSummary = {
   done: boolean;
@@ -48,6 +56,7 @@ export type GmailR2BackfillSummary = {
   filesUploaded: number;
   shipmentRowsUpdated: number;
   invoiceRowsUpdated: number;
+  unresolvedMessages: number;
   errors: number;
   errorMessages: string[];
 };
@@ -62,6 +71,15 @@ async function markBackfilled(gmailMessageId: string, detail: string) {
     where: { gmailMessageId: markerId },
     create: { gmailMessageId: markerId, status: "r2_backfilled", detail },
     update: { status: "r2_backfilled", detail },
+  });
+}
+
+async function markUnresolved(gmailMessageId: string, detail: string) {
+  const markerId = `${BACKFILL_UNRESOLVED_PREFIX}${gmailMessageId}`;
+  await prisma.processedEmail.upsert({
+    where: { gmailMessageId: markerId },
+    create: { gmailMessageId: markerId, status: "r2_backfill_unresolved", detail },
+    update: { status: "r2_backfill_unresolved", detail },
   });
 }
 
@@ -160,10 +178,11 @@ async function missingFromR2(url: string, cache: Map<string, Promise<boolean>>) 
 type CandidateSearchResult = {
   candidates: BackfillCandidate[];
   sourceMessagesRemaining: number;
+  unresolvedMessages: number;
 };
 
 async function findCandidates(limit: number): Promise<CandidateSearchResult> {
-  const [processed, backfillMarkers, shipments, invoices] = await Promise.all([
+  const [processed, backfillMarkers, unresolvedMarkers, shipments, invoices] = await Promise.all([
     prisma.processedEmail.findMany({
       where: { shipmentId: { not: null } },
       select: { shipmentId: true, gmailMessageId: true },
@@ -171,6 +190,10 @@ async function findCandidates(limit: number): Promise<CandidateSearchResult> {
     }),
     prisma.processedEmail.findMany({
       where: { gmailMessageId: { startsWith: BACKFILL_MARKER_PREFIX } },
+      select: { gmailMessageId: true },
+    }),
+    prisma.processedEmail.findMany({
+      where: { gmailMessageId: { startsWith: BACKFILL_UNRESOLVED_PREFIX } },
       select: { gmailMessageId: true },
     }),
     prisma.shipment.findMany({
@@ -238,16 +261,24 @@ async function findCandidates(limit: number): Promise<CandidateSearchResult> {
   const pending = [...candidates.values()].filter(
     (candidate) => !completedMessageIds.has(candidate.gmailMessageId)
   );
+  const unresolvedMessageIds = new Set(
+    unresolvedMarkers.map((row) =>
+      row.gmailMessageId.slice(BACKFILL_UNRESOLVED_PREFIX.length)
+    )
+  );
+  const selectable = pending.filter(
+    (candidate) => !unresolvedMessageIds.has(candidate.gmailMessageId)
+  );
   const selected: BackfillCandidate[] = [];
   const existenceCache = new Map<string, Promise<boolean>>();
   let sourceMessagesRemaining = pending.length;
 
-  const inspectCount = Math.min(MAX_SOURCE_MESSAGES_INSPECTED_PER_RUN, pending.length);
-  const startIndex = pending.length > 0 ? candidateSearchCursor % pending.length : 0;
+  const inspectCount = Math.min(MAX_SOURCE_MESSAGES_INSPECTED_PER_RUN, selectable.length);
+  const startIndex = selectable.length > 0 ? candidateSearchCursor % selectable.length : 0;
   let inspected = 0;
 
   for (; inspected < inspectCount; inspected++) {
-    const candidate = pending[(startIndex + inspected) % pending.length];
+    const candidate = selectable[(startIndex + inspected) % selectable.length];
     const missingReferences = new Map<string, StoredReference>();
     for (const [url, reference] of candidate.references) {
       if (await missingFromR2(url, existenceCache)) missingReferences.set(url, reference);
@@ -267,9 +298,13 @@ async function findCandidates(limit: number): Promise<CandidateSearchResult> {
   }
 
   candidateSearchCursor =
-    pending.length > 0 ? (startIndex + Math.max(inspected, 1)) % pending.length : 0;
+    selectable.length > 0 ? (startIndex + Math.max(inspected, 1)) % selectable.length : 0;
 
-  return { candidates: selected, sourceMessagesRemaining };
+  return {
+    candidates: selected,
+    sourceMessagesRemaining,
+    unresolvedMessages: unresolvedMessageIds.size,
+  };
 }
 
 function extension(fileName: string) {
@@ -405,8 +440,9 @@ async function stillReferencesMissingUrls(candidate: BackfillCandidate) {
 
 /**
  * Rehydrates a tiny idempotent batch of legacy attachment bytes from Gmail into R2. The scheduled
- * sync invokes this after it has handled new mail. Persistent marker rows ensure an old source email
- * is inspected at most once and the migration becomes a single cheap completion lookup when done.
+ * sync invokes this before its normal mailbox work. Persistent marker rows ensure an old source
+ * email is inspected at most once and the migration becomes a single cheap completion lookup when
+ * done.
  */
 export async function backfillLegacyGmailAttachmentsToR2(
   gmail: gmail_v1.Gmail,
@@ -427,6 +463,7 @@ export async function backfillLegacyGmailAttachmentsToR2(
       filesUploaded: 0,
       shipmentRowsUpdated: 0,
       invoiceRowsUpdated: 0,
+      unresolvedMessages: 0,
       errors: 0,
       errorMessages: [],
     };
@@ -442,6 +479,7 @@ export async function backfillLegacyGmailAttachmentsToR2(
     filesUploaded: 0,
     shipmentRowsUpdated: 0,
     invoiceRowsUpdated: 0,
+    unresolvedMessages: search.unresolvedMessages,
     errors: 0,
     errorMessages: [],
   };
@@ -476,7 +514,9 @@ export async function backfillLegacyGmailAttachmentsToR2(
         saved.push(await saveUploadedFile(part.filename, buffer));
       }
       if (saved.length === 0) {
-        throw new Error("Email nguồn không còn tệp đính kèm có thể phục hồi.");
+        throw new UnrecoverableGmailAttachmentError(
+          "Email nguồn không còn tệp đính kèm có thể phục hồi."
+        );
       }
 
       const missingUrls = new Set(candidate.references.keys());
@@ -500,7 +540,9 @@ export async function backfillLegacyGmailAttachmentsToR2(
       }
 
       if (await stillReferencesMissingUrls(candidate)) {
-        throw new Error("Không tìm thấy tệp Gmail tương ứng với một hoặc nhiều liên kết cũ.");
+        throw new UnrecoverableGmailAttachmentError(
+          "Không tìm thấy tệp Gmail tương ứng với một hoặc nhiều liên kết cũ."
+        );
       }
 
       await markBackfilled(
@@ -512,9 +554,12 @@ export async function backfillLegacyGmailAttachmentsToR2(
       summary.filesUploaded += saved.length;
       summary.sourceMessagesRemaining--;
     } catch (error) {
+      if (!(error instanceof UnrecoverableGmailAttachmentError)) throw error;
       summary.errors++;
-      const message = error instanceof Error ? error.message : "Lỗi không xác định.";
+      summary.unresolvedMessages++;
+      const message = error.message;
       summary.errorMessages.push(`${candidate.gmailMessageId}: ${message}`);
+      await markUnresolved(candidate.gmailMessageId, message);
       console.error(`Gmail R2 backfill failed for ${candidate.gmailMessageId}:`, error);
     }
   }

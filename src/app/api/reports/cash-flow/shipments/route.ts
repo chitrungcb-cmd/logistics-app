@@ -5,6 +5,7 @@ import { apiError, apiSuccess } from "@/lib/api-response";
 import { hasModuleAccess } from "@/lib/module-permissions";
 import { parseReportDateRange } from "@/lib/report-date-range";
 import { COST_CATEGORY_LABELS } from "@/lib/shipment-cost-constants";
+import { AUTOMATIC_PAYABLE_DEBT_PREFIX } from "@/lib/shipment-debt-sync";
 
 type FlowKind = "RECEIPT" | "EXPENSE";
 
@@ -116,10 +117,14 @@ export async function GET(request: NextRequest) {
           ],
         }
       : {};
+    const payablePaymentPeriod = range
+      ? { paymentDate: { gte: range.start, lt: range.endExclusive } }
+      : {};
 
     const costs = await prisma.shipmentCost.findMany({
       where: {
         isActual: true,
+        isPaid: true,
         costPrice: { gt: 0 },
         ...expensePeriod,
       },
@@ -159,13 +164,88 @@ export async function GET(request: NextRequest) {
         },
       });
     }
+
+    // Công nợ phải trả nhập tay không có các dòng ShipmentCost để tích isPaid; khoản Payment chính
+    // là dòng tiền chi. Loại công nợ tự động được bỏ qua vì đã lấy từ ShipmentCost ở trên.
+    const payablePayments = await prisma.payment.findMany({
+      where: {
+        ...payablePaymentPeriod,
+        debt: {
+          type: "PAYABLE",
+          OR: [
+            { sourceKey: null },
+            { sourceKey: { not: { startsWith: AUTOMATIC_PAYABLE_DEBT_PREFIX } } },
+          ],
+        },
+      },
+      orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
+      select: {
+        id: true,
+        amount: true,
+        paymentDate: true,
+        method: true,
+        note: true,
+        attachmentUrl: true,
+        receivedBy: { select: { name: true } },
+        receivedToCompanyAccount: { select: { name: true } },
+        debt: {
+          select: {
+            id: true,
+            vendor: { select: { name: true } },
+            shipment: { select: SHIPMENT_SELECT },
+          },
+        },
+      },
+    });
+    for (const payment of payablePayments) {
+      const shipment = payment.debt.shipment ? serializeShipment(payment.debt.shipment) : null;
+      addTransaction(groups, {
+        key: shipment?.id ?? `payable:${payment.debt.id}`,
+        shipment,
+        fallbackLabel: shipment ? null : payment.debt.vendor?.name || "Công nợ phải trả khác",
+        transaction: {
+          id: payment.id,
+          date: payment.paymentDate.toISOString(),
+          amount: payment.amount,
+          label: "Thanh toán công nợ phải trả",
+          accountName: payment.receivedBy?.name ?? payment.receivedToCompanyAccount?.name ?? null,
+          counterparty: payment.debt.vendor?.name ?? null,
+          invoiceNumber: shipment?.invoiceNo ?? null,
+          note: [payment.method, payment.note].filter(Boolean).join(" · ") || null,
+          attachmentUrl: payment.attachmentUrl,
+        },
+      });
+    }
+
+    const otherExpenses = await prisma.otherExpense.findMany({
+      where: { type: "CHI", ...(range ? { expenseDate: { gte: range.start, lt: range.endExclusive } } : {}) },
+      orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }],
+      select: {
+        id: true, description: true, amount: true, expenseDate: true, payee: true,
+        invoiceNumber: true, note: true, attachmentUrl: true,
+        companyAccount: { select: { name: true } },
+      },
+    });
+    for (const entry of otherExpenses) {
+      addTransaction(groups, {
+        key: "other-expenses",
+        shipment: null,
+        fallbackLabel: "Chi khác ngoài lô hàng",
+        transaction: {
+          id: entry.id, date: entry.expenseDate.toISOString(), amount: entry.amount,
+          label: entry.description, accountName: entry.companyAccount?.name ?? null,
+          counterparty: entry.payee, invoiceNumber: entry.invoiceNumber, note: entry.note,
+          attachmentUrl: entry.attachmentUrl,
+        },
+      });
+    }
   } else {
     const receiptPeriod = range
       ? { paymentDate: { gte: range.start, lt: range.endExclusive } }
       : {};
 
     const payments = await prisma.payment.findMany({
-      where: receiptPeriod,
+      where: { ...receiptPeriod, debt: { type: "RECEIVABLE" } },
       orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
       select: {
         id: true,
@@ -223,6 +303,29 @@ export async function GET(request: NextRequest) {
           invoiceNumber: shipment?.invoiceNo ?? null,
           note: [payment.method, payment.note].filter(Boolean).join(" · ") || null,
           attachmentUrl: payment.attachmentUrl,
+        },
+      });
+    }
+
+    const otherReceipts = await prisma.otherExpense.findMany({
+      where: { type: "THU", ...(range ? { expenseDate: { gte: range.start, lt: range.endExclusive } } : {}) },
+      orderBy: [{ expenseDate: "desc" }, { createdAt: "desc" }],
+      select: {
+        id: true, description: true, amount: true, expenseDate: true, payee: true,
+        invoiceNumber: true, note: true, attachmentUrl: true,
+        companyAccount: { select: { name: true } },
+      },
+    });
+    for (const entry of otherReceipts) {
+      addTransaction(groups, {
+        key: "other-receipts",
+        shipment: null,
+        fallbackLabel: "Thu khác ngoài lô hàng",
+        transaction: {
+          id: entry.id, date: entry.expenseDate.toISOString(), amount: entry.amount,
+          label: entry.description, accountName: entry.companyAccount?.name ?? null,
+          counterparty: entry.payee, invoiceNumber: entry.invoiceNumber, note: entry.note,
+          attachmentUrl: entry.attachmentUrl,
         },
       });
     }

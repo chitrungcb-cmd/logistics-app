@@ -5,6 +5,7 @@ import { apiError, apiSuccess } from "@/lib/api-response";
 import { hasModuleAccess } from "@/lib/module-permissions";
 import { COST_CATEGORY_LABELS } from "@/lib/shipment-cost-constants";
 import { parseReportDateRange } from "@/lib/report-date-range";
+import { AUTOMATIC_PAYABLE_DEBT_PREFIX } from "@/lib/shipment-debt-sync";
 
 const SHIPMENT_SELECT = {
   id: true,
@@ -53,6 +54,7 @@ export async function GET(request: NextRequest) {
       where: {
         paidByUserId: personId,
         isActual: true,
+        isPaid: true,
         costPrice: { gt: 0 },
         ...expensePeriod,
       },
@@ -72,7 +74,22 @@ export async function GET(request: NextRequest) {
       },
     }),
     prisma.payment.findMany({
-      where: { receivedByUserId: personId, ...receiptPeriod },
+      where: {
+        receivedByUserId: personId,
+        OR: [
+          { debt: { type: "RECEIVABLE" } },
+          {
+            debt: {
+              type: "PAYABLE",
+              OR: [
+                { sourceKey: null },
+                { sourceKey: { not: { startsWith: AUTOMATIC_PAYABLE_DEBT_PREFIX } } },
+              ],
+            },
+          },
+        ],
+        ...receiptPeriod,
+      },
       orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
       select: {
         id: true,
@@ -128,10 +145,10 @@ export async function GET(request: NextRequest) {
     })),
     ...receipts.map((receipt) => ({
       id: `receipt:${receipt.id}`,
-      type: "RECEIPT" as const,
+      type: receipt.debt.type === "RECEIVABLE" ? ("RECEIPT" as const) : ("EXPENSE" as const),
       date: receipt.paymentDate,
       amount: receipt.amount,
-      label: receipt.debt.type === "RECEIVABLE" ? "Nhận tiền khách hàng" : "Nhận hoàn tiền",
+      label: receipt.debt.type === "RECEIVABLE" ? "Nhận tiền khách hàng" : "Thanh toán công nợ phải trả",
       counterparty: receipt.debt.customer?.companyName ?? receipt.debt.vendor?.name ?? null,
       invoiceNumber: null,
       note: [receipt.method, receipt.note].filter(Boolean).join(" · ") || null,

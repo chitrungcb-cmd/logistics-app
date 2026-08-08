@@ -55,6 +55,8 @@ export async function GET(request: NextRequest) {
 
   const costs = await prisma.shipmentCost.findMany({
     where: {
+      isActual: true,
+      costPrice: { gt: 0 },
       category: {
         ...(category ? { equals: category as (typeof COST_CATEGORY_OPTIONS)[number] } : {}),
         notIn: [...VENDORLESS_COST_CATEGORIES],

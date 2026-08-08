@@ -51,6 +51,7 @@ export function computePersonalAccountPayment(params: {
 
 export type QuoteSplitSource = {
   quoteInvoiceAmount: number | null;
+  quoteInvoiceTaxAmount?: number | null;
   quoteNoInvoiceAmount: number | null;
   quoteLines: Array<{ amount: number; hasInvoice: boolean }>;
 };
@@ -66,14 +67,21 @@ export function isManualQuoteSplit(shipment: Pick<QuoteSplitSource, "quoteInvoic
 /** Thuế suất VAT của phần có hóa đơn — ô nhập tay là số CHƯA VAT, khách trả thêm 8% trên số đó. */
 export const INVOICE_VAT_RATE = 0.08;
 
-/** Phần có hóa đơn sau VAT, làm tròn về đồng (VND không có phần lẻ). */
-export function resolveInvoiceAmountWithVat(quoteInvoiceAmount: number | null | undefined): number {
-  return Math.round((quoteInvoiceAmount ?? 0) * (1 + INVOICE_VAT_RATE));
+/** Thuế VAT: ưu tiên số thực tế từ hóa đơn; chỉ dùng 8% khi người dùng nhập báo giá thủ công. */
+export function computeInvoiceVat(
+  quoteInvoiceAmount: number | null | undefined,
+  explicitTaxAmount?: number | null
+): number {
+  if (explicitTaxAmount != null) return Math.max(0, Math.round(explicitTaxAmount));
+  return Math.round((quoteInvoiceAmount ?? 0) * INVOICE_VAT_RATE);
 }
 
-/** Riêng tiền thuế VAT của phần có hóa đơn (= sau VAT − chưa VAT), để hiển thị tách dòng. */
-export function computeInvoiceVat(quoteInvoiceAmount: number | null | undefined): number {
-  return resolveInvoiceAmountWithVat(quoteInvoiceAmount) - (quoteInvoiceAmount ?? 0);
+/** Phần có hóa đơn sau VAT, làm tròn về đồng (VND không có phần lẻ). */
+export function resolveInvoiceAmountWithVat(
+  quoteInvoiceAmount: number | null | undefined,
+  explicitTaxAmount?: number | null
+): number {
+  return Math.round(quoteInvoiceAmount ?? 0) + computeInvoiceVat(quoteInvoiceAmount, explicitTaxAmount);
 }
 
 /**
@@ -82,7 +90,10 @@ export function computeInvoiceVat(quoteInvoiceAmount: number | null | undefined)
  */
 export function resolveQuoteTotal(shipment: QuoteSplitSource): number {
   if (isManualQuoteSplit(shipment)) {
-    return resolveInvoiceAmountWithVat(shipment.quoteInvoiceAmount) + (shipment.quoteNoInvoiceAmount ?? 0);
+    return resolveInvoiceAmountWithVat(
+      shipment.quoteInvoiceAmount,
+      shipment.quoteInvoiceTaxAmount
+    ) + (shipment.quoteNoInvoiceAmount ?? 0);
   }
   return shipment.quoteLines.reduce((sum, line) => sum + line.amount, 0);
 }

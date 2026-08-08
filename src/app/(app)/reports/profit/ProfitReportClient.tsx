@@ -26,6 +26,15 @@ type ProfitRow = {
   totalRevenue: number;
   totalCost: number;
   profit: number;
+  totalRevenueGross: number;
+  totalRevenueNet: number;
+  outputVat: number;
+  totalCostGross: number;
+  totalCostNet: number;
+  inputVat: number;
+  profitGross: number;
+  profitNet: number;
+  revenueVatSeparated: boolean;
 };
 
 type BucketSummary = {
@@ -36,7 +45,16 @@ type BucketSummary = {
   totalRevenue: number;
   totalCost: number;
   profit: number;
+  totalRevenueGross: number;
+  totalRevenueNet: number;
+  outputVat: number;
+  totalCostGross: number;
+  totalCostNet: number;
+  inputVat: number;
+  profitGross: number;
+  profitNet: number;
   shipmentCount: number;
+  unseparatedRevenueVatCount: number;
 };
 
 function formatVnd(amount: number) {
@@ -96,10 +114,21 @@ export default function ProfitReportClient() {
       });
       return {
         ...bucket,
-        totalRevenue: matching.reduce((sum, r) => sum + r.totalRevenue, 0),
-        totalCost: matching.reduce((sum, r) => sum + r.totalCost, 0),
-        profit: matching.reduce((sum, r) => sum + r.profit, 0),
+        // Biểu đồ chính dùng số chưa VAT/lợi nhuận trước VAT. Các số gồm VAT vẫn được tổng hợp
+        // riêng ở khối đối chiếu bên trên để không nhầm doanh thu kế toán với dòng tiền.
+        totalRevenue: matching.reduce((sum, r) => sum + r.totalRevenueNet, 0),
+        totalCost: matching.reduce((sum, r) => sum + r.totalCostNet, 0),
+        profit: matching.reduce((sum, r) => sum + r.profitNet, 0),
+        totalRevenueGross: matching.reduce((sum, r) => sum + r.totalRevenueGross, 0),
+        totalRevenueNet: matching.reduce((sum, r) => sum + r.totalRevenueNet, 0),
+        outputVat: matching.reduce((sum, r) => sum + r.outputVat, 0),
+        totalCostGross: matching.reduce((sum, r) => sum + r.totalCostGross, 0),
+        totalCostNet: matching.reduce((sum, r) => sum + r.totalCostNet, 0),
+        inputVat: matching.reduce((sum, r) => sum + r.inputVat, 0),
+        profitGross: matching.reduce((sum, r) => sum + r.profitGross, 0),
+        profitNet: matching.reduce((sum, r) => sum + r.profitNet, 0),
         shipmentCount: matching.length,
+        unseparatedRevenueVatCount: matching.filter((r) => !r.revenueVatSeparated).length,
       };
     });
   }, [rows, period, year]);
@@ -112,7 +141,16 @@ export default function ProfitReportClient() {
       totalRevenue: source.reduce((sum, b) => sum + b.totalRevenue, 0),
       totalCost: source.reduce((sum, b) => sum + b.totalCost, 0),
       profit: source.reduce((sum, b) => sum + b.profit, 0),
+      totalRevenueGross: source.reduce((sum, b) => sum + b.totalRevenueGross, 0),
+      totalRevenueNet: source.reduce((sum, b) => sum + b.totalRevenueNet, 0),
+      outputVat: source.reduce((sum, b) => sum + b.outputVat, 0),
+      totalCostGross: source.reduce((sum, b) => sum + b.totalCostGross, 0),
+      totalCostNet: source.reduce((sum, b) => sum + b.totalCostNet, 0),
+      inputVat: source.reduce((sum, b) => sum + b.inputVat, 0),
+      profitGross: source.reduce((sum, b) => sum + b.profitGross, 0),
+      profitNet: source.reduce((sum, b) => sum + b.profitNet, 0),
       shipmentCount: source.reduce((sum, b) => sum + b.shipmentCount, 0),
+      unseparatedRevenueVatCount: source.reduce((sum, b) => sum + b.unseparatedRevenueVatCount, 0),
     };
   }, [bucketSummaries, selectedBucket]);
 
@@ -159,23 +197,38 @@ export default function ProfitReportClient() {
         <p className="mt-1 text-sm text-gray-500">Tổng hợp thu, chi phí và lãi/lỗ theo lô hàng.</p>
       </div>
 
-      <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <section className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <p className="text-sm text-gray-500">Tổng thu ({kpiScopeLabel})</p>
-          <p className="mt-1 text-2xl font-semibold text-blue-600">{formatVnd(kpiTotals.totalRevenue)}</p>
+          <p className="text-sm text-gray-500">Doanh thu chưa VAT ({kpiScopeLabel})</p>
+          <p className="mt-1 text-2xl font-semibold text-blue-600">{formatVnd(kpiTotals.totalRevenueNet)}</p>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <p className="text-sm text-gray-500">Tổng chi phí ({kpiScopeLabel})</p>
-          <p className="mt-1 text-2xl font-semibold text-orange-600">{formatVnd(kpiTotals.totalCost)}</p>
+          <p className="text-sm text-gray-500">Chi phí chưa VAT ({kpiScopeLabel})</p>
+          <p className="mt-1 text-2xl font-semibold text-orange-600">{formatVnd(kpiTotals.totalCostNet)}</p>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <p className="text-sm text-gray-500">Lãi/Lỗ ({kpiScopeLabel})</p>
-          <p className={`mt-1 text-2xl font-semibold ${kpiTotals.profit >= 0 ? "text-green-700" : "text-red-600"}`}>
-            {formatVnd(kpiTotals.profit)}
+          <p className="text-sm text-gray-500">Lợi nhuận trước VAT ({kpiScopeLabel})</p>
+          <p className={`mt-1 text-2xl font-semibold ${kpiTotals.profitNet >= 0 ? "text-green-700" : "text-red-600"}`}>
+            {formatVnd(kpiTotals.profitNet)}
           </p>
           <p className="mt-1 text-xs text-gray-400">{kpiTotals.shipmentCount} lô hàng</p>
         </div>
       </section>
+
+      <section className="mb-6 grid grid-cols-2 gap-3 rounded-lg border border-gray-200 bg-white p-4 text-sm lg:grid-cols-5">
+        <div><p className="text-gray-500">Khách trả (gồm VAT)</p><p className="mt-1 font-semibold">{formatVnd(kpiTotals.totalRevenueGross)}</p></div>
+        <div><p className="text-gray-500">VAT đầu ra</p><p className="mt-1 font-semibold text-blue-700">{formatVnd(kpiTotals.outputVat)}</p></div>
+        <div><p className="text-gray-500">Đã chi (gồm VAT)</p><p className="mt-1 font-semibold">{formatVnd(kpiTotals.totalCostGross)}</p></div>
+        <div><p className="text-gray-500">VAT đầu vào đã khớp</p><p className="mt-1 font-semibold text-green-700">{formatVnd(kpiTotals.inputVat)}</p></div>
+        <div><p className="text-gray-500">Chênh lệch tiền gồm VAT</p><p className={`mt-1 font-semibold ${kpiTotals.profitGross >= 0 ? "text-green-700" : "text-red-600"}`}>{formatVnd(kpiTotals.profitGross)}</p></div>
+      </section>
+
+      {kpiTotals.unseparatedRevenueVatCount > 0 && (
+        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Có {kpiTotals.unseparatedRevenueVatCount} lô chưa tách VAT đầu ra. Với các lô này, hệ thống đang tạm xem
+          tổng thu là doanh thu chưa VAT; hãy bổ sung hóa đơn hoặc phân tách báo giá để báo cáo thuế chính xác hoàn toàn.
+        </div>
+      )}
 
       <section className="mb-6 rounded-lg border border-gray-200 bg-white p-6">
         <h2 className="mb-4 text-base font-semibold text-gray-900">Tổng hợp theo thời gian</h2>
@@ -235,7 +288,7 @@ export default function ProfitReportClient() {
               <YAxis tickFormatter={(v) => (v / 1_000_000).toLocaleString("vi-VN")} tick={{ fontSize: 11 }} />
               <Tooltip formatter={(value) => formatVnd(Number(value))} />
               <Legend />
-              <Bar dataKey="totalRevenue" name="Tổng thu" fill="#2563eb" cursor="pointer">
+              <Bar dataKey="totalRevenue" name="Doanh thu chưa VAT" fill="#2563eb" cursor="pointer">
                 <LabelList
                   dataKey="totalRevenue"
                   position="top"
@@ -244,7 +297,7 @@ export default function ProfitReportClient() {
                   formatter={(value: unknown) => (typeof value === "number" && value ? value.toLocaleString("vi-VN") : "")}
                 />
               </Bar>
-              <Bar dataKey="totalCost" name="Tổng chi phí" fill="#f97316" cursor="pointer">
+              <Bar dataKey="totalCost" name="Chi phí chưa VAT" fill="#f97316" cursor="pointer">
                 <LabelList
                   dataKey="totalCost"
                   position="top"
@@ -253,7 +306,7 @@ export default function ProfitReportClient() {
                   formatter={(value: unknown) => (typeof value === "number" && value ? value.toLocaleString("vi-VN") : "")}
                 />
               </Bar>
-              <Bar dataKey="profit" name="Lãi/Lỗ" fill="#16a34a" cursor="pointer">
+              <Bar dataKey="profit" name="Lợi nhuận trước VAT" fill="#16a34a" cursor="pointer">
                 <LabelList
                   dataKey="profit"
                   position="top"
@@ -271,9 +324,9 @@ export default function ProfitReportClient() {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-3 py-2 text-left font-medium text-gray-500">Kỳ</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Tổng thu</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Tổng chi phí</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Lãi/Lỗ</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-500">Doanh thu chưa VAT</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-500">Chi phí chưa VAT</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-500">Lợi nhuận trước VAT</th>
                 <th className="px-3 py-2 text-left font-medium text-gray-500">Số lô hàng</th>
               </tr>
             </thead>
@@ -334,9 +387,9 @@ export default function ProfitReportClient() {
                 <th className="px-3 py-2 text-left font-medium text-gray-500">Số tờ khai</th>
                 <th className="px-3 py-2 text-left font-medium text-gray-500">Ngày tờ khai</th>
                 <th className="px-3 py-2 text-left font-medium text-gray-500">Tên hàng</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Tổng thu</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Tổng chi phí</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500">Lãi/Lỗ</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-500">Doanh thu</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-500">Chi phí</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-500">Lợi nhuận</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -359,10 +412,19 @@ export default function ProfitReportClient() {
                     {new Date(row.declarationDate).toLocaleDateString("vi-VN")}
                   </td>
                   <td className="px-3 py-2 text-gray-600">{row.goodsName || "—"}</td>
-                  <td className="px-3 py-2 text-gray-600">{formatVnd(row.totalRevenue)}</td>
-                  <td className="px-3 py-2 text-gray-600">{formatVnd(row.totalCost)}</td>
-                  <td className={`px-3 py-2 font-medium ${row.profit >= 0 ? "text-green-700" : "text-red-600"}`}>
-                    {formatVnd(row.profit)}
+                  <td className="px-3 py-2 text-gray-600">
+                    <p className="font-medium text-gray-900">Chưa VAT: {formatVnd(row.totalRevenueNet)}</p>
+                    <p className="text-xs">VAT: {formatVnd(row.outputVat)}</p>
+                    <p className="text-xs">Khách trả: {formatVnd(row.totalRevenueGross)}</p>
+                  </td>
+                  <td className="px-3 py-2 text-gray-600">
+                    <p className="font-medium text-gray-900">Chưa VAT: {formatVnd(row.totalCostNet)}</p>
+                    <p className="text-xs">VAT đã khớp: {formatVnd(row.inputVat)}</p>
+                    <p className="text-xs">Đã chi: {formatVnd(row.totalCostGross)}</p>
+                  </td>
+                  <td className={`px-3 py-2 font-medium ${row.profitNet >= 0 ? "text-green-700" : "text-red-600"}`}>
+                    <p>Trước VAT: {formatVnd(row.profitNet)}</p>
+                    <p className="text-xs font-normal text-gray-500">Tiền gồm VAT: {formatVnd(row.profitGross)}</p>
                   </td>
                 </tr>
               ))}

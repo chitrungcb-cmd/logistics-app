@@ -1,6 +1,6 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { computeDebtStatus, sumPayments } from "@/lib/debt-constants";
-import { resolveInvoiceAmountWithVat } from "@/lib/personal-account-sync";
+import { computeInvoiceVat, resolveInvoiceAmountWithVat } from "@/lib/personal-account-sync";
 
 export const AUTOMATIC_RECEIVABLE_DEBT_PREFIX = "SHIPMENT_RECEIVABLE:";
 export const AUTOMATIC_PAYABLE_DEBT_PREFIX = "SHIPMENT_PAYABLE:";
@@ -63,6 +63,8 @@ async function syncOneDebt(params: {
   canCreate: boolean;
   // Tách hóa đơn cho công nợ phải thu (null = không tách; luôn null với công nợ phải trả).
   invoiceAmount?: number | null;
+  invoiceSubtotal?: number | null;
+  invoiceTaxAmount?: number | null;
   noInvoiceAmount?: number | null;
 }) {
   const sourceKey = debtKey(params.type, params.shipmentId);
@@ -90,6 +92,8 @@ async function syncOneDebt(params: {
   const totalAmount = Math.max(params.amount, paidAmount);
   const status = computeDebtStatus(totalAmount, paidAmount);
   const invoiceAmount = params.invoiceAmount ?? null;
+  const invoiceSubtotal = params.invoiceSubtotal ?? null;
+  const invoiceTaxAmount = params.invoiceTaxAmount ?? null;
   const noInvoiceAmount = params.noInvoiceAmount ?? null;
 
   return params.tx.debt.upsert({
@@ -102,6 +106,8 @@ async function syncOneDebt(params: {
       vendorId: null,
       totalAmount,
       invoiceAmount,
+      invoiceSubtotal,
+      invoiceTaxAmount,
       noInvoiceAmount,
       status,
       note: params.type === "RECEIVABLE"
@@ -114,6 +120,8 @@ async function syncOneDebt(params: {
       vendorId: null,
       totalAmount,
       invoiceAmount,
+      invoiceSubtotal,
+      invoiceTaxAmount,
       noInvoiceAmount,
       status,
     },
@@ -140,6 +148,7 @@ export async function syncShipmentDebts(tx: Prisma.TransactionClient, shipmentId
       id: true,
       customerId: true,
       quoteInvoiceAmount: true,
+      quoteInvoiceTaxAmount: true,
       quoteNoInvoiceAmount: true,
       costs: { select: { costPrice: true, isActual: true } },
       quotes: {
@@ -155,7 +164,13 @@ export async function syncShipmentDebts(tx: Prisma.TransactionClient, shipmentId
   // để null (công nợ tổng như cũ). Phần có hóa đơn lưu số ĐÃ CỘNG VAT 8% vì đó là số khách thực
   // trả — cùng công thức với quoteAmount nên tổng hai phần vẫn khớp totalAmount.
   const manualSplit = shipment.quoteInvoiceAmount != null || shipment.quoteNoInvoiceAmount != null;
-  const receivableInvoiceAmount = manualSplit ? resolveInvoiceAmountWithVat(shipment.quoteInvoiceAmount) : null;
+  const receivableInvoiceSubtotal = manualSplit ? shipment.quoteInvoiceAmount ?? 0 : null;
+  const receivableInvoiceTaxAmount = manualSplit
+    ? computeInvoiceVat(shipment.quoteInvoiceAmount, shipment.quoteInvoiceTaxAmount)
+    : null;
+  const receivableInvoiceAmount = manualSplit
+    ? resolveInvoiceAmountWithVat(shipment.quoteInvoiceAmount, shipment.quoteInvoiceTaxAmount)
+    : null;
   const receivableNoInvoiceAmount = manualSplit ? shipment.quoteNoInvoiceAmount ?? 0 : null;
 
   const latestQuoteAmount = shipment.quotes[0]?.quoteAmount ?? 0;
@@ -183,6 +198,8 @@ export async function syncShipmentDebts(tx: Prisma.TransactionClient, shipmentId
     customerId: shipment.customerId,
     canCreate: ready,
     invoiceAmount: receivableInvoiceAmount,
+    invoiceSubtotal: receivableInvoiceSubtotal,
+    invoiceTaxAmount: receivableInvoiceTaxAmount,
     noInvoiceAmount: receivableNoInvoiceAmount,
   });
   const payable = await syncOneDebt({

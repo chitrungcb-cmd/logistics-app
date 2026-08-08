@@ -392,7 +392,7 @@ export default function DebtsClient({
         <KpiCard icon="⚠️" label="Tổng quá hạn" value={formatVnd(kpi.tongQuaHan)} valueClassName="text-red-600" />
         <KpiCard
           icon="📈"
-          label="Lãi/lỗ các lô đủ dữ liệu"
+          label="Chênh lệch tiền gồm VAT"
           value={formatSignedVnd(totalShipmentMargin)}
           valueClassName={totalShipmentMargin > 0 ? "text-emerald-700" : totalShipmentMargin < 0 ? "text-red-600" : "text-gray-600"}
           sub={`${shipmentMargins.size} lô có đủ phải thu và phải trả`}
@@ -515,7 +515,7 @@ export default function DebtsClient({
               <th className="px-4 py-3 text-left font-medium text-gray-500">Tổng tiền</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Đã thanh toán</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Còn lại</th>
-              <th className="whitespace-nowrap px-4 py-3 text-right font-medium text-gray-500">Lãi/lỗ lô hàng</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right font-medium text-gray-500">Chênh lệch gồm VAT</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Hạn thanh toán</th>
               <th className="px-4 py-3 text-left font-medium text-gray-500">Trạng thái</th>
             </tr>

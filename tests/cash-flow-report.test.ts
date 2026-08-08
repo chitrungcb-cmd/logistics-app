@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCashFlowReport, computeCashFlowTotals } from "@/lib/cash-flow-report";
+import { buildCashFlowReport, computeCashFlowTotals, mergeSumEntries } from "@/lib/cash-flow-report";
 
 const base = {
   companyAccounts: [{ id: "vcb", name: "VCB", isActive: true }, { id: "bidv", name: "BIDV", isActive: true }],
@@ -62,5 +62,17 @@ describe("computeCashFlowTotals", () => {
       thuUnassigned: { amount: 999, count: 1 },
     });
     expect(computeCashFlowTotals(r).thu).toBe(999);
+  });
+});
+
+describe("mergeSumEntries", () => {
+  it("cộng các nguồn thu chi cùng tài khoản và giữ riêng khoản chưa gán", () => {
+    expect(mergeSumEntries(
+      [{ id: "bidv", amount: 100, count: 1 }, { id: null, amount: 5, count: 1 }],
+      [{ id: "bidv", amount: 20, count: 2 }, { id: null, amount: 7, count: 3 }]
+    )).toEqual([
+      { id: "bidv", amount: 120, count: 3 },
+      { id: null, amount: 12, count: 4 },
+    ]);
   });
 });

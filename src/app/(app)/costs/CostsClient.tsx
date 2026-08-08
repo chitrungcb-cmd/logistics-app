@@ -159,7 +159,10 @@ export default function CostsClient() {
     };
   }, [initialShipmentId, reloadKey]);
 
-  const opportunities = useMemo(() => calculateCostOpportunities(allCosts), [allCosts]);
+  const opportunities = useMemo(
+    () => calculateCostOpportunities(allCosts.filter((cost) => cost.isActual)),
+    [allCosts]
+  );
   const opportunityByCostId = useMemo(
     () => new Map(opportunities.map((item) => [item.costId, item])),
     [opportunities]
@@ -176,8 +179,10 @@ export default function CostsClient() {
     return shipments
       .map((shipment) => {
         const costs = costsByShipment.get(shipment.id) ?? [];
-        const totalCost = costs.reduce((sum, cost) => sum + cost.costPrice, 0);
-        const additionalRevenue = costs
+        // Dòng cài sẵn chưa được xác nhận chỉ là gợi ý nhập liệu, không phải chi phí thực tế.
+        const actualCosts = costs.filter((cost) => cost.isActual);
+        const totalCost = actualCosts.reduce((sum, cost) => sum + cost.costPrice, 0);
+        const additionalRevenue = actualCosts
           .filter((cost) => cost.isAdditional)
           .reduce((sum, cost) => sum + cost.sellPrice, 0);
         const totalRevenue = (quoteTotals[shipment.id] ?? 0) + additionalRevenue;
@@ -190,7 +195,7 @@ export default function CostsClient() {
           totalCost,
           totalRevenue,
           profit: totalRevenue - totalCost,
-          missingInfoCount: costs.filter(
+          missingInfoCount: actualCosts.filter(
             (cost) =>
               (!isVendorlessCostCategory(cost.category) && !cost.vendorId) ||
               (isInvoiceCostCategory(cost.category) && !!cost.invoiceNumber && !cost.attachmentUrl)
@@ -219,10 +224,11 @@ export default function CostsClient() {
             .filter(Boolean)
             .some((value) => value!.toLowerCase().includes(query))
         ) return false;
-        if (filters.additionalOnly && !shipment.costs.some((cost) => cost.isAdditional)) return false;
+        if (filters.additionalOnly && !shipment.costs.some((cost) => cost.isActual && cost.isAdditional)) return false;
         if (filters.optimizationOnly && shipment.opportunityCount === 0) return false;
-        if (filters.costStatus === "EMPTY" && shipment.costs.length > 0) return false;
-        if (filters.costStatus === "ENTERED" && shipment.costs.length === 0) return false;
+        const actualCostCount = shipment.costs.filter((cost) => cost.isActual).length;
+        if (filters.costStatus === "EMPTY" && actualCostCount > 0) return false;
+        if (filters.costStatus === "ENTERED" && actualCostCount === 0) return false;
         if (filters.costStatus === "INCOMPLETE" && shipment.missingInfoCount === 0) return false;
         if (filters.dateFrom || filters.dateTo) {
           if (!shipment.declarationDate) return false;
@@ -240,8 +246,8 @@ export default function CostsClient() {
         cost: result.cost + shipment.totalCost,
         revenue: result.revenue + shipment.totalRevenue,
         profit: result.profit + shipment.profit,
-        entered: result.entered + (shipment.costs.length > 0 ? 1 : 0),
-        empty: result.empty + (shipment.costs.length === 0 ? 1 : 0),
+        entered: result.entered + (shipment.costs.some((cost) => cost.isActual) ? 1 : 0),
+        empty: result.empty + (shipment.costs.some((cost) => cost.isActual) ? 0 : 1),
         incomplete: result.incomplete + (shipment.missingInfoCount > 0 ? 1 : 0),
       }),
       { cost: 0, revenue: 0, profit: 0, entered: 0, empty: 0, incomplete: 0 }
@@ -253,8 +259,8 @@ export default function CostsClient() {
     () => allShipmentRows.reduce(
       (result, shipment) => ({
         cost: result.cost + shipment.totalCost,
-        entered: result.entered + (shipment.costs.length > 0 ? 1 : 0),
-        empty: result.empty + (shipment.costs.length === 0 ? 1 : 0),
+        entered: result.entered + (shipment.costs.some((cost) => cost.isActual) ? 1 : 0),
+        empty: result.empty + (shipment.costs.some((cost) => cost.isActual) ? 0 : 1),
         incomplete: result.incomplete + (shipment.missingInfoCount > 0 ? 1 : 0),
       }),
       { cost: 0, entered: 0, empty: 0, incomplete: 0 }
@@ -310,7 +316,7 @@ export default function CostsClient() {
       "Số khoản": shipment.costs.length,
       "Tổng chi": shipment.totalCost,
       "Tổng thu": shipment.totalRevenue,
-      "Lãi/lỗ": shipment.profit,
+      "Chênh lệch gồm VAT": shipment.profit,
     }));
     const details = shipmentRows.flatMap((shipment) => shipment.costs.map((cost) => ({
       "Tên công ty": shipment.customerName,
@@ -416,7 +422,7 @@ export default function CostsClient() {
               <th className="px-3 py-3 text-left font-medium text-gray-500">Tên hàng</th>
               <th className="px-3 py-3 text-right font-medium text-gray-500">Tổng chi</th>
               <th className="px-3 py-3 text-right font-medium text-gray-500">Tổng thu</th>
-              <th className="px-3 py-3 text-right font-medium text-gray-500">Lãi/lỗ</th>
+              <th className="px-3 py-3 text-right font-medium text-gray-500">Chênh lệch gồm VAT</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
               {isLoading && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Đang tải dữ liệu...</td></tr>}

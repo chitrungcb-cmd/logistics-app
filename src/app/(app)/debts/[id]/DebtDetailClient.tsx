@@ -42,6 +42,8 @@ type DebtDetail = {
   type: "RECEIVABLE" | "PAYABLE";
   totalAmount: number;
   invoiceAmount: number | null;
+  invoiceSubtotal: number | null;
+  invoiceTaxAmount: number | null;
   noInvoiceAmount: number | null;
   status: string;
   note: string | null;
@@ -444,11 +446,17 @@ export default function DebtDetailClient({
 
   const badge = debtStatusBadge(debt.status, null);
   const breakdown = computeInvoiceSplitBreakdown(debt);
+  // Bản ghi mới lưu đúng tiền trước thuế/VAT từ hóa đơn. Công nợ cũ chưa có hai cột này mới dùng
+  // phép suy ngược 8% để tương thích, tránh đổi sai lịch sử đã lưu.
   const invoiceBeforeTax = breakdown
-    ? Math.round(breakdown.invoiceAmount / (1 + INVOICE_VAT_RATE))
+    ? debt.invoiceSubtotal ?? Math.round(breakdown.invoiceAmount / (1 + INVOICE_VAT_RATE))
     : 0;
-  const invoiceTaxAmount = breakdown ? breakdown.invoiceAmount - invoiceBeforeTax : 0;
-  const invoiceVatPercent = Math.round(INVOICE_VAT_RATE * 100);
+  const invoiceTaxAmount = breakdown
+    ? debt.invoiceTaxAmount ?? breakdown.invoiceAmount - invoiceBeforeTax
+    : 0;
+  const invoiceVatPercent = invoiceBeforeTax > 0
+    ? Math.round((invoiceTaxAmount / invoiceBeforeTax) * 10000) / 100
+    : Math.round(INVOICE_VAT_RATE * 100);
   const partnerName =
     debt.customer?.companyName ||
     debt.vendor?.name ||
@@ -578,7 +586,7 @@ export default function DebtDetailClient({
                     ? "bg-red-50"
                     : "bg-gray-50"
               }`}>
-                <p className="text-xs font-medium text-gray-500">Lãi/lỗ lô hàng</p>
+                <p className="text-xs font-medium text-gray-500">Chênh lệch tiền gồm VAT</p>
                 <p className={`text-base font-bold ${
                   estimatedMargin > 0
                     ? "text-emerald-700"

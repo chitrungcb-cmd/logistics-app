@@ -50,6 +50,17 @@ describe("invoice VAT", () => {
     expect(computeInvoiceVat(null)).toBe(0);
     expect(computeInvoiceVat(0)).toBe(0);
   });
+
+  it("uses the actual tax from an electronic invoice instead of forcing 8%", () => {
+    expect(resolveInvoiceAmountWithVat(100_000_000, 10_000_000)).toBe(110_000_000);
+    expect(computeInvoiceVat(100_000_000, 10_000_000)).toBe(10_000_000);
+    expect(resolveQuoteTotal({
+      quoteInvoiceAmount: 100_000_000,
+      quoteInvoiceTaxAmount: 10_000_000,
+      quoteNoInvoiceAmount: 5_000_000,
+      quoteLines: [],
+    })).toBe(115_000_000);
+  });
 });
 
 describe("personal-account payment status from debt", () => {

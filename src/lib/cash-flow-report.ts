@@ -6,6 +6,18 @@ export type AccountInput = { id: string; name: string; isActive?: boolean };
 /** Một dòng tổng hợp theo tài khoản: id = khóa nhóm (null = chưa gán), amount = tổng, count = số khoản. */
 export type SumEntry = { id: string | null; amount: number; count: number };
 
+/** Cộng nhiều nguồn sổ (lô hàng, công nợ, thu-chi khác) theo cùng tài khoản mà không đếm trùng. */
+export function mergeSumEntries(...sources: SumEntry[][]): SumEntry[] {
+  const merged = new Map<string | null, SumEntry>();
+  for (const entry of sources.flat()) {
+    const current = merged.get(entry.id) ?? { id: entry.id, amount: 0, count: 0 };
+    current.amount += entry.amount;
+    current.count += entry.count;
+    merged.set(entry.id, current);
+  }
+  return [...merged.values()];
+}
+
 export type AccountRow = {
   id: string;
   name: string;

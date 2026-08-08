@@ -10,6 +10,31 @@ import { syncPersonalAccountEntry, resolveQuoteTotal } from "@/lib/personal-acco
 
 export type ReconciliationStatus = "MATCHED" | "UNMATCHED" | "NEEDS_REVIEW";
 
+type InvoiceAmounts = { subtotal: number | null; taxAmount: number | null; totalAmount: number | null };
+
+/**
+ * Chuẩn hóa số tiền hóa đơn sao cho trước thuế + thuế = tổng sau thuế. Ưu tiên tổng tiền và tiền
+ * trước thuế do nhà phát hành ghi; chỉ suy phần còn thiếu, không áp một thuế suất cố định.
+ */
+export function summarizeInvoiceAmounts(invoices: InvoiceAmounts[]) {
+  return invoices.reduce<{ subtotal: number; taxAmount: number; totalAmount: number }>(
+    (sum, invoice) => {
+      const rawSubtotal = Math.max(0, invoice.subtotal ?? 0);
+      const rawTax = Math.max(0, invoice.taxAmount ?? 0);
+      const gross = Math.max(0, invoice.totalAmount ?? rawSubtotal + rawTax);
+      const subtotal = invoice.subtotal != null
+        ? rawSubtotal
+        : Math.max(0, gross - rawTax);
+      const tax = Math.max(0, gross - subtotal);
+      sum.subtotal += subtotal;
+      sum.taxAmount += tax;
+      sum.totalAmount += gross;
+      return sum;
+    },
+    { subtotal: 0, taxAmount: 0, totalAmount: 0 }
+  );
+}
+
 function normalizeTaxCode(value: string | null | undefined) {
   return (value || "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
 }
@@ -284,9 +309,9 @@ export async function reconcileParsedVendorInvoice(parsed: ParsedVendorInvoice) 
 }
 
 /**
- * Đặt phần "Có hóa đơn" của phải thu một lô = TỔNG tiền trước thuế của mọi hóa đơn bán ra đã gắn
- * vào lô (shipmentId set, shipmentCostId null = hóa đơn đầu ra). Đồng thời ghi một bản Quote mới
- * (= VAT(có HĐ) + không HĐ) để Tổng thu / lãi-lỗ trên trang Chi phí lô hàng và công nợ phải thu đều
+ * Đặt phần "Có hóa đơn" của phải thu một lô = TỔNG tiền trước thuế và VAT THỰC TẾ của mọi hóa đơn
+ * bán ra đã gắn vào lô (shipmentId set, shipmentCostId null = hóa đơn đầu ra). Đồng thời ghi Quote
+ * (= trước thuế + VAT thực tế + không HĐ) để Tổng thu / lãi-lỗ và công nợ phải thu đều
  * phản ánh hóa đơn. Idempotent: cộng đúng khi một lô có nhiều HĐ, và chỉ ghi Quote khi tổng đổi để
  * không tạo bản trùng. Giữ nguyên phần "Không hóa đơn" (quoteNoInvoiceAmount) để nhập tay.
  */
@@ -294,18 +319,22 @@ export async function recomputeShipmentInvoicedReceivable(shipmentId: string) {
   await prisma.$transaction(async (tx) => {
     const invoices = await tx.vendorInvoice.findMany({
       where: { shipmentId, shipmentCostId: null },
-      select: { subtotal: true },
+      select: { subtotal: true, taxAmount: true, totalAmount: true },
     });
-    const sum = invoices.reduce((total, invoice) => total + (invoice.subtotal ?? 0), 0);
+    const sums = summarizeInvoiceAmounts(invoices);
     await tx.shipment.update({
       where: { id: shipmentId },
-      data: { quoteInvoiceAmount: sum > 0 ? sum : null },
+      data: {
+        quoteInvoiceAmount: sums.totalAmount > 0 ? sums.subtotal : null,
+        quoteInvoiceTaxAmount: sums.totalAmount > 0 ? sums.taxAmount : null,
+      },
     });
 
     const shipment = await tx.shipment.findUnique({
       where: { id: shipmentId },
       select: {
         quoteInvoiceAmount: true,
+        quoteInvoiceTaxAmount: true,
         quoteNoInvoiceAmount: true,
         quoteLines: { select: { amount: true, hasInvoice: true } },
         quotes: { orderBy: { createdAt: "desc" }, take: 1, select: { quoteAmount: true } },

@@ -14,6 +14,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     where: { id },
     select: {
       quoteInvoiceAmount: true,
+      quoteInvoiceTaxAmount: true,
       quoteNoInvoiceAmount: true,
       quoteLines: { orderBy: { createdAt: "asc" } },
     },
@@ -22,6 +23,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   return apiSuccess({
     lines: shipment.quoteLines,
     invoiceAmount: shipment.quoteInvoiceAmount,
+    invoiceTaxAmount: shipment.quoteInvoiceTaxAmount,
     noInvoiceAmount: shipment.quoteNoInvoiceAmount,
   });
 }
@@ -63,7 +65,13 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     const saved = await prisma.$transaction(async (tx) => {
       await tx.shipment.update({
         where: { id },
-        data: { quoteInvoiceAmount: invoiceAmount, quoteNoInvoiceAmount: noInvoiceAmount },
+        // Nhập báo giá thủ công dùng VAT mặc định 8%; xóa VAT thực tế cũ (nếu trước đó được lấy từ
+        // hóa đơn điện tử) để resolveQuoteTotal tính lại đúng theo lựa chọn mới của người dùng.
+        data: {
+          quoteInvoiceAmount: invoiceAmount,
+          quoteInvoiceTaxAmount: null,
+          quoteNoInvoiceAmount: noInvoiceAmount,
+        },
       });
       await tx.shipmentQuoteLine.deleteMany({ where: { shipmentId: id } });
       for (const line of lines) {
@@ -79,6 +87,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       // thì vẫn là tổng bảng chi tiết như trước.
       const total = resolveQuoteTotal({
         quoteInvoiceAmount: invoiceAmount,
+        quoteInvoiceTaxAmount: null,
         quoteNoInvoiceAmount: noInvoiceAmount,
         quoteLines: currentLines,
       });

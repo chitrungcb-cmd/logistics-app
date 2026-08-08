@@ -33,8 +33,8 @@ export type ShipmentDebtMarginRow = {
 };
 
 /**
- * Lãi/lỗ theo lô = tổng phải thu − tổng phải trả. Chỉ trả kết quả khi lô có đủ cả hai vế để
- * không biến một công nợ còn thiếu dữ liệu thành lãi hoặc lỗ giả.
+ * Chênh lệch dòng tiền GỒM VAT theo lô = tổng phải thu − tổng phải trả. Đây không phải lợi nhuận
+ * kế toán trước VAT; báo cáo lãi/lỗ riêng mới trừ VAT đầu ra và VAT đầu vào đã khớp.
  */
 export function buildShipmentDebtMarginMap(rows: readonly ShipmentDebtMarginRow[]) {
   const totals = new Map<string, {

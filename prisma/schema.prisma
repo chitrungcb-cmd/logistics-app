@@ -52,10 +52,12 @@ model Shipment {
   note                 String?
   consultationDate     DateTime?
   declarationBranches  Json?
-  // Phân bổ báo giá nhập tay: khi một trong hai giá trị khác null thì Tổng báo giá = tổng hai
-  // giá trị này (thay cho tổng bảng chi tiết). Null = chưa nhập tay, dùng tổng dòng như cũ.
-  quoteInvoiceAmount   Float?
-  quoteNoInvoiceAmount Float?
+  // Phân bổ báo giá nhập tay: quoteInvoiceAmount là tiền TRƯỚC VAT; quoteInvoiceTaxAmount là tiền
+  // VAT thực tế. Khi nhập tay chưa chỉ rõ VAT, nghiệp vụ hiện tại mặc định 8%. Hóa đơn điện tử luôn
+  // ghi đúng tiền thuế đọc từ hóa đơn, không suy ngược theo một thuế suất cố định.
+  quoteInvoiceAmount    Float?
+  quoteInvoiceTaxAmount Float?
+  quoteNoInvoiceAmount  Float?
   tasks                Task[]
   notifications        Notification[]
   costs                ShipmentCost[]
@@ -448,11 +450,13 @@ model Debt {
   shipment        Shipment?  @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
   shipmentId      String?
   totalAmount     Float
-  // Tách phần có hóa đơn (chưa VAT) / không hóa đơn của công nợ phải thu đồng bộ từ báo giá. Cả hai
-  // null = công nợ KHÔNG tách (mặc định, mọi công nợ phải trả và công nợ nhập tay) — thanh toán trừ
-  // vào tổng chung. Khi tách, invoiceAmount + noInvoiceAmount = totalAmount và mỗi Payment gắn portion.
-  invoiceAmount   Float?
-  noInvoiceAmount Float?
+  // Tách phần có hóa đơn / không hóa đơn của công nợ phải thu. invoiceAmount là số khách trả ĐÃ GỒM
+  // VAT để đối chiếu thanh toán; hai trường dưới lưu số trước thuế và VAT thực tế phục vụ báo cáo.
+  // Null = công nợ không tách (mọi công nợ phải trả và công nợ nhập tay).
+  invoiceAmount         Float?
+  invoiceSubtotal       Float?
+  invoiceTaxAmount      Float?
+  noInvoiceAmount       Float?
   dueDate         DateTime?
   status          DebtStatus @default(UNPAID)
   note            String?
